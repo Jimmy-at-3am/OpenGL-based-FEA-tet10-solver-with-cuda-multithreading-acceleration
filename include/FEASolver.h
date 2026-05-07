@@ -1,0 +1,142 @@
+#pragma once
+
+#include "FEAModel.h"
+#include <Eigen/Core>
+
+// Control parameters for the Newton-Raphson nonlinear static solver.
+// Defaults are chosen so that a linear showcase runs in a single load step
+// and converges in exactly one NR iteration (validation protocol).
+struct NRParams {
+    int    numLoadSteps  = 1;
+    int    maxIterations = 25;
+    double residualTolL2 = 1.0e-6;
+};
+
+// Parameters for geometry-aware element selection (Tet4 vs Tet10).
+struct GeometryAnalysisParams {
+    float curvatureAngleThreshold = 15.0f; // degrees: normals differing by more than this are "curved"
+    float highCurvatureFracLimit  = 0.25f; // fraction of vertices with high curvature to trigger Tet10
+};
+
+class FEASolver {
+public:
+    double youngsModulus = 2.0e11; // 200 GPa (Steel)
+    double poissonRatio = 0.3;     // Steel
+    double forceMagnitude = 1.0e8; // 100 MN total force for visible result
+
+    // When true, solveNonlinearStatic prints a read-only diagnostic block
+    // (bbox, octant/quadrant node census, fixed/loaded-set centroids, load
+    // resultant + moment about origin, slab-vs-surface size ratios, and a
+    // consistent-load comparison) to discriminate topology bias vs BC vs
+    // force misalignment as the source of asymmetric results.
+    bool verboseDiagnostics = false;
+
+    // Post-processing applied to the consistent nodal load vector before the
+    // linear solve. Eliminates spurious directional bias introduced by mesh
+    // triangulation asymmetry when the physical problem is known to have a
+    // particular symmetry class.
+    //
+    //   None         : leave consistent loads as computed (default).
+    //   XZReflection : average F_y over each 4-node orbit
+    //                  { (x,z), (-x,z), (x,-z), (-x,-z) } of every loaded
+    //                  node -> enforces 4-fold symmetry about the Y-axis.
+    //                  Recommended for cube / box geometries.
+    //   YAxial       : bin loaded nodes by (y, r=sqrt(x^2+z^2)) and set
+    //                  each node's F_y to its bin mean -> enforces full
+    //                  rotational symmetry about the Y-axis. Recommended
+    //                  for sphere / cylinder geometries.
+    //
+    // Both modes preserve the total applied force exactly. Nodes whose
+    // symmetry orbit is incomplete (e.g. TetGen Steiner points with no
+    // mirror image) are left unchanged and counted in the log output.
+    enum class LoadSymmetry { None, XZReflection, YAxial };
+    LoadSymmetry loadSymmetry = LoadSymmetry::None;
+
+    // Selects the boundary-condition and force-application scheme:
+    //
+    //   SurfaceCompressionY : fix nodes at Y_min, distribute -Y consistent
+    //                         nodal loads over the Y_max boundary patch.
+    //                         Legacy compression test.
+    //
+    //   PointForceZ         : fix nodes at Z_min, apply a single concentrated
+    //                         force in the -Z direction at the boundary node
+    //                         with maximum Z coordinate closest to the (x,y)
+    //                         centroid of the Z_max face. This eliminates
+    //                         all surface-patch triangulation noise since
+    //                         the load vector has exactly one non-zero
+    //                         entry, making mesh-induced asymmetry directly
+    //                         observable in the displacement response.
+    //   CantileverBendingZ  : fix nodes at X_min, apply a concentrated
+    //                         force in the -Z direction at the centroid of X_max.
+    //                         Ideal for validating against Euler-Bernoulli formulas.
+    enum class LoadType { SurfaceCompressionY, PointForceZ, CantileverBendingZ };
+    LoadType loadType = LoadType::PointForceZ;
+
+    // When true, both solveLinearStatic and solveNonlinearStatic will:
+    //   1. Call model.generateMidEdgeNodes() to create Tet10 connectivity.
+    //   2. Build Tet10Element instances (30-DOF quadratic tets) instead of
+    //      TetrahedralElement (12-DOF linear tets).
+    //   3. Use the full (corner + mid-edge) node set for DOF sizing.
+    // The flag must be set BEFORE calling either solve method.
+    bool useQuadraticElements = false;
+
+    // When true, parallelize the per-element compute/assemble loops inside
+    // solveLinearStatic and solveNonlinearStatic with OpenMP. The outer
+    // algorithm (Newton-Raphson, load stepping, assemble -> solve) is
+    // UNCHANGED; only per-element work is distributed across threads.
+    // Triplet lists use pre-sized indices so the final SparseMatrix is
+    // identical to the serial path (Eigen::setFromTriplets is order-
+    // invariant for sums). F_int scatter uses #pragma omp atomic so the
+    // final vector is also identical up to FP summation reordering.
+    // The flag must be set BEFORE calling either solve method.
+    bool useMultithreading = false;
+
+    // When true, the linear system K*U = F is solved on the GPU using
+    // NVIDIA cuSOLVER's sparse Cholesky factorization instead of Eigen's
+    // CPU-based SimplicialLDLT or ConjugateGradient. Requires a CUDA-capable
+    // GPU. Falls back to CPU if GPU solve fails.
+    bool useGPU = false;
+
+    // Solves the one-shot linear static problem K u = F:
+    //   1. Assembles K = Σ_e A_e^T K_e A_e via triplet list (Tet4 or Tet10).
+    //   2. Builds F according to the loadType policy (point force or consistent
+    //      nodal loads from tributary-area integration).
+    //   3. Enforces Dirichlet BCs: K_ii += α, F_i = 0 for each fixed DOF i,
+    //      where α = 1e7 · max(diag(K)).
+    //   4. Solves via GPU cuSOLVER Cholesky → CPU PCG+Jacobi → CPU LDL^T.
+    //   5. For CantileverBendingZ, prints analytical Euler-Bernoulli δ_max
+    //      and FEA percentage error.
+    // On success writes u to *U_out (if non-null) and updates model positions.
+    bool solveLinearStatic(FEAModel& model, float visualScale = 1.0f,
+                           Eigen::VectorXd* U_out = nullptr);
+
+    // Solves the nonlinear static problem R(u) = F_ext − F_int(u) = 0 using
+    // incremental Newton-Raphson with load stepping.
+    //
+    // Outer loop: s = 1..N,  λ_s = s/N,  F_ext,s = λ_s · F_ext_full.
+    // Inner NR loop per step:
+    //   F_int = Σ_e A_e^T f_{int,e}(u_e)
+    //   R = F_ext,s − F_int;  R[fixed DOFs] = 0
+    //   if ||R||_2 < τ and iter ≥ 1: converged
+    //   K_T = Σ_e A_e^T K_{T,e}(u_e) A_e + penalty(fixed DOFs)
+    //   Δu = solve(K_T, R);   u += Δu
+    //
+    // For a linear-elastic material converges in exactly 1 NR iteration per step.
+    bool solveNonlinearStatic(FEAModel& model,
+                              float    visualScale = 1.0f,
+                              NRParams params      = {});
+
+    // Geometry analysis parameters exposed as UI sliders.
+    GeometryAnalysisParams geoParams;
+
+    // Curvature-driven element-order selection followed by a linear static solve.
+    //
+    // 1. For each surface vertex v, compute θ_v = max angle between the averaged
+    //    vertex normal n_v and each incident face normal n_f.
+    //    Mark v high-curvature if θ_v > curvatureAngleThreshold.
+    // 2. If (N_high-curvature / N_surface) > highCurvatureFracLimit: use Tet10
+    //    (calls generateMidEdgeNodes, x_m = (x_a+x_b)/2 per edge); else Tet4.
+    // 3. Delegates to solveLinearStatic with the selected element order.
+    // Element order is global — the entire mesh uses Tet4 or Tet10, not a mix.
+    bool solveAdaptive(FEAModel& model, float visualScale = 1.0f);
+};

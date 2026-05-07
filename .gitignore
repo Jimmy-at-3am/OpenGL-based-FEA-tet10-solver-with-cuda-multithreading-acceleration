@@ -1,0 +1,170 @@
+# =============================================================
+# CMake build output
+# Everything cmake generates goes into build/ — object files,
+# makefiles, cmake cache, and your compiled .exe. None of this
+# is source code and it is machine-specific, so never commit it.
+# =============================================================
+build/
+cmake-build-debug/
+cmake-build-release/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+install_manifest.txt
+compile_commands.json
+CTestTestfile.cmake
+_deps/
+
+# =============================================================
+# Compiled C++ output
+# Object files, static/shared libraries, and executables that
+# the compiler produces. These are binary and machine-specific —
+# anyone cloning your repo should compile from source instead.
+# =============================================================
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.so.*
+*.dylib
+*.dll
+*.exe
+*.out
+*.app
+*.pdb
+*.ilk
+*.exp
+
+# =============================================================
+# lib/ binary dependencies (OpenGL and other fetched libraries)
+# Your lib/ folder contains downloaded compiled binaries for
+# OpenGL and solver dependencies. Binaries are large, platform-
+# specific, and should be fetched at build time, not stored in
+# git. Header-only or source deps in lib/ are fine to keep.
+# =============================================================
+lib/*.dll
+lib/*.lib
+lib/*.a
+lib/*.so
+lib/*.pdb
+
+# =============================================================
+# Windows build artifacts
+# Files Windows and MSVC generate during compilation that have
+# no value in version control — debug databases, linker exports,
+# and crash dumps.
+# =============================================================
+*.pdb
+*.ilk
+*.exp
+*.map
+*.dmp
+x64/
+x86/
+Debug/
+Release/
+RelWithDebInfo/
+MinSizeRel/
+
+# =============================================================
+# Antigravity IDE
+# Antigravity stores its workspace state, local settings, and
+# cached indexes here. These are personal to your machine and
+# should not be shared — others will generate their own.
+# =============================================================
+.antigravity/
+.ag-cache/
+*.agworkspace
+*.agsettings
+
+# =============================================================
+# Windsurf IDE
+# Windsurf (and its Codeium AI layer) writes local config and
+# cache files that are machine-specific. Your .antigravityignore
+# already handles some of this, but git needs its own rules.
+# =============================================================
+.windsurf/
+.codeium/
+*.windsurfsettings
+
+# =============================================================
+# VS Code
+# Ignore personal/machine-specific settings, but keep the
+# IntelliSense and build config that are part of the project.
+# =============================================================
+.vscode/*
+!.vscode/c_cpp_properties.json
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+*.code-workspace
+
+# =============================================================
+# Claude Code (AI assistant memory and session files)
+# =============================================================
+.claude/
+
+# =============================================================
+# FEA and simulation output files
+# Your solver will generate large mesh and results files during
+# runs. These can be gigabytes in size and change every run —
+# store representative outputs in examples/ as small PNGs instead.
+# =============================================================
+*.vtk
+*.vtu
+*.vtp
+*.pvtu
+*.pvd
+*.h5
+*.hdf5
+*.dat
+*.out
+*.res
+*.frd
+*.med
+results/
+output/
+*.log
+
+# =============================================================
+# OpenGL and graphics intermediates
+# Shader cache and GPU pipeline state files some OpenGL drivers
+# write to disk. Platform-specific and regenerated automatically.
+# =============================================================
+*.glsl.cache
+*.spirv
+shader_cache/
+*.bin
+
+# =============================================================
+# Windows OS files
+# Files Windows Explorer and the OS itself generate invisibly.
+# They carry no project information and cause noise in git status.
+# =============================================================
+Thumbs.db
+Thumbs.db:encdata
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# =============================================================
+# Temporary and editor swap files
+# Crash recovery files various tools write while a file is open.
+# Safe to ignore — they disappear when the editor closes cleanly.
+# =============================================================
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+*.bak
+
+# =============================================================
+# Project-specific — fill in as your project grows
+# Add patterns here for any output folders or config files that
+# are specific to your solver's behaviour on your machine.
+# =============================================================
+# secrets.env
+# local_config.h
+# my_test_meshes/

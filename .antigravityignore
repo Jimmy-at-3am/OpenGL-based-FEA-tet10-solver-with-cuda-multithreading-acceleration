@@ -1,0 +1,22 @@
+# Ignore build artifacts
+build/
+x64/
+*.exe
+*.dll
+
+# Ignore heavy asset files
+assets/
+*.stl
+*.vs
+*.fs
+
+# Ignore static 3rd-party libs
+lib/
+
+# Temporarily ignore Include if you only want focus on src
+include/glad/
+include/GLFW/
+include/glm/
+include/learnopengl/
+include/KHR/
+include/stb_image.h
