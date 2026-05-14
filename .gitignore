@@ -103,6 +103,7 @@ MinSizeRel/
 .claude/
 CLAUDE.md
 AGENTS.md
+session*.md
 
 # =============================================================
 # FEA and simulation output files
