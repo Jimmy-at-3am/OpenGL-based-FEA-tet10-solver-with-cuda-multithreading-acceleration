@@ -23,6 +23,7 @@ public:
     double youngsModulus = 2.0e11; // 200 GPa (Steel)
     double poissonRatio = 0.3;     // Steel
     double forceMagnitude = 1.0e8; // 100 MN total force for visible result
+    double fractureStress = 5.0e7; // 50 MPa (typical FDM plastic)
 
     // When true, solveNonlinearStatic prints a read-only diagnostic block
     // (bbox, octant/quadrant node census, fixed/loaded-set centroids, load
@@ -69,7 +70,8 @@ public:
     //   CantileverBendingZ  : fix nodes at X_min, apply a concentrated
     //                         force in the -Z direction at the centroid of X_max.
     //                         Ideal for validating against Euler-Bernoulli formulas.
-    enum class LoadType { SurfaceCompressionY, PointForceZ, CantileverBendingZ };
+    enum class LoadType { SurfaceCompressionY, PointForceZ, CantileverBendingZ,
+                         TensionX, TensionY, TensionZ };
     LoadType loadType = LoadType::PointForceZ;
 
     // When true, both solveLinearStatic and solveNonlinearStatic will:
@@ -96,6 +98,28 @@ public:
     // CPU-based SimplicialLDLT or ConjugateGradient. Requires a CUDA-capable
     // GPU. Falls back to CPU if GPU solve fails.
     bool useGPU = false;
+
+    // When true AND the loaded material provides E_z / nu_pz / G_pz, the
+    // solver instantiates a TransverseIsotropicMaterial (XY = strong plane,
+    // Z = build/weak axis) and solveBrittleFracture uses three independent
+    // max-stress checks instead of isotropic von Mises.
+    // Has no effect when E_z == 0 (non-anisotropic material loaded).
+    // Selects the weak (build) axis for TransverseIsotropicMaterial and for the
+    // buildAxis-aware fracture criterion in solveBrittleFracture.
+    //   0 = X is the build/weak axis  (YZ is the strong in-plane)
+    //   1 = Y is the build/weak axis  (XZ is the strong in-plane)  ← default
+    //   2 = Z is the build/weak axis  (XY is the strong in-plane)
+    int    buildAxis                 = 1;
+
+    bool   useFdmAnisotropy         = false;
+    // Transverse isotropic constants (set by the UI from the .mat file).
+    double E_z                       = 0.0;  // through-thickness modulus
+    double nu_pz                     = 0.0;  // out-of-plane Poisson
+    double G_pz                      = 0.0;  // transverse shear modulus
+    // Mode-specific fracture thresholds (Pa).
+    double fractureStress_intralayer  = 0.0;  // in-plane von Mises criterion
+    double fractureStress_interlayer  = 0.0;  // |sigma_zz| tensile limit
+    double fractureShear_interlayer   = 0.0;  // sqrt(tau_xz^2 + tau_yz^2) limit
 
     // Solves the one-shot linear static problem K u = F:
     //   1. Assembles K = Σ_e A_e^T K_e A_e via triplet list (Tet4 or Tet10).
@@ -139,4 +163,24 @@ public:
     // 3. Delegates to solveLinearStatic with the selected element order.
     // Element order is global — the entire mesh uses Tet4 or Tet10, not a mix.
     bool solveAdaptive(FEAModel& model, float visualScale = 1.0f);
+
+    // Brittle element-deletion fracture.
+    //
+    // Algorithm (each iteration):
+    //   1. Assemble K over alive elements only (elements where model.elementAlive[el] != 0).
+    //   2. Solve K u = F.
+    //   3. Recover per-element von Mises stress via ComputeStressVoigt.
+    //   4. Mark elements with σ_vm > fractureStress as dead.
+    //   5. Repeat until no new deaths (stable) or maxIters reached.
+    //
+    // Results are written to model.elementAlive / elementFailureIter and the
+    // mesh is visualised via buildBuffers() each iteration so progress is visible.
+    bool solveBrittleFracture(FEAModel& model,
+                              float     visualScale = 1.0f,
+                              int       maxIters    = 50);
+
+private:
+    // When non-empty, the assembly loop in solveLinearStatic skips elements
+    // where m_fractureAlive[el] == 0.  Set by solveBrittleFracture.
+    std::vector<uint8_t> m_fractureAlive;
 };

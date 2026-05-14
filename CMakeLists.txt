@@ -1,18 +1,42 @@
 cmake_minimum_required(VERSION 3.20)
+
+option(USE_CUDA "Enable CUDA solver" ON)
+
+# CMAKE_CUDA_COMPILER and CUDA arch must be set before project() / enable_language(CUDA).
+if(USE_CUDA)
+    set(CMAKE_CUDA_COMPILER "D:/program_files_delta/cuda/bin/nvcc.exe")
+    # Pin to a real SM rather than 'native'; -arch=native adds compiler passes
+    # that misparse Windows paths containing spaces and a dash.
+    set(CMAKE_CUDA_ARCHITECTURES 75)
+endif()
+
 project(FEAPreProcessor LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+if(MSVC)
+    add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:/utf-8>")
+    add_compile_options("$<$<COMPILE_LANGUAGE:C>:/utf-8>")
+endif()
+
 # --- CUDA (optional) ---
-set(CMAKE_CUDA_COMPILER "D:/program_files_delta/cuda/bin/nvcc.exe")
-set(CUDAToolkit_ROOT     "D:/program_files_delta/cuda")
-enable_language(CUDA)
-find_package(CUDAToolkit REQUIRED)
-set(CMAKE_CUDA_STANDARD 17)
-set(CMAKE_CUDA_ARCHITECTURES native)
-set(HAS_CUDA TRUE)
+if(USE_CUDA)
+    set(CUDAToolkit_ROOT "D:/program_files_delta/cuda")
+    enable_language(CUDA)
+    find_package(CUDAToolkit REQUIRED)
+    set(CMAKE_CUDA_STANDARD 17)
+    set(CMAKE_CUDA_STANDARD_REQUIRED ON)
+    # Disable CMake's auto -MD -MT -MF depfile generation for CUDA — this is the
+    # flag combination that misparses on Windows paths with spaces and a dash,
+    # causing nvcc to treat /utf-8 as a second input file.
+    set(CMAKE_CUDA_DEPFILE_FORMAT "")
+    set(CMAKE_DEPFILE_FLAGS_CUDA  "")
+    set(HAS_CUDA TRUE)
+else()
+    set(HAS_CUDA FALSE)
+endif()
 
 include(FetchContent)
 FetchContent_Declare(
@@ -22,14 +46,35 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(eigen)
 
+# --- miniz: single-file ZIP decompressor for .3mf loading ---
+# We use FetchContent to download the sources but deliberately do NOT call
+# add_subdirectory on miniz (its CMakeLists uses cmake_minimum_required 2.8
+# which is rejected by CMake 3.20+).  Instead we compile miniz.c directly as
+# part of the main executable sources.
+FetchContent_Declare(
+  miniz
+  GIT_REPOSITORY https://github.com/richgel999/miniz.git
+  GIT_TAG        2.2.0
+)
+set(FETCHCONTENT_UPDATES_DISCONNECTED ON)
+FetchContent_GetProperties(miniz)
+if(NOT miniz_POPULATED)
+  FetchContent_Populate(miniz)
+  # Do NOT call add_subdirectory — we only need the raw .c/.h files.
+endif()
+# miniz_SOURCE_DIR is now set; add include path and .c to SOURCES below.
+
 # --- Include directories ---
 include_directories(
     ${CMAKE_SOURCE_DIR}/include        # glad, GLFW, glm, KHR, stb_image, learnopengl headers
     ${CMAKE_SOURCE_DIR}/src            # project headers: camera.h, tetgen.h, mesh.h, model.h, etc.
     ${eigen_SOURCE_DIR}                # Eigen library headers
     ${CMAKE_SOURCE_DIR}/ext/meshoptimizer/src
-    ${CUDAToolkit_INCLUDE_DIRS}        # CUDA headers (cusolverSp.h, cusparse.h)
+    ${miniz_SOURCE_DIR}                # miniz ZIP library
 )
+if(HAS_CUDA)
+    include_directories(${CUDAToolkit_INCLUDE_DIRS})   # cusolverSp.h, cusparse.h
+endif()
 
 # --- Library directories ---
 link_directories(${CMAKE_SOURCE_DIR}/lib)
@@ -46,21 +91,41 @@ set(SOURCES
     src/glad.c
     src/tetgen.cxx
     src/predicates.cxx
-)
-
-# CUDA source (compiled by nvcc)
-set(CUDA_SOURCES
-    src/CudaSolver.cu
+    # --- Geometry loader pipeline ---
+    src/STLLoader.cpp
+    src/ThreeMFLoader.cpp
+    # miniz 2.2.0 split sources (ZIP decompressor for .3mf)
+    ${miniz_SOURCE_DIR}/miniz.c
+    ${miniz_SOURCE_DIR}/miniz_tdef.c
+    ${miniz_SOURCE_DIR}/miniz_tinfl.c
+    ${miniz_SOURCE_DIR}/miniz_zip.c
 )
 
 add_subdirectory(ext/meshoptimizer)
 
-# --- Create executable (C/C++ + CUDA sources) ---
-add_executable(${PROJECT_NAME} ${SOURCES} ${CUDA_SOURCES})
+# --- CUDA kernels as an isolated static library ---
+# Keeping CudaSolver.cu in its own target means nvcc only sees a minimal flag
+# set, free of the main executable's per-target /utf-8 and /MDd flags that
+# trip up nvcc on Windows paths containing spaces.
+if(HAS_CUDA)
+    add_library(FEACudaKernels STATIC src/CudaSolver.cu)
+    set_target_properties(FEACudaKernels PROPERTIES
+        CUDA_SEPARABLE_COMPILATION OFF
+        POSITION_INDEPENDENT_CODE  ON)
+    target_include_directories(FEACudaKernels PRIVATE
+        ${CMAKE_SOURCE_DIR}/include
+        ${CMAKE_SOURCE_DIR}/src
+        ${eigen_SOURCE_DIR}
+        ${CUDAToolkit_INCLUDE_DIRS})
+    target_compile_definitions(FEACudaKernels PRIVATE HAS_CUDA=1)
+    target_link_libraries(FEACudaKernels PUBLIC
+        CUDA::cudart CUDA::cublas CUDA::cusparse)
+endif()
+
+# --- Create executable (C/C++ only; CUDA linked via FEACudaKernels) ---
+add_executable(${PROJECT_NAME} ${SOURCES})
 
 # --- Link libraries ---
-# glfw3dll.lib is the MSVC import library for glfw3.dll
-# opengl32 and gdi32 are Windows system libraries
 find_package(OpenMP REQUIRED)
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
@@ -68,13 +133,12 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     opengl32
     gdi32
     OpenMP::OpenMP_CXX
-    meshoptimizer
-    CUDA::cudart
-    CUDA::cublas
-    CUDA::cusparse
-)
+    meshoptimizer)
 
-target_compile_definitions(${PROJECT_NAME} PRIVATE HAS_CUDA=1)
+if(HAS_CUDA)
+    target_link_libraries(${PROJECT_NAME} PRIVATE FEACudaKernels)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE HAS_CUDA=1)
+endif()
 
 # --- Copy glfw3.dll next to the executable after build ---
 add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
@@ -102,6 +166,19 @@ foreach(STL_FILE ${STL_FILES})
     add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${STL_FILE}"
+            "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
+    )
+endforeach()
+
+# --- Copy .3mf model files next to the executable ---
+file(GLOB MODEL_3MF_FILES CONFIGURE_DEPENDS
+    "${CMAKE_SOURCE_DIR}/assets/models/*.3mf"
+    "${CMAKE_SOURCE_DIR}/assets/models/*.3MF")
+
+foreach(TMF_FILE ${MODEL_3MF_FILES})
+    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${TMF_FILE}"
             "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
     )
 endforeach()

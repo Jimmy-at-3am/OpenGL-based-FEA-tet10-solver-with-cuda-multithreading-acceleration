@@ -407,7 +407,19 @@ bool FEASolver::solveLinearStatic(FEAModel& model, float visualScale,
     // the current linear-elastic baseline; when heterogeneous materials are
     // introduced this becomes a vector indexed per element.
     // -------------------------------------------------------------------------
-    LinearElastic material(youngsModulus, poissonRatio);
+    std::unique_ptr<IMaterial> materialOwned;
+    if (useFdmAnisotropy && E_z > 0.0) {
+        std::cout << "[FDM-ANISO] Transverse isotropic: E_p=" << youngsModulus*1e-9
+                  << " GPa  E_z=" << E_z*1e-9 << " GPa  nu_p=" << poissonRatio
+                  << "  nu_pz=" << nu_pz << "  G_pz=" << G_pz*1e-9 << " GPa" << std::endl;
+        materialOwned = std::make_unique<TransverseIsotropicMaterial>(
+            youngsModulus, E_z, poissonRatio, nu_pz, G_pz, buildAxis);
+    } else {
+        if (useFdmAnisotropy)
+            std::cout << "[FDM-ANISO] E_z=0 — falling back to isotropic material." << std::endl;
+        materialOwned = std::make_unique<LinearElastic>(youngsModulus, poissonRatio);
+    }
+    IMaterial& material = *materialOwned;
 
     // -------------------------------------------------------------------------
     // Build the element list via the IElement interface.
@@ -517,6 +529,9 @@ bool FEASolver::solveLinearStatic(FEAModel& model, float visualScale,
             std::vector<int> gdofs_thr;
             #pragma omp for schedule(dynamic)
             for (int el = 0; el < nElems; ++el) {
+                // Respect fracture element mask: skip dead elements.
+                if (!m_fractureAlive.empty() && !m_fractureAlive[el]) continue;
+
                 const IElement* elem = elements[el].get();
                 const int       nd   = elem->NumDOFs();
 
@@ -543,6 +558,9 @@ bool FEASolver::solveLinearStatic(FEAModel& model, float visualScale,
         std::vector<int> gdofs;  // reused global-DOF buffer
 
         for (int el = 0; el < nElems; ++el) {
+            // Respect fracture element mask: skip dead elements.
+            if (!m_fractureAlive.empty() && !m_fractureAlive[el]) continue;
+
             const IElement* elem = elements[el].get();
             const int nd = elem->NumDOFs();
 
@@ -561,10 +579,22 @@ bool FEASolver::solveLinearStatic(FEAModel& model, float visualScale,
     SparseMatrix<double> K(nDOFs, nDOFs);
     K.setFromTriplets(tripletList.begin(), tripletList.end());
 
-    // IMMEDIATELY free the massive triplet array and element cache before the solver runs 
+    // IMMEDIATELY free the massive triplet array and element cache before the solver runs
     // to prevent System RAM from maxing out (e.g., Tet10 triplets can use >10GB for 1M elements).
     std::vector<Triplet<double>>().swap(tripletList);
     std::vector<std::unique_ptr<IElement>>().swap(elements);
+
+    // Regularize island DOFs when running inside the fracture loop.
+    // Killed elements leave their nodes with zero-diagonal rows in K, making K
+    // singular and causing GPU Cholesky (and CPU LDLT) to fail. Setting K[i,i]=1.0
+    // for these DOFs gives them U=0 (physically correct: no stiffness → no movement)
+    // and keeps K positive definite throughout all fracture iterations.
+    if (!m_fractureAlive.empty()) {
+        const VectorXd diag = K.diagonal();
+        for (int i = 0; i < nDOFs; ++i) {
+            if (diag[i] == 0.0) K.coeffRef(i, i) = 1.0;
+        }
+    }
 
     VectorXd F = VectorXd::Zero(nDOFs);
 
@@ -587,6 +617,7 @@ bool FEASolver::solveLinearStatic(FEAModel& model, float visualScale,
 
     std::vector<int> fixedNodes;
     std::vector<int> loadedNodes;
+    std::vector<std::pair<int,int>> singleDofFixed; // (nodeIdx, dofComponent) for 3-2-1 minimal BCs
     int pointLoadNode = -1;
 
     if (loadType == LoadType::CantileverBendingZ) {
@@ -655,6 +686,69 @@ bool FEASolver::solveLinearStatic(FEAModel& model, float visualScale,
             std::cout << "No Z_max node found.";
         }
         std::cout << std::endl;
+    } else if (loadType == LoadType::TensionX ||
+               loadType == LoadType::TensionY ||
+               loadType == LoadType::TensionZ) {
+        const int ta = (loadType == LoadType::TensionX) ? 0
+                     : (loadType == LoadType::TensionY) ? 1 : 2;
+        const double bmin = (ta==0)?minX:(ta==1)?minY:minZ;
+        const double bmax = (ta==0)?maxX:(ta==1)?maxY:maxZ;
+        const double tolA = (bmax - bmin) * 0.02;
+
+        std::vector<int> faceMin, faceMax;
+        for (int i = 0; i < nNodes; ++i) {
+            const glm::vec3& p = model.originalVolumetricPositions[i];
+            const double coord = (ta==0)?(double)p.x:(ta==1)?(double)p.y:(double)p.z;
+            if (coord <= bmin + tolA) faceMin.push_back(i);
+            if (coord >= bmax - tolA) faceMax.push_back(i);
+        }
+        loadedNodes = faceMax;
+
+        // Mesh centroid for anchor node selection.
+        double cx=0, cy=0, cz=0;
+        for (int i=0; i<nNodes; ++i) {
+            const glm::vec3& p = model.originalVolumetricPositions[i];
+            cx+=p.x; cy+=p.y; cz+=p.z;
+        }
+        cx/=nNodes; cy/=nNodes; cz/=nNodes;
+
+        // 3-2-1 minimal constraints: nodeA (all 3 DOF) + nodeB (1 DOF) + nodeC (1 DOF).
+        const int pb = (ta+1)%3; // first perp axis
+        const int pc = (ta+2)%3; // second perp axis
+
+        auto getCoord = [&](int ni, int ax) -> double {
+            const glm::vec3& p = model.originalVolumetricPositions[ni];
+            return (ax==0)?(double)p.x:(ax==1)?(double)p.y:(double)p.z;
+        };
+
+        int nodeA=-1; double dA=1e300;
+        int nodeB=-1; double dB=-1;
+        int nodeC=-1; double dC=-1;
+        for (int i=0; i<nNodes; ++i) {
+            const glm::vec3& p = model.originalVolumetricPositions[i];
+            const double d2=(p.x-cx)*(p.x-cx)+(p.y-cy)*(p.y-cy)+(p.z-cz)*(p.z-cz);
+            if (d2 < dA) { dA=d2; nodeA=i; }
+        }
+        const double Apb = nodeA>=0 ? getCoord(nodeA, pb) : 0.0;
+        const double Apc = nodeA>=0 ? getCoord(nodeA, pc) : 0.0;
+        for (int i=0; i<nNodes; ++i) {
+            if (i==nodeA) continue;
+            const double offPb = std::abs(getCoord(i, pb) - Apb);
+            if (offPb > dB) { dB=offPb; nodeB=i; }
+        }
+        for (int i=0; i<nNodes; ++i) {
+            if (i==nodeA || i==nodeB) continue;
+            const double offPc = std::abs(getCoord(i, pc) - Apc);
+            if (offPc > dC) { dC=offPc; nodeC=i; }
+        }
+
+        if (nodeA >= 0) fixedNodes.push_back(nodeA);
+        if (nodeB >= 0) singleDofFixed.push_back({nodeB, pc});
+        if (nodeC >= 0) singleDofFixed.push_back({nodeC, pb});
+
+        std::cout << "BC [Tension" << "XYZ"[ta] << "]: anchor=" << nodeA
+                  << "  rot-nodes=" << nodeB << "," << nodeC
+                  << "  faces: -=" << faceMin.size() << " +=" << faceMax.size() << " nodes." << std::endl;
     } else {
         const double tolY = (maxY - minY) * 0.05;
         for (int i = 0; i < nNodes; ++i) {
@@ -709,6 +803,47 @@ bool FEASolver::solveLinearStatic(FEAModel& model, float visualScale,
 
         std::cout << "Applied point force " << -forceMagnitude
                   << " N (-Z) at node " << pointLoadNode << "." << std::endl;
+    } else if (loadType == LoadType::TensionX ||
+               loadType == LoadType::TensionY ||
+               loadType == LoadType::TensionZ) {
+        const int ta = (loadType == LoadType::TensionX) ? 0
+                     : (loadType == LoadType::TensionY) ? 1 : 2;
+        const double bmin = (ta==0)?minX:(ta==1)?minY:minZ;
+        const double bmax = (ta==0)?maxX:(ta==1)?maxY:maxZ;
+        const double tolA = (bmax - bmin) * 0.02;
+
+        std::vector<int> faceMinT, faceMaxT;
+        for (int i=0; i<nNodes; ++i) {
+            const glm::vec3& p = model.originalVolumetricPositions[i];
+            const double coord = (ta==0)?(double)p.x:(ta==1)?(double)p.y:(double)p.z;
+            if (coord <= bmin + tolA) faceMinT.push_back(i);
+            if (coord >= bmax - tolA) faceMaxT.push_back(i);
+        }
+
+        const double fMax = faceMaxT.empty() ? 0.0 : forceMagnitude / static_cast<double>(faceMaxT.size());
+        const double fMin = faceMinT.empty() ? 0.0 : forceMagnitude / static_cast<double>(faceMinT.size());
+        for (int n : faceMaxT) {
+            F(n*3+ta) += fMax;
+            model.nodalForceMagnitudes[n] = static_cast<float>(fMax);
+        }
+        for (int n : faceMinT) {
+            F(n*3+ta) -= fMin;
+            model.nodalForceMagnitudes[n] = static_cast<float>(fMin);
+        }
+        model.appliedForcePerNode = static_cast<float>(fMax);
+
+        const float arrowLen = static_cast<float>(bmax - bmin) * 0.2f;
+        glm::vec3 arrowDir(0,0,0); ((float*)(&arrowDir))[ta] = arrowLen;
+        for (int n : faceMaxT) {
+            glm::vec3 pos = model.originalVolumetricPositions[n];
+            model.appliedForces.push_back({ pos, pos + arrowDir });
+        }
+        for (int n : faceMinT) {
+            glm::vec3 pos = model.originalVolumetricPositions[n];
+            model.appliedForces.push_back({ pos, pos - arrowDir });
+        }
+        std::cout << "Tension" << "XYZ"[ta] << ": distributed " << forceMagnitude
+                  << " N over " << faceMaxT.size() << "(+)/" << faceMinT.size() << "(-) nodes" << std::endl;
     } else {
         // Legacy surface compression: consistent nodal loads from surface-
         // triangle integration. Correctly distributes force by tributary area.
@@ -769,6 +904,10 @@ bool FEASolver::solveLinearStatic(FEAModel& model, float visualScale,
         F(node * 3 + 0) = 0.0;
         F(node * 3 + 1) = 0.0;
         F(node * 3 + 2) = 0.0;
+    }
+    for (auto& [node, dof] : singleDofFixed) {
+        K.coeffRef(node*3+dof, node*3+dof) += penalty;
+        F(node*3+dof) = 0.0;
     }
 
     VectorXd U;
@@ -1025,6 +1164,7 @@ bool FEASolver::solveNonlinearStatic(FEAModel& model, float visualScale, NRParam
     }
 
     std::vector<int> fixedNodes, loadedNodes;
+    std::vector<std::pair<int,int>> singleDofFixed;
     int pointLoadNode = -1;
 
     if (loadType == LoadType::PointForceZ) {
@@ -1061,6 +1201,66 @@ bool FEASolver::solveNonlinearStatic(FEAModel& model, float visualScale, NRParam
             std::cout << "No Z_max node found.";
         }
         std::cout << std::endl;
+    } else if (loadType == LoadType::TensionX ||
+               loadType == LoadType::TensionY ||
+               loadType == LoadType::TensionZ) {
+        const int ta = (loadType == LoadType::TensionX) ? 0
+                     : (loadType == LoadType::TensionY) ? 1 : 2;
+        const double bmin = (ta==0)?minX:(ta==1)?minY:minZ;
+        const double bmax = (ta==0)?maxX:(ta==1)?maxY:maxZ;
+        const double tolA = (bmax - bmin) * 0.02;
+
+        std::vector<int> faceMin, faceMax;
+        for (int i=0; i<nNodes; ++i) {
+            const glm::vec3& p = model.originalVolumetricPositions[i];
+            const double coord = (ta==0)?(double)p.x:(ta==1)?(double)p.y:(double)p.z;
+            if (coord <= bmin + tolA) faceMin.push_back(i);
+            if (coord >= bmax - tolA) faceMax.push_back(i);
+        }
+        loadedNodes = faceMax;
+
+        double cx=0, cy=0, cz=0;
+        for (int i=0; i<nNodes; ++i) {
+            const glm::vec3& p = model.originalVolumetricPositions[i];
+            cx+=p.x; cy+=p.y; cz+=p.z;
+        }
+        cx/=nNodes; cy/=nNodes; cz/=nNodes;
+
+        const int pb = (ta+1)%3;
+        const int pc = (ta+2)%3;
+        auto getCoordNR = [&](int ni, int ax) -> double {
+            const glm::vec3& p = model.originalVolumetricPositions[ni];
+            return (ax==0)?(double)p.x:(ax==1)?(double)p.y:(double)p.z;
+        };
+
+        int nodeA=-1; double dA=1e300;
+        int nodeB=-1; double dB=-1;
+        int nodeC=-1; double dC=-1;
+        for (int i=0; i<nNodes; ++i) {
+            const glm::vec3& p = model.originalVolumetricPositions[i];
+            const double d2=(p.x-cx)*(p.x-cx)+(p.y-cy)*(p.y-cy)+(p.z-cz)*(p.z-cz);
+            if (d2 < dA) { dA=d2; nodeA=i; }
+        }
+        const double Apb = nodeA>=0 ? getCoordNR(nodeA, pb) : 0.0;
+        const double Apc = nodeA>=0 ? getCoordNR(nodeA, pc) : 0.0;
+        for (int i=0; i<nNodes; ++i) {
+            if (i==nodeA) continue;
+            const double offPb = std::abs(getCoordNR(i, pb) - Apb);
+            if (offPb > dB) { dB=offPb; nodeB=i; }
+        }
+        for (int i=0; i<nNodes; ++i) {
+            if (i==nodeA || i==nodeB) continue;
+            const double offPc = std::abs(getCoordNR(i, pc) - Apc);
+            if (offPc > dC) { dC=offPc; nodeC=i; }
+        }
+
+        if (nodeA >= 0) fixedNodes.push_back(nodeA);
+        if (nodeB >= 0) singleDofFixed.push_back({nodeB, pc});
+        if (nodeC >= 0) singleDofFixed.push_back({nodeC, pb});
+
+        std::cout << "[NR] BC [Tension" << "XYZ"[ta] << "]: anchor=" << nodeA
+                  << "  rot-nodes=" << nodeB << "," << nodeC
+                  << "  faces: -=" << faceMin.size() << " +=" << faceMax.size() << " nodes." << std::endl;
     } else {
         const double tolY = (maxY - minY) * 0.05;
         for (int i = 0; i < nNodes; ++i) {
@@ -1352,6 +1552,25 @@ bool FEASolver::solveNonlinearStatic(FEAModel& model, float visualScale, NRParam
 
     if (loadType == LoadType::PointForceZ) {
         F_ext_full(pointLoadNode * 3 + 2) = -forceMagnitude;
+    } else if (loadType == LoadType::TensionX ||
+               loadType == LoadType::TensionY ||
+               loadType == LoadType::TensionZ) {
+        const int ta = (loadType == LoadType::TensionX) ? 0
+                     : (loadType == LoadType::TensionY) ? 1 : 2;
+        const double bmin = (ta==0)?minX:(ta==1)?minY:minZ;
+        const double bmax = (ta==0)?maxX:(ta==1)?maxY:maxZ;
+        const double tolA = (bmax - bmin) * 0.02;
+        std::vector<int> faceMinT, faceMaxT;
+        for (int i=0; i<nNodes; ++i) {
+            const glm::vec3& p = model.originalVolumetricPositions[i];
+            const double coord = (ta==0)?(double)p.x:(ta==1)?(double)p.y:(double)p.z;
+            if (coord <= bmin + tolA) faceMinT.push_back(i);
+            if (coord >= bmax - tolA) faceMaxT.push_back(i);
+        }
+        const double fMaxNR = faceMaxT.empty() ? 0.0 : forceMagnitude / static_cast<double>(faceMaxT.size());
+        const double fMinNR = faceMinT.empty() ? 0.0 : forceMagnitude / static_cast<double>(faceMinT.size());
+        for (int n : faceMaxT) F_ext_full(n*3+ta) += fMaxNR;
+        for (int n : faceMinT) F_ext_full(n*3+ta) -= fMinNR;
     } else {
         std::vector<double> areaShare;
         buildConsistentLoadVector(model, loadedNodes, nNodes, forceMagnitude,
@@ -1474,6 +1693,37 @@ bool FEASolver::solveNonlinearStatic(FEAModel& model, float visualScale, NRParam
         model.appliedForcePerNode = static_cast<float>(std::abs(forceMagnitude));
         std::cout << "[NR] Point force " << -forceMagnitude
                   << " N (-Z) at node " << pointLoadNode << "." << std::endl;
+    } else if (loadType == LoadType::TensionX ||
+               loadType == LoadType::TensionY ||
+               loadType == LoadType::TensionZ) {
+        const int ta = (loadType == LoadType::TensionX) ? 0
+                     : (loadType == LoadType::TensionY) ? 1 : 2;
+        const double bmin = (ta==0)?minX:(ta==1)?minY:minZ;
+        const double bmax = (ta==0)?maxX:(ta==1)?maxY:maxZ;
+        const double tolA = (bmax - bmin) * 0.02;
+        std::vector<int> faceMinV, faceMaxV;
+        for (int i=0; i<nNodes; ++i) {
+            const glm::vec3& p = model.originalVolumetricPositions[i];
+            const double coord = (ta==0)?(double)p.x:(ta==1)?(double)p.y:(double)p.z;
+            if (coord <= bmin + tolA) faceMinV.push_back(i);
+            if (coord >= bmax - tolA) faceMaxV.push_back(i);
+        }
+        const double fPerNodeV = forceMagnitude / static_cast<double>(std::max(1, (int)faceMaxV.size()));
+        model.appliedForcePerNode = static_cast<float>(fPerNodeV);
+        for (int n : faceMaxV) model.nodalForceMagnitudes[n] = static_cast<float>(fPerNodeV);
+        for (int n : faceMinV) model.nodalForceMagnitudes[n] = static_cast<float>(fPerNodeV);
+        const float arrowLen = static_cast<float>(bmax - bmin) * 0.2f;
+        glm::vec3 arrowDir(0,0,0); ((float*)(&arrowDir))[ta] = arrowLen;
+        for (int n : faceMaxV) {
+            glm::vec3 pos = model.originalVolumetricPositions[n];
+            model.appliedForces.push_back({ pos, pos + arrowDir });
+        }
+        for (int n : faceMinV) {
+            glm::vec3 pos = model.originalVolumetricPositions[n];
+            model.appliedForces.push_back({ pos, pos - arrowDir });
+        }
+        std::cout << "[NR] Tension" << "XYZ"[ta] << ": distributed " << forceMagnitude
+                  << " N over " << faceMaxV.size() << "(+)/" << faceMinV.size() << "(-) nodes" << std::endl;
     } else {
         const float arrowLength = static_cast<float>(maxY - minY) * 0.15f;
         double maxNodalF = 0.0, sumNodalF = 0.0;
@@ -1583,6 +1833,7 @@ bool FEASolver::solveNonlinearStatic(FEAModel& model, float visualScale, NRParam
                 R(node * 3 + 1) = 0.0;
                 R(node * 3 + 2) = 0.0;
             }
+            for (auto& [node, dof] : singleDofFixed) R(node*3+dof) = 0.0;
             const double residualNorm = R.norm();
 
             std::cout << "[NR]   step " << step
@@ -1678,6 +1929,8 @@ bool FEASolver::solveNonlinearStatic(FEAModel& model, float visualScale, NRParam
                 K.coeffRef(node * 3 + 1, node * 3 + 1) += penalty;
                 K.coeffRef(node * 3 + 2, node * 3 + 2) += penalty;
             }
+            for (auto& [node, dof] : singleDofFixed)
+                K.coeffRef(node*3+dof, node*3+dof) += penalty;
 
             bool solved = false;
 
@@ -2015,4 +2268,292 @@ bool FEASolver::solveAdaptive(FEAModel& model, float visualScale) {
 
     useQuadraticElements = useTet10;
     return solveLinearStatic(model, visualScale);
+}
+
+// =============================================================================
+// FEASolver::solveBrittleFracture
+// =============================================================================
+// Brittle element-deletion fracture loop.
+//
+// Each iteration:
+//   1. Assemble K over alive elements (m_fractureAlive mask applied in the
+//      assembly loops of solveLinearStatic).
+//   2. Solve K u = F.
+//   3. Recover per-element von Mises stress from B and D.
+//   4. Kill elements with σ_vm > fractureStress.
+//   5. Repeat until stable or maxIters.
+//
+// The GPU path is inherited from solveLinearStatic automatically.
+// =============================================================================
+bool FEASolver::solveBrittleFracture(FEAModel& model, float visualScale, int maxIters)
+{
+    if (model.tetrahedra.empty()) {
+        std::cout << "[FRACTURE] No tetrahedra. Run GENERATE 3D MESH first." << std::endl;
+        return false;
+    }
+
+    const int nElems = static_cast<int>(model.tetrahedra.size() / 4);
+
+    // Initialise element-alive mask (all alive at the start).
+    if (static_cast<int>(model.elementAlive.size()) != nElems)
+        model.elementAlive.assign(nElems, 1);
+    if (static_cast<int>(model.elementFailureIter.size()) != nElems)
+        model.elementFailureIter.assign(nElems, -1);
+    model.elementFailureMode.assign(nElems, 0);
+
+    // Constitutive model used for stress recovery.
+    std::unique_ptr<IMaterial> materialOwned;
+    const bool useFdmFracture = useFdmAnisotropy && E_z > 0.0;
+    if (useFdmFracture) {
+        materialOwned = std::make_unique<TransverseIsotropicMaterial>(
+            youngsModulus, E_z, poissonRatio, nu_pz, G_pz, buildAxis);
+        std::cout << "[FRACTURE-FDM] Mode-aware fracture: interlayer-tens="
+                  << fractureStress_interlayer*1e-6 << " MPa  interlayer-shear="
+                  << fractureShear_interlayer*1e-6 << " MPa  intralayer="
+                  << fractureStress_intralayer*1e-6 << " MPa" << std::endl;
+    } else {
+        materialOwned = std::make_unique<LinearElastic>(youngsModulus, poissonRatio);
+    }
+    IMaterial& material = *materialOwned;
+
+    // solveLinearStatic permanently sets useGPU=false if a GPU solve fails,
+    // which would silently disable GPU for all subsequent fracture iterations.
+    // Save the user's intent and restore it at the top of each iteration so that
+    // each iteration retries GPU (the K matrix changes each iteration as elements
+    // are killed, and earlier failures due to singularity are fixed by the island-
+    // node regularization added above).
+    const bool savedUseGPU  = useGPU;
+    const bool savedUseMT   = useMultithreading;
+
+    // Auto-match element order to whatever was generated. When the user
+    // previously ran a Tet10 solve, generateMidEdgeNodes() has expanded
+    // originalVolumetricPositions to include mid-edge nodes. Running the
+    // fracture loop with useQuadraticElements=false (the default) would then
+    // assemble Tet4 stiffness into a matrix sized for ALL nodes (corner +
+    // mid-edge), inflating the DOF count 2-3x and making each LDLT factorization
+    // orders of magnitude slower. It also causes stress recovery to use the wrong
+    // element type, giving incorrect von Mises / FDM fracture values.
+    if (model.hasQuadraticMesh)
+        useQuadraticElements = true;
+
+    // isTet10 must be derived AFTER the auto-detection above.
+    const bool isTet10 = useQuadraticElements && model.hasQuadraticMesh;
+
+    // Force multithreaded CG for every fracture iteration regardless of the UI
+    // toggle. Serial LDLT (the non-MT path) is O(n^{1.5}) and memory-bandwidth
+    // bound — it appears as "low CPU usage" while doing nothing useful on the
+    // other cores. CG with Jacobi preconditioning parallelises via OpenMP SpMV,
+    // uses all cores, and converges faster for the near-diagonal systems that
+    // arise when many elements are killed (F_i = 1 for dead-node DOFs).
+    useMultithreading = true;
+    Eigen::setNbThreads(omp_get_max_threads());
+
+    // -------------------------------------------------------------------------
+    // Precompute per-element average D*B matrix ONCE.
+    // Node coordinates never change in brittle fracture (no geometry update),
+    // so the strain-displacement matrix B_e is the same every iteration.
+    // Storing avg_DB = (1/nGauss)*Σ_gp D*B_gp eliminates repeated Jacobian
+    // inversion and Gauss-point integration from the inner stress-recovery loop.
+    // -------------------------------------------------------------------------
+    using DB4  = Eigen::Matrix<double, 6, 12>;
+    using DB10 = Eigen::Matrix<double, 6, 30>;
+    std::vector<DB4>  elDB4;
+    std::vector<DB10> elDB10;
+
+    std::cout << "[FRACTURE] Precomputing element stress matrices..." << std::endl;
+    if (isTet10) {
+        elDB10.resize(nElems);
+        #pragma omp parallel for schedule(static)
+        for (int el = 0; el < nElems; ++el) {
+            std::array<int, Tet10Element::kNumNodes> ids{};
+            Eigen::Matrix<double, 3, Tet10Element::kNumNodes> coords;
+            for (int i = 0; i < Tet10Element::kNumNodes; ++i) {
+                const int nid = static_cast<int>(
+                    model.tetrahedraQuadratic[static_cast<size_t>(el)*10 + i]);
+                ids[i] = nid;
+                const glm::vec3& p = model.originalVolumetricPositions[nid];
+                coords(0,i) = p.x; coords(1,i) = p.y; coords(2,i) = p.z;
+            }
+            Tet10Element elem(coords, ids, &material);
+            elDB10[el] = elem.ComputeAvgDB();
+        }
+    } else {
+        elDB4.resize(nElems);
+        #pragma omp parallel for schedule(static)
+        for (int el = 0; el < nElems; ++el) {
+            std::array<int, TetrahedralElement::kNumNodes> ids{};
+            Eigen::Matrix<double, 3, 4> coords;
+            for (int i = 0; i < TetrahedralElement::kNumNodes; ++i) {
+                const int nid = static_cast<int>(model.tetrahedra[el*4 + i]);
+                ids[i] = nid;
+                const glm::vec3& p = model.originalVolumetricPositions[nid];
+                coords(0,i) = p.x; coords(1,i) = p.y; coords(2,i) = p.z;
+            }
+            TetrahedralElement elem(coords, ids, &material);
+            elDB4[el] = elem.ComputeAvgDB();
+        }
+    }
+
+    for (int iter = 0; iter < maxIters; ++iter) {
+        useGPU = savedUseGPU; // re-enable GPU for each iteration
+
+        const int aliveNow = static_cast<int>(
+            std::count(model.elementAlive.begin(), model.elementAlive.end(), uint8_t(1)));
+        std::cout << (useFdmFracture ? "[FRACTURE-FDM]" : "[FRACTURE]")
+                  << " === Iteration " << iter + 1 << "/" << maxIters
+                  << "  (" << aliveNow << "/" << nElems << " elements alive) ===" << std::endl;
+
+        // Feed the alive mask to solveLinearStatic's assembly loops.
+        m_fractureAlive = model.elementAlive;
+
+        Eigen::VectorXd U;
+        bool ok = solveLinearStatic(model, visualScale, &U);
+
+        m_fractureAlive.clear();
+
+        if (!ok || U.size() == 0) {
+            std::cout << "[FRACTURE] Solver failed at iteration " << iter << "." << std::endl;
+            useMultithreading = savedUseMT;
+            return false;
+        }
+
+        // ---- Per-element stress recovery (precomputed D*B, always parallel) ----
+        std::vector<float>   sigmaVM(nElems, 0.0f);
+        std::vector<uint8_t> failModeBuf(nElems, 0);
+
+        #pragma omp parallel for schedule(static)
+        for (int el = 0; el < nElems; ++el) {
+            if (!model.elementAlive[el]) continue;
+
+            Eigen::Matrix<double,6,1> s;
+            if (isTet10) {
+                Eigen::Matrix<double, 30, 1> ue;
+                for (int n = 0; n < Tet10Element::kNumNodes; ++n) {
+                    const int nid = static_cast<int>(
+                        model.tetrahedraQuadratic[static_cast<size_t>(el)*10 + n]);
+                    ue(n*3+0) = U(nid*3+0);
+                    ue(n*3+1) = U(nid*3+1);
+                    ue(n*3+2) = U(nid*3+2);
+                }
+                s = elDB10[el] * ue;
+            } else {
+                Eigen::Matrix<double, 12, 1> ue;
+                for (int n = 0; n < TetrahedralElement::kNumNodes; ++n) {
+                    const int nid = static_cast<int>(model.tetrahedra[el*4 + n]);
+                    ue(n*3+0) = U(nid*3+0);
+                    ue(n*3+1) = U(nid*3+1);
+                    ue(n*3+2) = U(nid*3+2);
+                }
+                s = elDB4[el] * ue;
+            }
+
+            const double sx=s(0), sy=s(1), sz=s(2), txy=s(3), tyz=s(4), txz=s(5);
+            sigmaVM[el] = static_cast<float>(std::sqrt(
+                0.5*((sx-sy)*(sx-sy)+(sy-sz)*(sy-sz)+(sz-sx)*(sz-sx))
+                + 3.0*(txy*txy + tyz*tyz + txz*txz)));
+
+            if (useFdmFracture) {
+                // Three independent max-stress criteria in principal material axes.
+                // Indices depend on buildAxis (which axis is the weak build direction).
+                double interTens, interShear, vmInPlane;
+                if (buildAxis == 0) {
+                    // X is weak; YZ is the strong in-plane
+                    interTens  = std::max(sx, 0.0);
+                    interShear = std::sqrt(txy*txy + txz*txz);
+                    vmInPlane  = std::sqrt(sy*sy - sy*sz + sz*sz + 3.0*tyz*tyz);
+                } else if (buildAxis == 1) {
+                    // Y is weak; XZ is the strong in-plane
+                    interTens  = std::max(sy, 0.0);
+                    interShear = std::sqrt(txy*txy + tyz*tyz);
+                    vmInPlane  = std::sqrt(sx*sx - sx*sz + sz*sz + 3.0*txz*txz);
+                } else {
+                    // Z is weak; XY is the strong in-plane
+                    interTens  = std::max(sz, 0.0);
+                    interShear = std::sqrt(tyz*tyz + txz*txz);
+                    vmInPlane  = std::sqrt(sx*sx - sx*sy + sy*sy + 3.0*txy*txy);
+                }
+
+                uint8_t mode = 0;
+                if      (interTens  > fractureStress_interlayer) mode = 1;
+                else if (interShear > fractureShear_interlayer)  mode = 2;
+                else if (vmInPlane  > fractureStress_intralayer) mode = 3;
+                failModeBuf[el] = mode;
+            }
+        }
+
+        // ---- Kill overstressed elements ----
+        int killed = 0;
+        int killInterTens = 0, killInterShear = 0, killIntralayer = 0;
+        float maxSVM = 0.0f;
+
+        for (int el = 0; el < nElems; ++el) {
+            if (sigmaVM[el] > maxSVM) maxSVM = sigmaVM[el];
+            if (!model.elementAlive[el]) continue;
+
+            bool kill = false;
+            if (useFdmFracture) {
+                kill = (failModeBuf[el] != 0);
+                if (kill) {
+                    model.elementFailureMode[el] = failModeBuf[el];
+                    if      (failModeBuf[el] == 1) ++killInterTens;
+                    else if (failModeBuf[el] == 2) ++killInterShear;
+                    else                           ++killIntralayer;
+                }
+            } else {
+                kill = (static_cast<double>(sigmaVM[el]) > fractureStress);
+            }
+
+            if (kill) {
+                model.elementAlive[el]       = 0;
+                model.elementFailureIter[el] = iter;
+                ++killed;
+            }
+        }
+
+        const int alive = static_cast<int>(
+            std::count(model.elementAlive.begin(), model.elementAlive.end(), uint8_t(1)));
+
+        if (useFdmFracture) {
+            std::cout << "[FRACTURE-FDM] iter " << iter
+                      << ": killed " << killed
+                      << " (interTens=" << killInterTens
+                      << " interShear=" << killInterShear
+                      << " intralayer=" << killIntralayer << ")"
+                      << "  max σ_vm=" << maxSVM*1e-6 << " MPa"
+                      << "  alive=" << alive << "/" << nElems << std::endl;
+        } else {
+            std::cout << "[FRACTURE] iter " << iter
+                      << ": " << killed << " elements killed"
+                      << "  max σ_vm=" << maxSVM*1e-6 << " MPa"
+                      << "  alive=" << alive << "/" << nElems << std::endl;
+        }
+
+        // Redraw with the updated alive mask so the user sees progression.
+        model.needsUpdate = true;
+        model.buildBuffers();
+
+        if (killed == 0) {
+            std::cout << (useFdmFracture ? "[FRACTURE-FDM]" : "[FRACTURE]")
+                      << " Converged (no new failures) after "
+                      << iter+1 << " iteration(s)." << std::endl;
+            break;
+        }
+    }
+
+    if (useFdmFracture) {
+        int totInterTens = 0, totInterShear = 0, totIntralayer = 0;
+        for (int el = 0; el < nElems; ++el) {
+            switch (model.elementFailureMode[el]) {
+                case 1: ++totInterTens;   break;
+                case 2: ++totInterShear;  break;
+                case 3: ++totIntralayer;  break;
+            }
+        }
+        std::cout << "[FRACTURE-FDM] mode totals: interTens=" << totInterTens
+                  << "  interShear=" << totInterShear
+                  << "  intralayer=" << totIntralayer << std::endl;
+    }
+
+    useMultithreading = savedUseMT;
+    return true;
 }

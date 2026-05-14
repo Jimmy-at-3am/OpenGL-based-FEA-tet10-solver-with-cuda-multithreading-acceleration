@@ -11,12 +11,68 @@
 #include "GeometryUtils.h"
 #include "tetgen.h"
 #include "Globals.h"
+#include "GeometryLoaderDispatch.h"
 
 namespace fs = std::filesystem;
 
 FEAModel::FEAModel() {
     glGenVertexArrays(1, &VAO); glGenBuffers(1, &VBO); glGenBuffers(1, &EBO);
     generateCube();
+}
+
+// Rebuild the volumetric surface from alive Tet4 elements for fracture visualization.
+// For each face of a tet, count how many alive tets share it.  Faces shared by
+// exactly 1 alive tet are boundary faces of the surviving body.
+static void rebuildFracturedSurface(const std::vector<unsigned int>& tetrahedra,
+                                     const std::vector<uint8_t>&      alive,
+                                     std::vector<unsigned int>&        outIndices)
+{
+    using Face3 = std::tuple<unsigned int, unsigned int, unsigned int>;
+    auto makeFace = [](unsigned int a, unsigned int b, unsigned int c) -> Face3 {
+        unsigned int v[3] = {a, b, c};
+        std::sort(v, v + 3);
+        return {v[0], v[1], v[2]};
+    };
+    std::unordered_map<unsigned int,
+        std::unordered_map<unsigned int,
+            std::unordered_map<unsigned int, int>>> faceCount;
+
+    // Raw face orderings for a tet with nodes n0,n1,n2,n3 (4 faces).
+    // We use sorted keys for the count map, but store the original winding too.
+    struct FaceWinding { int n[3]; };
+    static const FaceWinding kFaces[4] = {{{1,2,3}},{{0,3,2}},{{0,1,3}},{{0,2,1}}};
+
+    // Per-face: map sorted-key -> (alive_count, original_winding as first seen)
+    using Key = std::tuple<unsigned int,unsigned int,unsigned int>;
+    struct FaceInfo { int aliveCount = 0; unsigned int w[3] = {}; };
+    std::unordered_map<unsigned int, std::unordered_map<unsigned int,
+        std::unordered_map<unsigned int, FaceInfo>>> fmap;
+
+    const int nElems = static_cast<int>(tetrahedra.size() / 4);
+    for (int el = 0; el < nElems; ++el) {
+        if (!alive.empty() && !alive[el]) continue;
+        unsigned int n[4];
+        for (int i = 0; i < 4; ++i) n[i] = tetrahedra[el * 4 + i];
+        for (int f = 0; f < 4; ++f) {
+            unsigned int a = n[kFaces[f].n[0]];
+            unsigned int b = n[kFaces[f].n[1]];
+            unsigned int c = n[kFaces[f].n[2]];
+            unsigned int s[3] = {a, b, c};
+            std::sort(s, s + 3);
+            FaceInfo& fi = fmap[s[0]][s[1]][s[2]];
+            fi.aliveCount++;
+            if (fi.aliveCount == 1) { fi.w[0] = a; fi.w[1] = b; fi.w[2] = c; }
+        }
+    }
+    outIndices.clear();
+    for (auto& [k0, m1] : fmap)
+        for (auto& [k1, m2] : m1)
+            for (auto& [k2, fi] : m2)
+                if (fi.aliveCount == 1) {
+                    outIndices.push_back(fi.w[0]);
+                    outIndices.push_back(fi.w[1]);
+                    outIndices.push_back(fi.w[2]);
+                }
 }
 
 void FEAModel::buildBuffers() {
@@ -29,6 +85,13 @@ void FEAModel::buildBuffers() {
             else
                 volumetricVertices[i].position = originalVolumetricPositions[i];
         }
+    }
+
+    // When fracture state is active, regenerate the volumetric surface from
+    // surviving elements only so deleted elements visually disappear.
+    if (showVolumetricMesh && hasVolumetricMesh && !elementAlive.empty()
+        && !tetrahedra.empty()) {
+        rebuildFracturedSurface(tetrahedra, elementAlive, volumetricIndices);
     }
 
     updateScalarFieldData();
@@ -111,89 +174,68 @@ void FEAModel::generate_face(glm::vec3 normal, glm::vec3 u, glm::vec3 v, int sub
     }
 }
 
+// =============================================================================
+// FEAModel::loadSTL
+// =============================================================================
+// Thin wrapper: delegates to STLLoader via GeometryLoaderDispatch, then runs
+// the shared processRawGeometry() pipeline.
+// The full binary-STL parsing logic now lives in src/STLLoader.cpp.
 bool FEAModel::loadSTL(const std::string& filepath) {
-    std::ifstream file(filepath, std::ios::binary | std::ios::ate);
-    if (!file) return false;
+    LoadedGeometry geo;
+    if (!GeometryLoaderDispatch::load(filepath, geo)) return false;
+    return processRawGeometry(geo, "STL");
+}
 
-    std::streamsize size = file.tellg(); file.seekg(0, std::ios::beg);
-    if (size < 84) return false;
+// =============================================================================
+// FEAModel::load3MF
+// =============================================================================
+bool FEAModel::load3MF(const std::string& filepath) {
+    LoadedGeometry geo;
+    if (!GeometryLoaderDispatch::load(filepath, geo)) return false;
+    return processRawGeometry(geo, "3MF");
+}
 
-    char header[80]; file.read(header, 80);
-    uint32_t numTriangles; file.read(reinterpret_cast<char*>(&numTriangles), sizeof(numTriangles));
+// =============================================================================
+// FEAModel::loadFile
+// =============================================================================
+// Dispatch by extension — call this when you don't know the format ahead of time.
+bool FEAModel::loadFile(const std::string& filepath) {
+    std::string ext = std::filesystem::path(filepath).extension().string();
+    std::transform(ext.begin(), ext.end(), ext.begin(),
+                   [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
+    if (ext == ".3mf") return load3MF(filepath);
+    return loadSTL(filepath); // default — covers .stl
+}
 
-    if (size < 84 + numTriangles * 50) {
-        std::cout << "Skipped ASCII STL or corrupted file: " << filepath << std::endl;
+// =============================================================================
+// FEAModel::processRawGeometry
+// =============================================================================
+// Shared post-processing pipeline executed after ANY geometry loader succeeds.
+// Inputs:  geo.positions (welded vertex positions), geo.indices (triangle soup)
+// Outputs: surfaceVertices, surfaceIndices, GPU buffers uploaded.
+//
+// Steps
+// -----
+//  1. Optional surface decimation (meshoptimizer) when enablePolarRemoval==true.
+//  2. Degenerate triangle removal.
+//  3. Vertex compaction (remove orphaned verts after decimation).
+//  4. Per-vertex normal recomputation (OpenMP-parallel).
+//  5. AABB centering + uniform scale to 3-unit diagonal.
+//  6. Reset all volumetric / FEA state.
+//  7. Upload to GPU via buildBuffers().
+bool FEAModel::processRawGeometry(LoadedGeometry& geo, const std::string& formatTag) {
+    std::vector<glm::vec3> weldedPos  = geo.positions;
+    std::vector<unsigned int>& indices = geo.indices;
+
+    if (weldedPos.empty() || indices.empty()) {
+        std::cout << "processRawGeometry: empty geometry from loader." << std::endl;
         return false;
     }
 
-    struct RawTri { glm::vec3 n, v0, v1, v2; };
-    std::vector<RawTri> rawTris;
-    rawTris.reserve(numTriangles);
-    for (uint32_t i = 0; i < numTriangles; ++i) {
-        RawTri t;
-        float normal[3], v0[3], v1[3], v2[3]; uint16_t attr;
-        file.read(reinterpret_cast<char*>(normal), 12);
-        file.read(reinterpret_cast<char*>(v0), 12);
-        file.read(reinterpret_cast<char*>(v1), 12);
-        file.read(reinterpret_cast<char*>(v2), 12);
-        file.read(reinterpret_cast<char*>(&attr), 2);
-        t.n  = glm::vec3(normal[0], normal[1], normal[2]);
-        t.v0 = glm::vec3(v0[0], v0[1], v0[2]);
-        t.v1 = glm::vec3(v1[0], v1[1], v1[2]);
-        t.v2 = glm::vec3(v2[0], v2[1], v2[2]);
-        rawTris.push_back(t);
-    }
-
-    const float weldTol = 1e-6f;
-    auto snapVal = [&](float v) -> int64_t {
-        return static_cast<int64_t>(std::round(v / weldTol));
-    };
-    using IKey = std::tuple<int64_t, int64_t, int64_t>;
-    struct IKeyHash {
-        size_t operator()(const IKey& k) const {
-            size_t h = 0;
-            auto mix = [&](int64_t v) {
-                h ^= std::hash<int64_t>{}(v) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
-            };
-            mix(std::get<0>(k)); mix(std::get<1>(k)); mix(std::get<2>(k));
-            return h;
-        }
-    };
-    std::unordered_map<IKey, unsigned int, IKeyHash> vertexMap;
-    std::vector<glm::vec3> weldedPos;
-    std::vector<glm::vec3> weldedNrm;
-
-    auto getOrAdd = [&](const glm::vec3& pos, const glm::vec3& faceN) -> unsigned int {
-        IKey key = { snapVal(pos.x), snapVal(pos.y), snapVal(pos.z) };
-        auto it = vertexMap.find(key);
-        if (it != vertexMap.end()) {
-            weldedNrm[it->second] += faceN; // accumulate normal for smooth shading
-            return it->second;
-        }
-        unsigned int idx = static_cast<unsigned int>(weldedPos.size());
-        vertexMap[key] = idx;
-        weldedPos.push_back(pos);
-        weldedNrm.push_back(faceN);
-        return idx;
-    };
-
-    vertices.clear(); indices.clear();
-    for (const auto& t : rawTris) {
-        unsigned int i0 = getOrAdd(t.v0, t.n);
-        unsigned int i1 = getOrAdd(t.v1, t.n);
-        unsigned int i2 = getOrAdd(t.v2, t.n);
-        if (i0 == i1 || i1 == i2 || i0 == i2) continue;
-        indices.push_back(i0); indices.push_back(i1); indices.push_back(i2);
-    }
-
+    // -----------------------------------------------------------------------
+    // 1. Optional decimation (meshoptimizer)
+    // -----------------------------------------------------------------------
     if (params.enablePolarRemoval && !weldedPos.empty()) {
-        // ------------------------------------------------------------------
-        // Feature-preserving surface decimation via meshoptimizer.
-        // meshopt_simplify reduces triangle count while locking sharp borders.
-        // ------------------------------------------------------------------
-
-        // Build a flat float array — guaranteed compatible with meshoptimizer's
-        // float3 requirement regardless of GLM packing/alignment details.
         std::vector<float> posFlat;
         posFlat.reserve(weldedPos.size() * 3);
         for (const auto& p : weldedPos) {
@@ -202,14 +244,11 @@ bool FEAModel::loadSTL(const std::string& filepath) {
             posFlat.push_back(p.z);
         }
 
-        // Target 70% of original count — less aggressive to preserve topology
-        // on complex multi-component geometry (holes, mixed shapes).
         size_t target_index_count = std::max<size_t>(3u, (indices.size() * 7) / 10);
-        float  target_error       = 5e-2f;  // 5% shape deformation tolerance
+        float  target_error       = 5e-2f;
         float  result_error       = 0.0f;
 
-        std::vector<unsigned int> new_indices(indices.size()); // worst-case
-
+        std::vector<unsigned int> new_indices(indices.size());
         size_t new_index_count = meshopt_simplify(
             new_indices.data(),
             indices.data(),
@@ -222,13 +261,9 @@ bool FEAModel::loadSTL(const std::string& filepath) {
             meshopt_SimplifyLockBorder,
             &result_error
         );
-
         new_indices.resize(new_index_count);
 
-        // ------------------------------------------------------------------
-        // Remove degenerate triangles (zero-area / duplicate indices).
-        // These can cause TetGen to crash on complex geometry.
-        // ------------------------------------------------------------------
+        // 2. Remove degenerate triangles
         {
             std::vector<unsigned int> clean;
             clean.reserve(new_indices.size());
@@ -236,9 +271,7 @@ bool FEAModel::loadSTL(const std::string& filepath) {
                 unsigned int i0 = new_indices[t + 0];
                 unsigned int i1 = new_indices[t + 1];
                 unsigned int i2 = new_indices[t + 2];
-                // Skip degenerate: duplicate vertex indices
                 if (i0 == i1 || i1 == i2 || i0 == i2) continue;
-                // Skip degenerate: zero-area triangles
                 if (i0 < weldedPos.size() && i1 < weldedPos.size() && i2 < weldedPos.size()) {
                     glm::vec3 cross = glm::cross(weldedPos[i1] - weldedPos[i0],
                                                   weldedPos[i2] - weldedPos[i0]);
@@ -251,51 +284,33 @@ bool FEAModel::loadSTL(const std::string& filepath) {
             new_indices = std::move(clean);
         }
 
-        std::cout << "Surface Decimation (meshoptimizer): "
+        std::cout << "Surface Decimation: "
                   << (indices.size() / 3) << " tris -> "
                   << (new_indices.size() / 3) << " tris"
                   << " (error=" << result_error * 100.0f << "%)" << std::endl;
-
         indices = std::move(new_indices);
 
-        // ------------------------------------------------------------------
-        // Compact the vertex buffer: remove orphaned (unreferenced) vertices.
-        // After decimation many vertices are no longer used by any triangle.
-        // Passing them to TetGen creates floating interior points that crash
-        // the Delaunay tetrahedralization on complex multi-component meshes.
-        // ------------------------------------------------------------------
+        // 3. Vertex compaction
         {
-            // Build remap: old index -> new index.  Unreferenced verts get ~0u.
             std::vector<unsigned int> remap(weldedPos.size(), ~0u);
             unsigned int nextIdx = 0;
             for (auto idx : indices) {
                 if (idx < remap.size() && remap[idx] == ~0u)
                     remap[idx] = nextIdx++;
             }
-
-            // Build compacted vertex array
             std::vector<glm::vec3> compactPos(nextIdx);
-            for (size_t i = 0; i < weldedPos.size(); ++i) {
-                if (remap[i] != ~0u)
-                    compactPos[remap[i]] = weldedPos[i];
-            }
-
-            // Remap all indices
-            for (auto& idx : indices)
-                idx = remap[idx];
-
+            for (size_t i = 0; i < weldedPos.size(); ++i)
+                if (remap[i] != ~0u) compactPos[remap[i]] = weldedPos[i];
+            for (auto& idx : indices) idx = remap[idx];
             weldedPos = std::move(compactPos);
-
-            std::cout << "Vertex compaction: " << remap.size()
-                      << " verts -> " << weldedPos.size()
-                      << " referenced verts." << std::endl;
+            std::cout << "Vertex compaction: -> " << weldedPos.size() << " verts." << std::endl;
         }
     }
 
-    // ------------------------------------------------------------------
-    // Recompute per-vertex normals after potential decimation + compaction.
-    // Use per-thread accumulation buffers to avoid races under OpenMP.
-    // ------------------------------------------------------------------
+    // -----------------------------------------------------------------------
+    // 4. Per-vertex normal recomputation (OpenMP-parallel)
+    // -----------------------------------------------------------------------
+    std::vector<glm::vec3> weldedNrm;
     {
         const int nVerts = static_cast<int>(weldedPos.size());
         const int nFaces = static_cast<int>(indices.size() / 3);
@@ -304,7 +319,6 @@ bool FEAModel::loadSTL(const std::string& filepath) {
         #pragma omp parallel
         {
             std::vector<glm::vec3> localNrm(nVerts, glm::vec3(0.0f));
-
             #pragma omp for schedule(static)
             for (int f = 0; f < nFaces; ++f) {
                 unsigned int i0 = indices[f * 3 + 0];
@@ -312,20 +326,20 @@ bool FEAModel::loadSTL(const std::string& filepath) {
                 unsigned int i2 = indices[f * 3 + 2];
                 if (i0 >= (unsigned)nVerts || i1 >= (unsigned)nVerts || i2 >= (unsigned)nVerts)
                     continue;
-                glm::vec3 e0 = weldedPos[i1] - weldedPos[i0];
-                glm::vec3 e1 = weldedPos[i2] - weldedPos[i0];
-                glm::vec3 fN = glm::cross(e0, e1);
-                localNrm[i0] += fN;
-                localNrm[i1] += fN;
-                localNrm[i2] += fN;
+                glm::vec3 fN = glm::cross(weldedPos[i1] - weldedPos[i0],
+                                          weldedPos[i2] - weldedPos[i0]);
+                localNrm[i0] += fN; localNrm[i1] += fN; localNrm[i2] += fN;
             }
-
             #pragma omp critical
             for (int v = 0; v < nVerts; ++v)
                 weldedNrm[v] += localNrm[v];
         }
     }
 
+    // -----------------------------------------------------------------------
+    // 5. Build Vertex array
+    // -----------------------------------------------------------------------
+    vertices.clear();
     vertices.reserve(weldedPos.size());
     for (size_t i = 0; i < weldedPos.size(); ++i) {
         glm::vec3 nrm = weldedNrm[i];
@@ -333,33 +347,39 @@ bool FEAModel::loadSTL(const std::string& filepath) {
         if (len > 1e-8f) nrm /= len;
         vertices.push_back({ weldedPos[i], nrm, glm::vec2(0.0f) });
     }
-    std::cout << "Welded: " << rawTris.size() << " tris -> "
-              << vertices.size() << " unique verts, "
-              << (indices.size() / 3) << " tris kept." << std::endl;
 
+    std::cout << "Loaded: " << vertices.size() << " verts, "
+              << (indices.size() / 3) << " tris  [" << formatTag << "]" << std::endl;
+
+    // -----------------------------------------------------------------------
+    // 5. AABB centering + uniform scale to fit in a 3-unit diagonal
+    // -----------------------------------------------------------------------
     if (!vertices.empty()) {
         glm::vec3 minAABB = vertices[0].position;
         glm::vec3 maxAABB = vertices[0].position;
-        for(const auto& v : vertices) {
+        for (const auto& v : vertices) {
             minAABB = glm::min(minAABB, v.position);
             maxAABB = glm::max(maxAABB, v.position);
         }
-        glm::vec3 center = (minAABB + maxAABB) * 0.5f;
+        glm::vec3 center  = (minAABB + maxAABB) * 0.5f;
         glm::vec3 sizeVec = maxAABB - minAABB;
 
         bboxVolume = sizeVec.x * sizeVec.y * sizeVec.z;
-        if(bboxVolume < 0.0001f) bboxVolume = 1.0f;
+        if (bboxVolume < 0.0001f) bboxVolume = 1.0f;
 
         float maxDim = std::max(sizeVec.x, std::max(sizeVec.y, sizeVec.z));
-        if(maxDim < 0.001f) maxDim = 1.0f;
+        if (maxDim < 0.001f) maxDim = 1.0f;
         float scale = 3.0f / maxDim;
 
-        for(auto& v : vertices) { v.position = (v.position - center) * scale; }
+        for (auto& v : vertices) v.position = (v.position - center) * scale;
         bboxVolume *= (scale * scale * scale);
     }
 
+    // -----------------------------------------------------------------------
+    // 6. Store surface mesh, reset all volumetric / FEA state
+    // -----------------------------------------------------------------------
     surfaceVertices = vertices;
-    surfaceIndices = indices;
+    surfaceIndices  = indices;
     volumetricVertices.clear();
     volumetricIndices.clear();
     tetrahedra.clear();
@@ -368,21 +388,27 @@ bool FEAModel::loadSTL(const std::string& filepath) {
     appliedForces.clear();
     nodalDisplacementMagnitudes.clear();
     nodalForceMagnitudes.clear();
-    hasDeformation = false;
-    hasVolumetricMesh = false;
-    showVolumetricMesh = false;
+    hasDeformation        = false;
+    hasVolumetricMesh     = false;
+    showVolumetricMesh    = false;
     showAppliedForceField = false;
-    displacementMin = 0.0f;
-    displacementMax = 0.0f;
-    appliedForceMin = 0.0f;
-    appliedForceMax = 0.0f;
-    totalAppliedForce = 0.0f;
-    appliedForcePerNode = 0.0f;
-    loadedFileName = fs::path(filepath).filename().string();
+    displacementMin  = 0.0f;  displacementMax  = 0.0f;
+    appliedForceMin  = 0.0f;  appliedForceMax  = 0.0f;
+    totalAppliedForce    = 0.0f;
+    appliedForcePerNode  = 0.0f;
 
+    // Metadata for UI
+    loadedFileName          = geo.sourceLabel;
+    lastLoadedFormat        = formatTag;
+    lastLoadedObjectCount   = geo.objectCount;
+
+    // -----------------------------------------------------------------------
+    // 7. Upload to GPU
+    // -----------------------------------------------------------------------
     buildBuffers();
     return true;
 }
+
 
 void FEAModel::draw(BuiltInShader& shader, glm::vec3 viewPos) {
     if (indices.empty()) return;

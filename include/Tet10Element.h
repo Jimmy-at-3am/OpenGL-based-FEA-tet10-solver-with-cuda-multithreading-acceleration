@@ -84,6 +84,18 @@ public:
     void ComputeInternalForceVector(const Eigen::VectorXd& ue,
                                     Eigen::VectorXd&       fe) const override;
 
+    // Compute element-average stress from the global displacement vector.
+    // Averages σ = D B_g u_e over the 4 Gauss points.
+    // sigma_out is a 6-vector in Voigt order [σxx, σyy, σzz, τxy, τyz, τxz].
+    void ComputeStressVoigt(const Eigen::VectorXd& U_global,
+                            Eigen::Matrix<double,6,1>& sigma_out) const;
+
+    // Returns the element-average D*B matrix (6×30):
+    //   avg_DB = (1/kNumGauss) * Σ_gp D * B_gp
+    // Precomputing once per fracture setup eliminates per-iteration Gauss-point
+    // integration and Jacobian inversion from repeated stress-recovery queries.
+    Eigen::Matrix<double,6,kNumDOFs> ComputeAvgDB() const;
+
 private:
     // Evaluates the 10 quadratic shape functions at reference point (ξ, η, ζ).
     // Barycentric: L0 = 1-ξ-η-ζ, L1 = ξ, L2 = η, L3 = ζ.

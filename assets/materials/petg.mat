@@ -1,0 +1,5 @@
+name=PETG
+E=2.1e9
+nu=0.40
+density=1270
+fractureStress=5.0e7

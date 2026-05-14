@@ -1,4 +1,5 @@
 #include "Tet10Element.h"
+#include "IMaterial.h"
 
 // =============================================================================
 // Gauss quadrature data for the reference tetrahedron.
@@ -261,4 +262,43 @@ void Tet10Element::ComputeInternalForceVector(const Eigen::VectorXd& ue,
 
     fe.resize(kNumDOFs);
     for (int i = 0; i < kNumDOFs; ++i) fe(i) = feLocal(i);
+}
+
+void Tet10Element::ComputeStressVoigt(const Eigen::VectorXd& U_global,
+                                       Eigen::Matrix<double,6,1>& sigma_out) const
+{
+    // Gather element displacement (30 entries)
+    Eigen::Matrix<double, kNumDOFs, 1> ue;
+    for (int n = 0; n < kNumNodes; ++n) {
+        int base = nodeIds[n] * 3;
+        ue(n*3+0) = U_global(base+0);
+        ue(n*3+1) = U_global(base+1);
+        ue(n*3+2) = U_global(base+2);
+    }
+
+    Eigen::Matrix<double,6,6> D;
+    material->ComputeConstitutive(D);
+
+    // Average stress over the 4 Gauss points
+    sigma_out.setZero();
+    for (int gp = 0; gp < kNumGauss; ++gp) {
+        Eigen::Matrix<double, 6, kNumDOFs> B;
+        ComputeBAtGaussPoint(gp, B);
+        sigma_out += D * (B * ue);
+    }
+    sigma_out *= (1.0 / kNumGauss);
+}
+
+Eigen::Matrix<double,6,Tet10Element::kNumDOFs> Tet10Element::ComputeAvgDB() const
+{
+    Eigen::Matrix<double,6,6> D;
+    material->ComputeConstitutive(D);
+    Eigen::Matrix<double,6,kNumDOFs> avgDB;
+    avgDB.setZero();
+    for (int gp = 0; gp < kNumGauss; ++gp) {
+        Eigen::Matrix<double,6,kNumDOFs> B;
+        ComputeBAtGaussPoint(gp, B);
+        avgDB += D * B;
+    }
+    return avgDB * (1.0 / kNumGauss);
 }

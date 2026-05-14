@@ -33,25 +33,39 @@ bool showWireframe = true;
 float deltaTime = 0.0f;
 float lastFrame = 0.0f;
 AppMode currentMode = MODE_CUBE;
-std::vector<std::string> stlFiles;
+std::vector<std::string> modelFiles;  // replaces stlFiles: holds .stl + .3mf
 float panelWidth = 600.0f;
 
 namespace fs = std::filesystem;
 
-void scanForSTLs() {
-    stlFiles.clear();
+void scanForModels() {
+    modelFiles.clear();
     for (const auto& entry : fs::directory_iterator(".")) {
-        if (entry.path().extension() == ".stl" || entry.path().extension() == ".STL") {
-            stlFiles.push_back(entry.path().filename().string());
+        auto ext = entry.path().extension().string();
+        // Normalise extension to lower-case for comparison
+        std::string extLow = ext;
+        std::transform(extLow.begin(), extLow.end(), extLow.begin(),
+                       [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
+        if (extLow == ".stl" || extLow == ".3mf") {
+            modelFiles.push_back(entry.path().filename().string());
         }
     }
+    std::sort(modelFiles.begin(), modelFiles.end());
 }
 
 struct MaterialProps {
-    std::string name    = "Steel";
-    double      E       = 2.0e11;
-    double      nu      = 0.3;
-    double      density = 7850.0;
+    std::string name          = "Steel";
+    double      E             = 2.0e11;
+    double      nu            = 0.3;
+    double      density       = 7850.0;
+    double      fractureStress = 2.5e8; // 250 MPa (steel yield approx)
+    // FDM anisotropy (present only in PLA-type .mat files; zero = not provided).
+    double      E_z                      = 0.0;
+    double      nu_pz                    = 0.0;
+    double      G_pz                     = 0.0;
+    double      fractureStress_intralayer = 0.0;
+    double      fractureStress_interlayer = 0.0;
+    double      fractureShear_interlayer  = 0.0;
 };
 
 static bool loadMaterialFile(const std::string& path, MaterialProps& props) {
@@ -67,10 +81,17 @@ static bool loadMaterialFile(const std::string& path, MaterialProps& props) {
         auto rtrim = [](std::string& s) { auto p = s.find_last_not_of(" \t\r\n"); if (p != std::string::npos) s.erase(p + 1); else s.clear(); };
         ltrim(key); rtrim(key); ltrim(val); rtrim(val);
         try {
-            if      (key == "name")    props.name    = val;
-            else if (key == "E")       props.E       = std::stod(val);
-            else if (key == "nu")      props.nu      = std::stod(val);
-            else if (key == "density") props.density = std::stod(val);
+            if      (key == "name")          props.name          = val;
+            else if (key == "E")             props.E             = std::stod(val);
+            else if (key == "nu")            props.nu            = std::stod(val);
+            else if (key == "density")       props.density       = std::stod(val);
+            else if (key == "fractureStress")              props.fractureStress              = std::stod(val);
+            else if (key == "E_z")                         props.E_z                         = std::stod(val);
+            else if (key == "nu_pz")                       props.nu_pz                       = std::stod(val);
+            else if (key == "G_pz")                        props.G_pz                        = std::stod(val);
+            else if (key == "fractureStress_intralayer")   props.fractureStress_intralayer   = std::stod(val);
+            else if (key == "fractureStress_interlayer")   props.fractureStress_interlayer   = std::stod(val);
+            else if (key == "fractureShear_interlayer")    props.fractureShear_interlayer    = std::stod(val);
         } catch (...) {}
     }
     return true;
@@ -154,7 +175,7 @@ int main() {
     FEAModel model;
     SimpleUI ui;
     ui.init(scrWidth, scrHeight);
-    scanForSTLs();
+    scanForModels();
     scanForMaterials();
     for (const auto& mf : matFiles) {
         if (mf == "steel.mat") { activeMaterialFile = mf; loadMaterialFile("materials/" + mf, currentMaterial); break; }
@@ -180,6 +201,10 @@ int main() {
         float currentFrame = static_cast<float>(glfwGetTime());
         deltaTime = currentFrame - lastFrame; lastFrame = currentFrame;
         int w, h; glfwGetWindowSize(window, &w, &h);
+        if (w == 0 || h == 0) {
+            glfwWaitEvents();
+            continue;
+        }
         scrWidth = w; scrHeight = h; ui.resize(scrWidth, scrHeight);
         processInput(window);
 
@@ -254,30 +279,62 @@ int main() {
             camera.OrbitRadius = 5.0f;
             camera.UpdatePosition();
         }
-        if (ui.button("IMPORT STL", lX + lBtnH + 6.0f, lY, lBtnH, 22.0f, currentMode == MODE_IMPORT)) {
+        if (ui.button("IMPORT FILE", lX + lBtnH + 6.0f, lY, lBtnH, 22.0f, currentMode == MODE_IMPORT)) {
             currentMode = MODE_IMPORT;
-            scanForSTLs();
+            scanForModels();
         }
         lY += 30.0f;
 
         if (currentMode == MODE_IMPORT) {
-            if (stlFiles.empty()) {
-                ui.drawText("NO STLS FOUND", lX, lY, 9.0f, glm::vec3(1.0f, 0.2f, 0.2f)); lY += 25.0f;
+            if (modelFiles.empty()) {
+                ui.drawText("NO MODELS FOUND", lX, lY, 9.0f, glm::vec3(1.0f, 0.2f, 0.2f)); lY += 15.0f;
+                ui.drawText("(place .stl / .3mf here)", lX, lY, 7.5f, glm::vec3(0.5f)); lY += 20.0f;
             } else {
-                float stlListMax = (float)scrHeight * 0.52f;
-                for (const auto& file : stlFiles) {
-                    if (lY + 22.0f > stlListMax) break;
+                float fileListMax = (float)scrHeight * 0.52f;
+                for (const auto& file : modelFiles) {
+                    if (lY + 22.0f > fileListMax) break;
                     bool isActive = (file == model.loadedFileName);
-                    if (ui.button(file, lX, lY, lW, 22.0f, isActive)) {
-                        if (model.loadSTL(file)) {
+
+                    // Determine format for badge colour
+                    std::string extLow = fs::path(file).extension().string();
+                    std::transform(extLow.begin(), extLow.end(), extLow.begin(),
+                                   [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
+                    bool is3MF = (extLow == ".3mf");
+
+                    if (ui.button(file, lX, lY, lW - (is3MF ? 38.0f : 0.0f), 22.0f, isActive)) {
+                        if (model.loadFile(file)) {
                             camera.OrbitTarget = glm::vec3(0.0f);
                             camera.OrbitRadius = 5.0f;
                         }
                     }
+                    // [3MF] badge in teal accent
+                    if (is3MF) {
+                        ui.drawRect(lX + lW - 36.0f, lY + 2.0f, 34.0f, 18.0f,
+                                    glm::vec3(0.05f, 0.45f, 0.45f));
+                        ui.drawText("3MF", lX + lW - 31.0f, lY + 6.0f, 7.5f,
+                                    glm::vec3(0.4f, 1.0f, 0.95f));
+                    }
                     lY += 30.0f;
                 }
             }
-        }
+
+            // --- File metadata line ---
+            if (!model.loadedFileName.empty()) {
+                lY += 4.0f;
+                ui.drawRect(lX, lY, lW, 1.0f, glm::vec3(0.25f)); lY += 8.0f;
+                char metaBuf[128];
+                if (!model.lastLoadedFormat.empty()) {
+                    snprintf(metaBuf, sizeof(metaBuf),
+                             "FORMAT: %s", model.lastLoadedFormat.c_str());
+                    ui.drawText(metaBuf, lX, lY, 8.0f, glm::vec3(0.4f, 0.9f, 0.85f)); lY += 14.0f;
+                    if (model.lastLoadedObjectCount > 1) {
+                        snprintf(metaBuf, sizeof(metaBuf),
+                                 "OBJECTS: %d", model.lastLoadedObjectCount);
+                        ui.drawText(metaBuf, lX, lY, 8.0f, glm::vec3(0.65f, 0.85f, 0.65f)); lY += 14.0f;
+                    }
+                }
+            }
+        } // end MODE_IMPORT
 
         lY += 5.0f;
         ui.drawRect(lX, lY, lW, 1.5f, glm::vec3(0.3f)); lY += 12.0f;
@@ -333,7 +390,7 @@ int main() {
             if (ui.slider("SUBDIVISIONS", model.params.subdivisions, 1.0f, 20.0f, rX, rY, rW, 20.0f)) model.needsUpdate = true; rY += 40.0f;
         }
         else if (currentMode == MODE_IMPORT) {
-            std::string prLabel = model.params.enablePolarRemoval ? "AUTO DECIMATION: ON" : "AUTO DECIMATION: OFF";
+            std::string prLabel = model.params.enablePolarRemoval ? "VERTEX SMOOTHING: ON" : "VERTEX SMOOTHING: OFF";
             if (ui.button(prLabel, rX, rY, rW, 20.0f, model.params.enablePolarRemoval)) {
                 model.params.enablePolarRemoval = !model.params.enablePolarRemoval;
                 if (!model.loadedFileName.empty()) model.loadSTL(model.loadedFileName);
@@ -344,11 +401,11 @@ int main() {
             ui.slider("MAX VOLUME (%)", model.params.maxVolPercent, 0.001f, 0.5f, rX, rY, rW, 15.0f); rY += 20.0f;
 
             float btnW = rW * 0.5f - 2.0f;
-            if (ui.button("NATIVE MESH", rX, rY, btnW, 25.0f, !model.showVolumetricMesh, false)) {
+            if (ui.button("SURFACE MESH", rX, rY, btnW, 25.0f, !model.showVolumetricMesh, false)) {
                 model.showVolumetricMesh = false;
                 model.buildBuffers();
             }
-            if (ui.button("TETGEN MESH", rX + btnW + 4.0f, rY, btnW, 25.0f, model.showVolumetricMesh, !model.hasVolumetricMesh)) {
+            if (ui.button("VOLUME MESH", rX + btnW + 4.0f, rY, btnW, 25.0f, model.showVolumetricMesh, !model.hasVolumetricMesh)) {
                 if (model.hasVolumetricMesh) {
                     model.showVolumetricMesh = true;
                     model.buildBuffers();
@@ -370,38 +427,77 @@ int main() {
                 rY += 30.0f;
 
                 static bool useGPU = false;
+                static bool useFdmAnisotropy = false;
+
+                // Build-axis and force-type selections (shared by all solvers).
+                static int buildAxis = 1; // 0=X weak, 1=Y weak (default), 2=Z weak
+                static int loadTypeSel = 0;
+                static const FEASolver::LoadType loadTypeMap[] = {
+                    FEASolver::LoadType::CantileverBendingZ,
+                    FEASolver::LoadType::PointForceZ,
+                    FEASolver::LoadType::SurfaceCompressionY,
+                    FEASolver::LoadType::TensionX,
+                    FEASolver::LoadType::TensionY,
+                    FEASolver::LoadType::TensionZ,
+                };
+                static const char* loadTypeNames[] = {
+                    "FORCE: CANTILEVER Z",
+                    "FORCE: POINT Z",
+                    "FORCE: SURFACE COMP Y",
+                    "FORCE: TENSION X",
+                    "FORCE: TENSION Y",
+                    "FORCE: TENSION Z",
+                };
+                static const char* buildAxisNames[] = {
+                    "LAYER: X (build top)",
+                    "LAYER: Y (build top)",
+                    "LAYER: Z (build top)",
+                };
+
                 std::string gpuLabel = useGPU ? "GPU ACCEL (CUDA): ON" : "GPU ACCEL (CUDA): OFF";
                 if (ui.button(gpuLabel, rX, rY, rW, 25.0f, useGPU)) {
                     useGPU = !useGPU;
                 }
                 rY += 30.0f;
 
+                if (ui.button(buildAxisNames[buildAxis], rX, rY, rW, 22.0f)) {
+                    buildAxis = (buildAxis + 1) % 3;
+                }
+                rY += 27.0f;
+
+                if (ui.button(loadTypeNames[loadTypeSel], rX, rY, rW, 22.0f)) {
+                    loadTypeSel = (loadTypeSel + 1) % 6;
+                }
+                rY += 27.0f;
+
                 ui.slider("POINT FORCE (MN)", forceMagnitudeMN, 1.0f, 1000.0f, rX, rY, rW, 15.0f);
                 rY += 20.0f;
 
-                if (ui.button("RUN STATIC FEA (AUTO BC)", rX, rY, rW, 25.0f)) {
+                if (ui.button("LINEAR STATIC FEA", rX, rY, rW, 25.0f)) {
                     std::cout << "Launching Static Solver..." << std::endl;
                     FEASolver solver;
-                    solver.loadType             = FEASolver::LoadType::CantileverBendingZ;
+                    solver.loadType             = loadTypeMap[loadTypeSel];
+                    solver.buildAxis            = buildAxis;
                     solver.useQuadraticElements = true;
                     solver.useMultithreading    = useMultithreading;
                     solver.useGPU              = useGPU;
                     solver.forceMagnitude       = static_cast<double>(forceMagnitudeMN) * 1.0e6;
-                    solver.youngsModulus        = currentMaterial.E; 
+                    solver.youngsModulus        = currentMaterial.E;
                     solver.poissonRatio         = currentMaterial.nu;
                     solver.solveLinearStatic(model, 10.0f);
                 }
                 rY += 30.0f;
-                if (ui.button("RUN NONLINEAR FEA (NR)", rX, rY, rW, 25.0f)) {
+                if (ui.button("NONLINEAR FEA (NR)", rX, rY, rW, 25.0f)) {
                     std::cout << "Launching Newton-Raphson Solver..." << std::endl;
                     FEASolver solver;
-                    solver.loadType             = FEASolver::LoadType::CantileverBendingZ;
+                    solver.loadType             = loadTypeMap[loadTypeSel];
+                    solver.buildAxis            = buildAxis;
                     solver.useQuadraticElements = true;
                     solver.verboseDiagnostics   = true;
                     solver.useMultithreading    = useMultithreading;
                     solver.useGPU              = useGPU;
                     solver.forceMagnitude       = static_cast<double>(forceMagnitudeMN) * 1.0e6;
-                    solver.youngsModulus        = currentMaterial.E; 
+                    solver.youngsModulus        = currentMaterial.E;
                     solver.poissonRatio         = currentMaterial.nu;
                     solver.loadSymmetry = FEASolver::LoadSymmetry::None;
                     NRParams  nrp;
@@ -417,6 +513,8 @@ int main() {
                 if (ui.button("RUN ADAPTIVE FEA", rX, rY, rW, 25.0f)) {
                     std::cout << "Launching Adaptive Solver..." << std::endl;
                     FEASolver solver;
+                    solver.loadType          = loadTypeMap[loadTypeSel];
+                    solver.buildAxis         = buildAxis;
                     solver.useMultithreading = useMultithreading;
                     solver.useGPU           = useGPU;
                     solver.forceMagnitude    = static_cast<double>(forceMagnitudeMN) * 1.0e6;
@@ -425,6 +523,60 @@ int main() {
                     solver.geoParams.curvatureAngleThreshold = curvAngleThreshold;
                     solver.geoParams.highCurvatureFracLimit  = curvFracLimit;
                     solver.solveAdaptive(model, 10.0f);
+                }
+                rY += 30.0f;
+
+                // FDM anisotropy toggle — only meaningful if the loaded material has E_z data.
+                const bool hasFdmData = (currentMaterial.E_z > 0.0);
+                {
+                    std::string fdmLabel = useFdmAnisotropy
+                        ? "FDM ANISOTROPY: ON " : "FDM ANISOTROPY: OFF";
+                    if (!hasFdmData) fdmLabel += " [no data]";
+                    if (ui.button(fdmLabel, rX, rY, rW, 22.0f, useFdmAnisotropy)) {
+                        if (!hasFdmData) {
+                            std::cout << "[FDM-ANISO] Current material has no E_z/G_pz data — "
+                                      << "load a 3D-print material (e.g. pla.mat) first." << std::endl;
+                            useFdmAnisotropy = false;
+                        } else {
+                            useFdmAnisotropy = !useFdmAnisotropy;
+                        }
+                    }
+                }
+                rY += 27.0f;
+
+                if (ui.button("BRITTLE FRACTURE", rX, rY, rW, 25.0f)) {
+                    // Reset any previous fracture state so we start fresh.
+                    model.elementAlive.clear();
+                    model.elementFailureIter.clear();
+                    model.elementFailureMode.clear();
+
+                    const bool fdmOn = useFdmAnisotropy && hasFdmData;
+                    if (fdmOn) {
+                        std::cout << "Launching FDM-Aware Brittle Fracture Solver..." << std::endl;
+                    } else {
+                        std::cout << "Launching Brittle Fracture Solver (sigma_f="
+                                  << currentMaterial.fractureStress * 1e-6 << " MPa)..." << std::endl;
+                    }
+
+                    FEASolver solver;
+                    solver.useMultithreading    = useMultithreading;
+                    solver.useGPU               = useGPU;
+                    solver.useQuadraticElements = model.hasQuadraticMesh;
+                    solver.loadType             = loadTypeMap[loadTypeSel];
+                    solver.buildAxis            = buildAxis;
+                    solver.forceMagnitude       = static_cast<double>(forceMagnitudeMN) * 1.0e6;
+                    solver.youngsModulus        = currentMaterial.E;
+                    solver.poissonRatio         = currentMaterial.nu;
+                    solver.fractureStress       = currentMaterial.fractureStress;
+                    // FDM anisotropic parameters (no-ops when useFdmAnisotropy=false).
+                    solver.useFdmAnisotropy             = fdmOn;
+                    solver.E_z                           = currentMaterial.E_z;
+                    solver.nu_pz                         = currentMaterial.nu_pz;
+                    solver.G_pz                          = currentMaterial.G_pz;
+                    solver.fractureStress_intralayer     = currentMaterial.fractureStress_intralayer;
+                    solver.fractureStress_interlayer     = currentMaterial.fractureStress_interlayer;
+                    solver.fractureShear_interlayer      = currentMaterial.fractureShear_interlayer;
+                    solver.solveBrittleFracture(model, 10.0f, 50);
                 }
                 rY += 30.0f;
             }
@@ -517,6 +669,67 @@ int main() {
                     ui.drawText(legendValue, legendBarX - 72.0f, legendBarY + legendBarH - 6.0f, 7.8f, glm::vec3(0.9f));
                 }
             }
+        }
+
+        static bool showReadme = false;
+        if (ui.button("README", 10.0f, 10.0f, 80.0f, 30.0f, showReadme)) {
+            showReadme = !showReadme;
+        }
+
+        if (showReadme) {
+            float rw = 520.0f;
+            float rh = 540.0f;
+            float rx = 10.0f;
+            float ry = 50.0f;
+            ui.drawRect(rx, ry, rw, rh, glm::vec3(0.12f, 0.12f, 0.15f));
+            ui.drawRect(rx, ry, 2.0f, rh, glm::vec3(0.3f, 0.6f, 0.9f));
+
+            float textY = ry + 20.0f;
+            float textX = rx + 20.0f;
+            ui.drawText("FUNCTIONALITY README", textX, textY, 12.0f, glm::vec3(0.5f, 0.8f, 1.0f)); textY += 30.0f;
+
+            auto drawHelp = [&](const std::string& name, const std::string& desc) {
+                ui.drawText(name, textX, textY, 9.5f, glm::vec3(0.9f, 0.9f, 0.6f)); textY += 18.0f;
+                
+                std::string currentLine = "";
+                float maxW = rw - 40.0f;
+                float charW = 8.5f * 1.2f;
+                int charsPerLine = static_cast<int>(maxW / charW);
+                
+                std::vector<std::string> words;
+                size_t pos = 0, found;
+                while((found = desc.find_first_of(' ', pos)) != std::string::npos) {
+                    words.push_back(desc.substr(pos, found - pos));
+                    pos = found + 1;
+                }
+                words.push_back(desc.substr(pos));
+
+                for (const auto& w : words) {
+                    if (currentLine.empty()) {
+                        currentLine = w;
+                    } else if ((currentLine.length() + 1 + w.length()) <= charsPerLine) {
+                        currentLine += " " + w;
+                    } else {
+                        ui.drawText(currentLine, textX + 12.0f, textY, 8.5f, glm::vec3(0.8f, 0.8f, 0.8f));
+                        textY += 15.0f;
+                        currentLine = w;
+                    }
+                }
+                if (!currentLine.empty()) {
+                    ui.drawText(currentLine, textX + 12.0f, textY, 8.5f, glm::vec3(0.8f, 0.8f, 0.8f));
+                    textY += 22.0f;
+                }
+            };
+
+            drawHelp("VERTEX SMOOTHING", "Smooths problematic curved surface topologies before 3D meshing.");
+            drawHelp("MESH QUALITY / MAX VOL", "Controls tetrahedral aspect ratio and max volume constraints.");
+            drawHelp("SURFACE / VOLUME MESH", "Toggles between 2D boundary and 3D volumetric mesh views.");
+            drawHelp("MULTITHREADING / GPU ACCEL", "Enables CPU OpenMP or CUDA GPU acceleration for solvers.");
+            drawHelp("LINEAR STATIC FEA", "Runs small-strain linear structural analysis.");
+            drawHelp("NONLINEAR FEA (NR)", "Runs large-deformation analysis using Newton-Raphson iteration.");
+            drawHelp("ADAPTIVE FEA", "Uses quadratic elements in high-curvature regions for accuracy.");
+            drawHelp("SHOWING: DEFORMED", "Toggles visualization of the post-simulation deformed structure.");
+            drawHelp("FORCE MAP / REF CUBE", "Visualizes applied external force vectors and value contours.");
         }
 
         prevMousePressed = mousePressed;

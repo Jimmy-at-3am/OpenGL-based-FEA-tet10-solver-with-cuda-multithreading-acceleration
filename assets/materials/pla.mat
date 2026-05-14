@@ -1,0 +1,13 @@
+name=PLA
+E=3.5e9
+nu=0.36
+density=1240
+fractureStress=5.0e7
+# Anisotropic FDM parameters — used only when "FDM ANISOTROPY" toggle is ON.
+# Values from Perez, Celik & Karkkainen (2021) PMC9828590 (FDM PLA, 0.2 mm layers).
+E_z=2.4e9
+nu_pz=0.32
+G_pz=8.0e8
+fractureStress_intralayer=5.0e7
+fractureStress_interlayer=2.28e7
+fractureShear_interlayer=1.8e7

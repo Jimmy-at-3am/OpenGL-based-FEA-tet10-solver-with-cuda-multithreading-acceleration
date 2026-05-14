@@ -38,16 +38,12 @@ _deps/
 
 # =============================================================
 # lib/ binary dependencies (OpenGL and other fetched libraries)
-# Your lib/ folder contains downloaded compiled binaries for
-# OpenGL and solver dependencies. Binaries are large, platform-
-# specific, and should be fetched at build time, not stored in
-# git. Header-only or source deps in lib/ are fine to keep.
+# lib/ contains small pre-built GLFW binaries required to link
+# and run the project (glfw3.dll, glfw3dll.lib, libglfw3dll.a).
+# These are committed intentionally so the repo is buildable
+# immediately after clone without any extra fetch step.
 # =============================================================
-lib/*.dll
-lib/*.lib
-lib/*.a
-lib/*.so
-lib/*.pdb
+# (lib/ is fully tracked — no exclusions here)
 
 # =============================================================
 # Windows build artifacts

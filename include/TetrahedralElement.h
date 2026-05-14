@@ -112,24 +112,36 @@ public:
         for (int i = 0; i < kNumDOFs; ++i) fe(i) = feLocal(i);
     }
 
-private:
-    // Constructs the constant 6×12 strain-displacement matrix B and returns
-    // V_e = |det(P)| / 6, the element volume.
-    //
-    // Algorithm — Vandermonde inversion:
-    //   1. Assemble P ∈ R^{4×4} with columns [1, x_i, y_i, z_i]^T:
-    //        row 0: ones;  row 1: x-coords;  row 2: y-coords;  row 3: z-coords
-    //   2. Invert: C = P^{-1}.  Shape functions: N_i = C_{0i} + C_{1i}x + C_{2i}y + C_{3i}z.
-    //      Spatial derivatives (constant throughout element):
-    //        β_i = C_{1i} = ∂N_i/∂x,   γ_i = C_{2i} = ∂N_i/∂y,   δ_i = C_{3i} = ∂N_i/∂z
-    //   3. Assemble B in engineering Voigt order [ε_xx, ε_yy, ε_zz, γ_xy, γ_yz, γ_xz]:
-    //        ε_xx row: [β_i,  0,    0  ]  per node i
-    //        ε_yy row: [0,    γ_i,  0  ]
-    //        ε_zz row: [0,    0,    δ_i]
-    //        γ_xy row: [γ_i,  β_i,  0  ]
-    //        γ_yz row: [0,    δ_i,  γ_i]
-    //        γ_xz row: [δ_i,  0,    β_i]
-    //   4. V_e = |det(P)| / 6  (signed tet volume = det(P)/6).
+    // Compute element-average von Mises stress from the global displacement vector.
+    // sigma_out is a 6-vector in Voigt order [σxx, σyy, σzz, τxy, τyz, τxz].
+    void ComputeStressVoigt(const Eigen::VectorXd& U_global,
+                            Eigen::Matrix<double,6,1>& sigma_out) const {
+        // Gather element displacement vector (12 entries)
+        Eigen::Matrix<double,12,1> ue;
+        for (int n = 0; n < kNumNodes; ++n) {
+            int base = nodeIds[n] * 3;
+            ue(n*3+0) = U_global(base+0);
+            ue(n*3+1) = U_global(base+1);
+            ue(n*3+2) = U_global(base+2);
+        }
+        Eigen::Matrix<double,6,12> B;
+        ComputeBMatrixAndVolume(B);
+        Eigen::Matrix<double,6,6> D;
+        material->ComputeConstitutive(D);
+        sigma_out = D * (B * ue);
+    }
+
+    // Returns D*B (6×12) — the stress-influence matrix for this element.
+    // Precomputing once amortizes the P-inversion cost across fracture iterations.
+    Eigen::Matrix<double,6,12> ComputeAvgDB() const {
+        Eigen::Matrix<double,6,12> B;
+        ComputeBMatrixAndVolume(B);
+        Eigen::Matrix<double,6,6> D;
+        material->ComputeConstitutive(D);
+        return D * B;
+    }
+
+    // Public so FEASolver::solveBrittleFracture can call it for stress recovery.
     double ComputeBMatrixAndVolume(Eigen::Matrix<double, 6, 12>& B) const {
         Eigen::Matrix4d P;
         for (int i = 0; i < kNumNodes; ++i) {
@@ -138,32 +150,25 @@ private:
             P(2, i) = nodeCoords(1, i);
             P(3, i) = nodeCoords(2, i);
         }
-
         double vol6 = P.determinant();
         if (vol6 < 0.0) vol6 = -vol6;
-
         Eigen::Matrix4d C = P.inverse();
-
         B.setZero();
         for (int i = 0; i < kNumNodes; ++i) {
             const double beta  = C(1, i);
             const double gamma = C(2, i);
             const double delta = C(3, i);
-
-            B(0, i * 3 + 0) = beta;
-            B(1, i * 3 + 1) = gamma;
-            B(2, i * 3 + 2) = delta;
-
-            B(3, i * 3 + 0) = gamma;
-            B(3, i * 3 + 1) = beta;
-
-            B(4, i * 3 + 1) = delta;
-            B(4, i * 3 + 2) = gamma;
-
-            B(5, i * 3 + 0) = delta;
-            B(5, i * 3 + 2) = beta;
+            B(0, i*3+0) = beta;
+            B(1, i*3+1) = gamma;
+            B(2, i*3+2) = delta;
+            B(3, i*3+0) = gamma;
+            B(3, i*3+1) = beta;
+            B(4, i*3+1) = delta;
+            B(4, i*3+2) = gamma;
+            B(5, i*3+0) = delta;
+            B(5, i*3+2) = beta;
         }
-
         return vol6 / 6.0;
     }
+
 };
