@@ -106,6 +106,22 @@ AGENTS.md
 session*.md
 
 # =============================================================
+# Build logs and scratch files
+# =============================================================
+build_out.txt
+knowledge/
+
+# =============================================================
+# Unused tutorial/stub headers (learnopengl examples)
+# =============================================================
+include/learnopengl/
+include/mesh.h
+include/model.h
+include/camera.h
+include/shader_m.h
+include/shader_s.h
+
+# =============================================================
 # FEA and simulation output files
 # Your solver will generate large mesh and results files during
 # runs. These can be gigabytes in size and change every run —

@@ -219,26 +219,28 @@ Built on OpenGL 3.3+ with GLFW and GLAD.
 
 ### Prerequisites
 
-- CMake 3.18+
-- C++17 compiler (MSVC 2022 recommended on Windows)
-- CUDA Toolkit (for GPU solver — optional, CPU fallback is automatic)
+- Visual Studio 2019 or 2022 with **C++ Desktop** and **C++ CMake tools** workloads
+- CUDA Toolkit 11+ (optional — CPU fallback is automatic; pass `-DUSE_CUDA=OFF` to skip)
 - OpenGL 3.3+ capable GPU
-- GLFW, GLAD, Eigen, TetGen, meshoptimizer (see `lib/`)
+
+Everything else (Eigen, miniz, meshoptimizer) is fetched automatically by CMake at configure time.
 
 ### Windows
 
 ```bat
-git clone https://github.com/Jimmy-at-3am/polyfea.git
-cd polyfea
+git clone --recurse-submodules https://github.com/Jimmy-at-3am/OpenGL-based-FEA-tet10-solver-with-cuda-multithreading-acceleration.git
+cd OpenGL-based-FEA-tet10-solver-with-cuda-multithreading-acceleration
 build.bat build
 ```
 
-### Linux / macOS
+> **Note:** `--recurse-submodules` is required — it downloads `meshoptimizer` alongside the repo.
+> If you already cloned without it, run `git submodule update --init` inside the repo folder.
 
-```bash
-mkdir build && cd build
-cmake .. -DCMAKE_BUILD_TYPE=Release
-make -j$(nproc)
+For a CPU-only build (no CUDA required):
+
+```bat
+build.bat configure -DUSE_CUDA=OFF
+build.bat build
 ```
 
 ---

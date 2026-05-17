@@ -2,12 +2,35 @@
 REM ============================================================
 REM  Build script for FEA Pre-Processor (MSVC + CMake + Ninja)
 REM  Usage: build.bat [configure|build|clean|run]
+REM
+REM  Prerequisites:
+REM    - Visual Studio 2019 or 2022 (with C++ Desktop workload)
+REM    - CMake 3.20+ (bundled with VS, or standalone)
+REM    - CUDA Toolkit (optional — CPU fallback works without it)
 REM ============================================================
 
-set "VS_PATH=D:\program_files_delta\Visual Studio"
-set "CMAKE=%VS_PATH%\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
+REM --- Auto-detect Visual Studio via vswhere -----------------
+set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
+if not exist "%VSWHERE%" (
+    echo [!] vswhere.exe not found. Is Visual Studio installed?
+    echo     Expected location: %VSWHERE%
+    exit /b 1
+)
 
-REM Load MSVC environment
+for /f "usebackq tokens=*" %%i in (`"%VSWHERE%" -latest -property installationPath`) do set "VS_PATH=%%i"
+if "%VS_PATH%"=="" (
+    echo [!] No Visual Studio installation found by vswhere.
+    exit /b 1
+)
+
+set "CMAKE=%VS_PATH%\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
+if not exist "%CMAKE%" (
+    echo [!] CMake not found inside VS at: %CMAKE%
+    echo     Install the 'C++ CMake tools for Windows' component in the VS Installer.
+    exit /b 1
+)
+
+REM --- Load MSVC environment ---------------------------------
 call "%VS_PATH%\VC\Auxiliary\Build\vcvars64.bat" >nul 2>&1
 
 if "%1"=="configure" goto :configure
