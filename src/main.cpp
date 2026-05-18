@@ -384,10 +384,17 @@ int main() {
         static float curvFracLimit = 0.25f;
 
         if (currentMode == MODE_CUBE) {
-            if (ui.slider("X LENGTH (m)", model.params.sizeX, 0.5f, 50.0f, rX, rY, rW, 20.0f)) model.needsUpdate = true; rY += 40.0f;
-            if (ui.slider("Y LENGTH (m)", model.params.sizeY, 0.1f, 50.0f, rX, rY, rW, 20.0f)) model.needsUpdate = true; rY += 40.0f;
-            if (ui.slider("Z LENGTH (m)", model.params.sizeZ, 0.1f, 50.0f, rX, rY, rW, 20.0f)) model.needsUpdate = true; rY += 40.0f;
+            if (ui.slider("X LENGTH (m)", model.params.sizeX, 0.1f, 10.0f, rX, rY, rW, 20.0f)) model.needsUpdate = true; rY += 40.0f;
+            if (ui.slider("Y LENGTH (m)", model.params.sizeY, 0.1f, 5.0f, rX, rY, rW, 20.0f)) model.needsUpdate = true; rY += 40.0f;
+            if (ui.slider("Z LENGTH (m)", model.params.sizeZ, 0.1f, 5.0f, rX, rY, rW, 20.0f)) model.needsUpdate = true; rY += 40.0f;
             if (ui.slider("SUBDIVISIONS", model.params.subdivisions, 1.0f, 20.0f, rX, rY, rW, 20.0f)) model.needsUpdate = true; rY += 40.0f;
+            ui.slider("MESH QUALITY (p)", model.params.tetRadiusEdge, 1.1f, 3.0f, rX, rY, rW, 15.0f); rY += 20.0f;
+            ui.slider("MAX VOLUME (%)", model.params.maxVolPercent, 0.00001f, 0.2f, rX, rY, rW, 15.0f, true); rY += 20.0f;
+            if (ui.button("GENERATE 3D MESH", rX, rY, rW, 35.0f)) {
+                std::cout << "Button Clicked: Launching TetGen..." << std::endl;
+                model.generateVolumetricMesh();
+            }
+            rY += 40.0f;
         }
         else if (currentMode == MODE_IMPORT) {
             std::string prLabel = model.params.enablePolarRemoval ? "VERTEX SMOOTHING: ON" : "VERTEX SMOOTHING: OFF";
@@ -397,8 +404,8 @@ int main() {
             }
             rY += 25.0f;
 
-            ui.slider("MESH QUALITY (p)", model.params.tetQuality, 1.1f, 3.0f, rX, rY, rW, 15.0f); rY += 20.0f;
-            ui.slider("MAX VOLUME (%)", model.params.maxVolPercent, 0.001f, 0.5f, rX, rY, rW, 15.0f); rY += 20.0f;
+            ui.slider("MESH QUALITY (p)", model.params.tetRadiusEdge, 1.1f, 3.0f, rX, rY, rW, 15.0f); rY += 20.0f;
+            ui.slider("MAX VOLUME (%)", model.params.maxVolPercent, 0.00001f, 0.2f, rX, rY, rW, 15.0f, true); rY += 20.0f;
 
             float btnW = rW * 0.5f - 2.0f;
             if (ui.button("SURFACE MESH", rX, rY, btnW, 25.0f, !model.showVolumetricMesh, false)) {

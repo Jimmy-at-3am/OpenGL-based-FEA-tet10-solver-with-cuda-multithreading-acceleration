@@ -10,6 +10,7 @@
 #include <limits>
 #include "GeometryUtils.h"
 #include "tetgen.h"
+#include "MeshQuality.h"
 #include "Globals.h"
 #include "GeometryLoaderDispatch.h"
 
@@ -129,6 +130,8 @@ void FEAModel::generateCube() {
     
     surfaceVertices = vertices;
     surfaceIndices = indices;
+    bboxVolume = params.sizeX * params.sizeY * params.sizeZ;
+    if (bboxVolume < 0.0001f) bboxVolume = 1.0f;
     volumetricVertices.clear();
     volumetricIndices.clear();
     tetrahedra.clear();
@@ -544,8 +547,20 @@ bool FEAModel::generateVolumetricMesh() {
     }
 
     float absoluteMaxVol = bboxVolume * (params.maxVolPercent / 100.0f);
-    char switches[128];
-    snprintf(switches, sizeof(switches), "pq%f/15.0a%f", params.tetQuality, absoluteMaxVol);
+    // TODO_01: tighter TetGen switches.
+    //   pq<radius-edge>/<min-dihedral>  -- quality bounds (Plan A.4 / care-point #?).
+    //   a<maxVol>                       -- per-tet volume cap.
+    //   A                               -- assign region attributes (no-op without regions).
+    //   O<level>                        -- mesh optimisation level (7 = flips + Laplace).
+    //   T<tol>                          -- Shewchuk robustness tolerance.
+    char switches[256];
+    snprintf(switches, sizeof(switches),
+             "pq%g/%ga%gAO%dT%g",
+             static_cast<double>(params.tetRadiusEdge),
+             static_cast<double>(params.tetMinDihedralDeg),
+             static_cast<double>(absoluteMaxVol),
+             params.tetOptimizeLevel,
+             params.tetRobustnessTol);
 
     std::cout << "Running TetGen with command: " << switches << std::endl;
 
@@ -590,6 +605,10 @@ bool FEAModel::generateVolumetricMesh() {
     std::cout << "Meshing Complete! Generated " << out.numberoftetrahedra
               << " tetrahedrons, " << out.numberoftrifaces
               << " tri-faces (" << out.numberoftrifaces << " boundary)." << std::endl;
+
+    // TODO_01: print the verbatim per-element quality block (Knupp histogram,
+    // min-dihedral & scaled-Jacobian summaries, worst-N, PASS/FAIL verdict).
+    MeshQuality::emitReport(out, params);
 
     volumetricVertices.clear();
     volumetricIndices.clear();

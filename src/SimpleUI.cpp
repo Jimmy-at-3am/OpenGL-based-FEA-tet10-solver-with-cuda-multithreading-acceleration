@@ -1,4 +1,5 @@
 #include "SimpleUI.h"
+#include <cmath>
 #include <glad/glad.h>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
@@ -129,7 +130,7 @@ bool SimpleUI::button(std::string label, float x, float y, float w, float h, boo
     return clicked;
 }
 
-bool SimpleUI::slider(std::string label, float& value, float min, float max, float x, float y, float w, float h) {
+bool SimpleUI::slider(std::string label, float& value, float min, float max, float x, float y, float w, float h, bool exponential) {
     bool changed = false;
     if (!mousePressed) activeUIID = "";
     bool hovered = (mouseX >= x && mouseX <= x + w && mouseY >= y && mouseY <= y + h);
@@ -137,16 +138,24 @@ bool SimpleUI::slider(std::string label, float& value, float min, float max, flo
     if (activeUIID == label && mousePressed) {
         float t = (mouseX - x) / w;
         if (t < 0) t = 0; if (t > 1) t = 1;
-        value = min + t * (max - min);
+        if (exponential)
+            value = min * powf(max / min, t);
+        else
+            value = min + t * (max - min);
         changed = true;
     }
     drawRect(x, y, w, h, glm::vec3(0.2f, 0.2f, 0.2f));
-    float t = (value - min) / (max - min);
+    float t = exponential
+        ? logf(value / min) / logf(max / min)
+        : (value - min) / (max - min);
     glm::vec3 fillColor = (activeUIID == label) ? glm::vec3(0.5f, 0.8f, 1.0f) : glm::vec3(0.3f, 0.7f, 0.9f);
     drawRect(x, y, w * t, h, fillColor);
     
-    char buffer[64]; 
-    snprintf(buffer, sizeof(buffer), "%s: %.3f", label.c_str(), value);
+    char buffer[64];
+    if (exponential)
+        snprintf(buffer, sizeof(buffer), "%s: %.2e", label.c_str(), value);
+    else
+        snprintf(buffer, sizeof(buffer), "%s: %.3f", label.c_str(), value);
     drawText(std::string(buffer), x + 8, y + h * 0.25f, 8.5f, glm::vec3(0.9f, 0.9f, 0.9f));
     
     return changed;

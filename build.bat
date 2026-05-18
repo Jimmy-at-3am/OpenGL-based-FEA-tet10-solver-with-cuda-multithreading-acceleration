@@ -1,4 +1,5 @@
 @echo off
+setlocal EnableDelayedExpansion
 REM ============================================================
 REM  Build script for FEA Pre-Processor (MSVC + CMake + Ninja)
 REM  Usage: build.bat [configure|build|clean|run]
@@ -6,14 +7,20 @@ REM
 REM  Prerequisites:
 REM    - Visual Studio 2019 or 2022 (with C++ Desktop workload)
 REM    - CMake 3.20+ (bundled with VS, or standalone)
-REM    - CUDA Toolkit (optional — CPU fallback works without it)
+REM    - CUDA Toolkit (optional - CPU fallback works without it)
+REM
+REM  NOTE: EnableDelayedExpansion is required because path variables
+REM  expand to strings containing "(x86)" -- without delayed
+REM  expansion, cmd.exe's early-expansion inside if/for parenthesis
+REM  blocks miscounts parens and emits
+REM      "\Microsoft was unexpected at this time."
 REM ============================================================
 
 REM --- Auto-detect Visual Studio via vswhere -----------------
 set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
-if not exist "%VSWHERE%" (
+if not exist "!VSWHERE!" (
     echo [!] vswhere.exe not found. Is Visual Studio installed?
-    echo     Expected location: %VSWHERE%
+    echo     Expected location: !VSWHERE!
     exit /b 1
 )
 

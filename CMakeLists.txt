@@ -87,6 +87,7 @@ set(SOURCES
     src/GeometryUtils.cpp
     src/FEAModel.cpp
     src/FEASolver.cpp
+    src/MeshQuality.cpp
     src/Tet10Element.cpp
     src/glad.c
     src/tetgen.cxx
@@ -200,10 +201,29 @@ foreach(MAT_FILE ${MAT_FILES})
 endforeach()
 
 # --- Diagnostic tool ---
-add_executable(mesh_diag src/mesh_diag.cpp src/tetgen.cxx src/predicates.cxx)
+# MeshQuality.cpp is linked into mesh_diag as well so both binaries share the
+# same quality library (TODO_01).  The diagnostic still has its own local
+# aspect-ratio routine, but future TODOs route mesh_diag through MeshQuality.
+add_executable(mesh_diag
+    src/mesh_diag.cpp
+    src/MeshQuality.cpp
+    src/tetgen.cxx
+    src/predicates.cxx)
+find_package(OpenMP QUIET)
+if(OpenMP_CXX_FOUND)
+    target_link_libraries(mesh_diag PRIVATE OpenMP::OpenMP_CXX)
+endif()
 target_link_libraries(mesh_diag PRIVATE gdi32)
 add_custom_command(TARGET mesh_diag POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CMAKE_SOURCE_DIR}/assets/models/revenge spindex - Part 33 (6).stl"
         "$<TARGET_FILE_DIR:mesh_diag>"
 )
+
+# --- TODO_01 fixture generator ---
+# Standalone one-shot tool that writes assets/test_fixtures/unit_cube.stl by
+# replicating FEAModel::generate_face's tessellation at size=1, sub=5.
+# Independent of OpenGL/TetGen so it builds and runs in any environment.
+add_executable(gen_unit_cube_stl tools/gen_unit_cube_stl.cpp)
+set_target_properties(gen_unit_cube_stl PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools")
