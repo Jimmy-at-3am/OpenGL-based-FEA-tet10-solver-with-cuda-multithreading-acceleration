@@ -35,6 +35,8 @@ float lastFrame = 0.0f;
 AppMode currentMode = MODE_CUBE;
 std::vector<std::string> modelFiles;  // replaces stlFiles: holds .stl + .3mf
 float panelWidth = 600.0f;
+int modelListPage = 0;          // current page index for the model file list
+static constexpr int kModelsPerPage = 6;
 
 namespace fs = std::filesystem;
 
@@ -46,7 +48,7 @@ void scanForModels() {
         std::string extLow = ext;
         std::transform(extLow.begin(), extLow.end(), extLow.begin(),
                        [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
-        if (extLow == ".stl" || extLow == ".3mf") {
+        if (extLow == ".stl" || extLow == ".3mf" || extLow == ".step" || extLow == ".stp") {
             modelFiles.push_back(entry.path().filename().string());
         }
     }
@@ -282,37 +284,70 @@ int main() {
         if (ui.button("IMPORT FILE", lX + lBtnH + 6.0f, lY, lBtnH, 22.0f, currentMode == MODE_IMPORT)) {
             currentMode = MODE_IMPORT;
             scanForModels();
+            modelListPage = 0;
         }
         lY += 30.0f;
 
         if (currentMode == MODE_IMPORT) {
             if (modelFiles.empty()) {
                 ui.drawText("NO MODELS FOUND", lX, lY, 9.0f, glm::vec3(1.0f, 0.2f, 0.2f)); lY += 15.0f;
-                ui.drawText("(place .stl / .3mf here)", lX, lY, 7.5f, glm::vec3(0.5f)); lY += 20.0f;
+                ui.drawText("(place .stl / .3mf / .step here)", lX, lY, 7.5f, glm::vec3(0.5f)); lY += 20.0f;
             } else {
-                float fileListMax = (float)scrHeight * 0.52f;
-                for (const auto& file : modelFiles) {
-                    if (lY + 22.0f > fileListMax) break;
+                int totalPages = ((int)modelFiles.size() + kModelsPerPage - 1) / kModelsPerPage;
+                // Clamp page in case the file list shrank after a rescan
+                if (modelListPage >= totalPages) modelListPage = totalPages - 1;
+                if (modelListPage < 0)           modelListPage = 0;
+
+                int firstIdx = modelListPage * kModelsPerPage;
+                int lastIdx  = std::min(firstIdx + kModelsPerPage, (int)modelFiles.size());
+
+                for (int i = firstIdx; i < lastIdx; ++i) {
+                    const std::string& file = modelFiles[i];
                     bool isActive = (file == model.loadedFileName);
 
-                    // Determine format for badge colour
                     std::string extLow = fs::path(file).extension().string();
                     std::transform(extLow.begin(), extLow.end(), extLow.begin(),
                                    [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
-                    bool is3MF = (extLow == ".3mf");
+                    bool is3MF  = (extLow == ".3mf");
+                    bool isSTEP = (extLow == ".step" || extLow == ".stp");
+                    bool hasBadge = is3MF || isSTEP;
 
-                    if (ui.button(file, lX, lY, lW - (is3MF ? 38.0f : 0.0f), 22.0f, isActive)) {
+                    if (ui.button(file, lX, lY, lW - (hasBadge ? 46.0f : 0.0f), 22.0f, isActive)) {
                         if (model.loadFile(file)) {
                             camera.OrbitTarget = glm::vec3(0.0f);
                             camera.OrbitRadius = 5.0f;
                         }
                     }
-                    // [3MF] badge in teal accent
                     if (is3MF) {
-                        ui.drawRect(lX + lW - 36.0f, lY + 2.0f, 34.0f, 18.0f,
+                        ui.drawRect(lX + lW - 44.0f, lY + 2.0f, 42.0f, 18.0f,
                                     glm::vec3(0.05f, 0.45f, 0.45f));
-                        ui.drawText("3MF", lX + lW - 31.0f, lY + 6.0f, 7.5f,
+                        ui.drawText("3MF", lX + lW - 39.0f, lY + 6.0f, 7.5f,
                                     glm::vec3(0.4f, 1.0f, 0.95f));
+                    }
+                    if (isSTEP) {
+                        ui.drawRect(lX + lW - 44.0f, lY + 2.0f, 42.0f, 18.0f,
+                                    glm::vec3(0.45f, 0.35f, 0.05f));
+                        ui.drawText("STEP", lX + lW - 40.0f, lY + 6.0f, 7.5f,
+                                    glm::vec3(1.0f, 0.85f, 0.3f));
+                    }
+                    lY += 30.0f;
+                }
+
+                // Pagination controls (only shown when there is more than one page)
+                if (totalPages > 1) {
+                    lY += 4.0f;
+                    float navBtnW = (lW - 8.0f) / 3.0f;
+                    if (ui.button("<", lX, lY, navBtnW, 22.0f, false, modelListPage == 0)) {
+                        --modelListPage;
+                    }
+                    // Centre page counter text
+                    char pageLabel[32];
+                    snprintf(pageLabel, sizeof(pageLabel), "%d / %d", modelListPage + 1, totalPages);
+                    ui.drawText(pageLabel, lX + navBtnW + 4.0f + 4.0f, lY + 6.0f,
+                                8.5f, glm::vec3(0.7f, 0.7f, 0.7f));
+                    if (ui.button(">", lX + 2.0f * navBtnW + 8.0f, lY, navBtnW, 22.0f,
+                                  false, modelListPage == totalPages - 1)) {
+                        ++modelListPage;
                     }
                     lY += 30.0f;
                 }
@@ -324,9 +359,14 @@ int main() {
                 ui.drawRect(lX, lY, lW, 1.0f, glm::vec3(0.25f)); lY += 8.0f;
                 char metaBuf[128];
                 if (!model.lastLoadedFormat.empty()) {
-                    snprintf(metaBuf, sizeof(metaBuf),
-                             "FORMAT: %s", model.lastLoadedFormat.c_str());
-                    ui.drawText(metaBuf, lX, lY, 8.0f, glm::vec3(0.4f, 0.9f, 0.85f)); lY += 14.0f;
+                    if (model.lastLoadedFormat == "STEP" && model.hasBRep()) {
+                        snprintf(metaBuf, sizeof(metaBuf), "Source: STEP (B-rep retained)");
+                        ui.drawText(metaBuf, lX, lY, 8.0f, glm::vec3(1.0f, 0.85f, 0.3f)); lY += 14.0f;
+                    } else {
+                        snprintf(metaBuf, sizeof(metaBuf),
+                                 "FORMAT: %s", model.lastLoadedFormat.c_str());
+                        ui.drawText(metaBuf, lX, lY, 8.0f, glm::vec3(0.4f, 0.9f, 0.85f)); lY += 14.0f;
+                    }
                     if (model.lastLoadedObjectCount > 1) {
                         snprintf(metaBuf, sizeof(metaBuf),
                                  "OBJECTS: %d", model.lastLoadedObjectCount);
@@ -400,7 +440,7 @@ int main() {
             std::string prLabel = model.params.enablePolarRemoval ? "VERTEX SMOOTHING: ON" : "VERTEX SMOOTHING: OFF";
             if (ui.button(prLabel, rX, rY, rW, 20.0f, model.params.enablePolarRemoval)) {
                 model.params.enablePolarRemoval = !model.params.enablePolarRemoval;
-                if (!model.loadedFileName.empty()) model.loadSTL(model.loadedFileName);
+                if (!model.loadedFileName.empty()) model.loadFile(model.loadedFileName);
             }
             rY += 25.0f;
 

@@ -1,0 +1,12 @@
+# TODO_03 regression sentinel — sphere_r1.stl with tetRadiusEdge=1.2
+# Run: load assets/test_fixtures/sphere_r1.stl, click Generate 3D Mesh.
+# Update values below after first confirmed-correct run.
+# Format: key=value (one per line, lines starting with # are comments)
+#
+# hausdorff_max=<value>   # symmetric Hausdorff distance (units: scaled mesh)
+# hausdorff_p95=<value>   # 95th-percentile distance
+# normal_dev_p50=<value>  # deg
+# normal_dev_p95=<value>  # deg
+# verdict=PASS
+#
+# PLACEHOLDER — fill in after first successful build + run.

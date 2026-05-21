@@ -30,9 +30,9 @@
 #include <iosfwd>
 #include <vector>
 
-// Forward declaration -- avoids forcing every translation unit that talks to
-// MeshQuality to include the heavyweight tetgen.h.
+// Forward declarations — keep OCC and TetGen headers out of every consumer.
 class tetgenio;
+class BRepHandle;
 
 namespace MeshQuality {
 
@@ -103,11 +103,14 @@ struct QualityReport {
     int             numElements          = 0;
     int             invertedCount        = 0;   // scaledJacobian <= 0
     int             sliverCount          = 0;   // dihedralMinDeg < tetMinDihedralDeg
+    int             severeSliverCount    = 0;   // dihedralMinDeg < hardMinDihedralFailDeg
 
     bool            isTet10              = false; // true when produced by Tet10 path
 
     double          radiusEdgeBound      = 0.0; // echoed in header (from FEAParams)
     double          minDihedralBoundDeg  = 0.0; // echoed in header (from FEAParams)
+    double          hardMinDihedralFailDeg = 5.0;
+    double          acceptableSliverPercent = 1.0;
 
     KnuppHistogram  knuppHist;
     SkewHistogram   skewHist;
@@ -135,15 +138,67 @@ struct QualityReport {
     std::vector<ElemQuality> worstN;
 
     bool            pass                 = true;
+    bool            warn                 = false;
 };
+
+// -----------------------------------------------------------------------------
+// TODO_03: Geometric fidelity (Hausdorff + normal deviation).
+// -----------------------------------------------------------------------------
+
+// Snapshot of the input surface taken before TetGen meshing.  Stored in
+// FEAModel::refSurfaceForFidelity and passed to computeFidelity() after
+// tetrahedralization so the reference is the pre-optimisation input.
+struct RefSurface {
+    std::vector<glm::vec3>    positions; // vertex positions (post-scale)
+    std::vector<unsigned int> indices;   // flat triangle list (3 per triangle)
+};
+
+// Results from computeFidelity().
+struct FidelityReport {
+    double     hausdorffMax  = 0.0;  // symmetric Hausdorff (both directions)
+    double     hausdorffP95  = 0.0;  // 95th-pct drift distance (combined)
+    int        maxDriftTriId = -1;   // boundary-face index of worst-drift sample
+    glm::dvec3 maxDriftPos  {0.0, 0.0, 0.0}; // position of that sample point
+    double     normalDev_p50 = 0.0;  // normal-deviation percentiles (degrees)
+    double     normalDev_p95 = 0.0;
+    double     normalDev_p99 = 0.0;
+    double     normalDev_max = 0.0;
+    double     bboxDiag      = 1.0;  // vol-mesh bbox diagonal (for pass ratio)
+    bool       pass          = false; // Hausdorff < 1% bboxDiag AND p95 < 15 deg
+    // TODO_04: true when forward pass used OCC exact nearest-point (NURBS reference).
+    bool       usedExactBRep = false;
+};
+
+// Compute Hausdorff + normal deviation between the vol-mesh boundary and the
+// reference input surface.  Uses a BVH (median-split, 4-sample quadrature per
+// face) for both forward (vol→ref) and reverse (ref→vol) passes.
+FidelityReport computeFidelity(const RefSurface& ref, const tetgenio& out,
+                               const FEAParams& p);
+
+// Compute and print the fidelity block.
+void emitFidelityReport(const RefSurface& ref, const tetgenio& out,
+                        const FEAParams& p, std::ostream& os);
+void emitFidelityReport(const RefSurface& ref, const tetgenio& out,
+                        const FEAParams& p);
+
+// TODO_04: BRep-exact overloads.
+// Forward pass uses OCC BRepExtrema_DistShapeShape (exact NURBS nearest-point)
+// instead of BVH-on-triangulation.  Reverse pass is unchanged (ref → vol BVH).
+// When HAS_OCCT is not defined these fall back to the triangulation path.
+FidelityReport computeFidelity(const RefSurface& ref, const BRepHandle& brep,
+                               const tetgenio& out, const FEAParams& p);
+void emitFidelityReport(const RefSurface& ref, const BRepHandle& brep,
+                        const tetgenio& out, const FEAParams& p, std::ostream& os);
+void emitFidelityReport(const RefSurface& ref, const BRepHandle& brep,
+                        const tetgenio& out, const FEAParams& p);
 
 // -----------------------------------------------------------------------------
 // Public API -- Tet4 path (tetgenio, produced by TetGen / computeReport).
 // -----------------------------------------------------------------------------
 // Build a QualityReport from a populated tetgenio (post-tetrahedralize).
 // Respects p.useMultithreading for the per-element loop and p.worstNCount
-// for the worst-N collection; the FAIL/PASS verdict uses p.tetMinDihedralDeg
-// as the sliver threshold.
+// for the worst-N collection; PASS allows a small reported sliver tail but
+// FAIL remains reserved for inverted elements.
 QualityReport computeReport(const tetgenio& out, const FEAParams& p);
 
 // Build the report and print the verbatim console block.
@@ -177,3 +232,4 @@ void emitReportTet10(
     const FEAParams&              p);
 
 } // namespace MeshQuality
+

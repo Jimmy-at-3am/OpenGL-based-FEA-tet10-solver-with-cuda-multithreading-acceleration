@@ -17,6 +17,7 @@
 //        free of Eigen; do NOT pull in Tet10Element.h here.
 // =============================================================================
 #include "MeshQuality.h"
+#include "BRepHandle.h"     // OCC-free; needed for the BRep overload signatures
 
 #include "tetgen.h"
 
@@ -398,12 +399,12 @@ inline double frobSq(const double J[3][3])
     return s;
 }
 
-// Column norms product of a 3x3 matrix (for scaled Jacobian denominator).
-inline double colNormProduct(const double J[3][3])
+// Row norms product of a 3x3 matrix (for scaled Jacobian denominator).
+inline double rowNormProduct(const double J[3][3])
 {
-    double n0 = std::sqrt(J[0][0]*J[0][0]+J[1][0]*J[1][0]+J[2][0]*J[2][0]);
-    double n1 = std::sqrt(J[0][1]*J[0][1]+J[1][1]*J[1][1]+J[2][1]*J[2][1]);
-    double n2 = std::sqrt(J[0][2]*J[0][2]+J[1][2]*J[1][2]+J[2][2]*J[2][2]);
+    double n0 = std::sqrt(J[0][0]*J[0][0]+J[0][1]*J[0][1]+J[0][2]*J[0][2]);
+    double n1 = std::sqrt(J[1][0]*J[1][0]+J[1][1]*J[1][1]+J[1][2]*J[1][2]);
+    double n2 = std::sqrt(J[2][0]*J[2][0]+J[2][1]*J[2][1]+J[2][2]*J[2][2]);
     return n0 * n1 * n2;
 }
 
@@ -430,7 +431,7 @@ double tet10ScaledJacobianMin(const glm::dvec3 nodes[10])
     for (const auto& gp : gps) {
         double J[3][3];
         const double detJ = tet10::computeJacobian(n10, gp[0], gp[1], gp[2], J);
-        const double denom = tet10::colNormProduct(J);
+        const double denom = tet10::rowNormProduct(J);
         if (denom < 1e-30) { minSJ = 0.0; continue; }
         const double sJ = kSqrt2 * detJ / denom;
         if (sJ < minSJ) minSJ = sJ;
@@ -529,6 +530,203 @@ double medianInPlace(std::vector<double>& v)
     return 0.5 * (lower + upper);
 }
 
+// =============================================================================
+// TODO_03: BVH for nearest-triangle queries (Hausdorff + normal deviation).
+// =============================================================================
+
+// Axis-aligned bounding box (double precision).
+struct AABB3d {
+    glm::dvec3 lo{ 1e300,  1e300,  1e300};
+    glm::dvec3 hi{-1e300, -1e300, -1e300};
+
+    void expandPoint(const glm::dvec3& p) { lo = glm::min(lo,p); hi = glm::max(hi,p); }
+    void expandBox  (const AABB3d& o)     { lo = glm::min(lo,o.lo); hi = glm::max(hi,o.hi); }
+
+    // Squared distance from p to the nearest point in/on this AABB; 0 if inside.
+    double sqDistToPoint(const glm::dvec3& p) const {
+        double sq = 0.0;
+        for (int i = 0; i < 3; ++i) {
+            double d = 0.0;
+            if      (p[i] < lo[i]) d = lo[i] - p[i];
+            else if (p[i] > hi[i]) d = p[i]  - hi[i];
+            sq += d * d;
+        }
+        return sq;
+    }
+};
+
+// Closest point on triangle (a,b,c) to query p.
+// Ericson "Real-Time Collision Detection" §5.1.5.
+// Returns { sqDist, closestPt, baryU, baryV, baryW }  (u+v+w == 1).
+struct CPResult { double sqDist; glm::dvec3 pt; double u, v, w; };
+
+CPResult closestPointOnTri(const glm::dvec3& p,
+                            const glm::dvec3& a,
+                            const glm::dvec3& b,
+                            const glm::dvec3& c)
+{
+    const glm::dvec3 ab = b - a, ac = c - a, ap = p - a;
+    const double d1 = glm::dot(ab,ap), d2 = glm::dot(ac,ap);
+    if (d1 <= 0.0 && d2 <= 0.0) {
+        const glm::dvec3 pp = a;
+        return { glm::dot(p-pp,p-pp), pp, 1.0, 0.0, 0.0 };
+    }
+    const glm::dvec3 bp = p - b;
+    const double d3 = glm::dot(ab,bp), d4 = glm::dot(ac,bp);
+    if (d3 >= 0.0 && d4 <= d3) {
+        const glm::dvec3 pp = b;
+        return { glm::dot(p-pp,p-pp), pp, 0.0, 1.0, 0.0 };
+    }
+    const double vc = d1*d4 - d3*d2;
+    if (vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0) {
+        const double t = d1 / (d1 - d3);
+        const glm::dvec3 pp = a + t * ab;
+        return { glm::dot(p-pp,p-pp), pp, 1.0-t, t, 0.0 };
+    }
+    const glm::dvec3 cp = p - c;
+    const double d5 = glm::dot(ab,cp), d6 = glm::dot(ac,cp);
+    if (d6 >= 0.0 && d5 <= d6) {
+        const glm::dvec3 pp = c;
+        return { glm::dot(p-pp,p-pp), pp, 0.0, 0.0, 1.0 };
+    }
+    const double vb = d5*d2 - d1*d6;
+    if (vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0) {
+        const double t = d2 / (d2 - d6);
+        const glm::dvec3 pp = a + t * ac;
+        return { glm::dot(p-pp,p-pp), pp, 1.0-t, 0.0, t };
+    }
+    const double va    = d3*d6 - d5*d4;
+    const double denom = 1.0 / (va + vb + vc);
+    const double v = vb * denom, w = vc * denom;
+    const glm::dvec3 pp = a + v * ab + w * ac;
+    return { glm::dot(p-pp,p-pp), pp, 1.0-v-w, v, w };
+}
+
+// Median-split BVH over a triangle mesh for nearest-point queries.
+// Caller must keep 'positions' and 'triIndices' alive for the lifetime of
+// nearest() calls (raw pointers to external, const data).
+struct TriBVH {
+    struct Node {
+        AABB3d box;
+        int    leftChild  = -1; // -1 if leaf
+        int    rightChild = -1;
+        int    primStart  =  0;
+        int    primCount  =  0; // > 0 : leaf; 0 : internal
+    };
+    struct NearResult {
+        double     sqDist = 1e300;
+        glm::dvec3 pt    {0.0, 0.0, 0.0};
+        glm::dvec3 normal{0.0, 0.0, 1.0}; // interpolated if vertNormals is non-empty
+        int        triIdx = -1;
+    };
+
+    std::vector<Node>       nodes;
+    std::vector<int>        prims;       // triangle indices in build order
+    const glm::dvec3*       positions  = nullptr;
+    const int*              triIndices = nullptr; // 3 ints per triangle
+    std::vector<glm::dvec3> vertNormals; // may be empty (no normal interpolation)
+
+    void build(const glm::dvec3* verts, const int* tris, int nTris,
+               const std::vector<glm::dvec3>& vNrm = {})
+    {
+        positions   = verts;
+        triIndices  = tris;
+        vertNormals = vNrm;
+        prims.resize(nTris);
+        for (int i = 0; i < nTris; ++i) prims[i] = i;
+        nodes.clear();
+        nodes.reserve(std::max(1, 2 * nTris)); // no realloc during recursion
+        if (nTris > 0) buildNode(0, nTris);
+    }
+
+    NearResult nearest(const glm::dvec3& query) const {
+        NearResult best;
+        if (!nodes.empty()) nearestRec(0, query, best.sqDist, best);
+        return best;
+    }
+
+private:
+    // Returns index of new node in nodes[].  Accesses nodes[] only by index
+    // after recursive calls so vector reallocation does not invalidate it.
+    int buildNode(int first, int count)
+    {
+        const int idx = static_cast<int>(nodes.size());
+        nodes.emplace_back();
+
+        AABB3d box;
+        for (int i = first; i < first + count; ++i) {
+            const int t = prims[i];
+            box.expandPoint(positions[triIndices[t*3+0]]);
+            box.expandPoint(positions[triIndices[t*3+1]]);
+            box.expandPoint(positions[triIndices[t*3+2]]);
+        }
+        nodes[idx].box       = box;
+        nodes[idx].primStart = first;
+        nodes[idx].primCount = count;
+
+        if (count <= 4) return idx; // leaf
+
+        const glm::dvec3 ext = box.hi - box.lo;
+        int axis = (ext.y > ext.x) ? 1 : 0;
+        if (ext.z > ext[axis]) axis = 2;
+
+        const int mid = first + count / 2;
+        std::nth_element(prims.begin() + first,
+                         prims.begin() + mid,
+                         prims.begin() + first + count,
+                         [&](int a, int b) {
+                             auto cen = [&](int t) {
+                                 return (positions[triIndices[t*3+0]][axis]
+                                       + positions[triIndices[t*3+1]][axis]
+                                       + positions[triIndices[t*3+2]][axis]) / 3.0;
+                             };
+                             return cen(a) < cen(b);
+                         });
+
+        const int li = buildNode(first,      mid - first);
+        const int ri = buildNode(mid, first + count - mid);
+        nodes[idx].leftChild  = li;
+        nodes[idx].rightChild = ri;
+        nodes[idx].primCount  = 0; // internal
+        return idx;
+    }
+
+    void nearestRec(int nodeIdx, const glm::dvec3& q,
+                    double& bestSq, NearResult& best) const
+    {
+        const Node& nd = nodes[nodeIdx];
+        if (nd.box.sqDistToPoint(q) >= bestSq) return;
+
+        if (nd.primCount > 0) {
+            for (int i = nd.primStart; i < nd.primStart + nd.primCount; ++i) {
+                const int t = prims[i];
+                const CPResult r = closestPointOnTri(
+                    q,
+                    positions[triIndices[t*3+0]],
+                    positions[triIndices[t*3+1]],
+                    positions[triIndices[t*3+2]]);
+                if (r.sqDist < bestSq) {
+                    bestSq      = r.sqDist;
+                    best.sqDist = r.sqDist;
+                    best.pt     = r.pt;
+                    best.triIdx = t;
+                    if (!vertNormals.empty()) {
+                        const glm::dvec3& na = vertNormals[triIndices[t*3+0]];
+                        const glm::dvec3& nb = vertNormals[triIndices[t*3+1]];
+                        const glm::dvec3& nc = vertNormals[triIndices[t*3+2]];
+                        const glm::dvec3  n  = r.u*na + r.v*nb + r.w*nc;
+                        const double      len = glm::length(n);
+                        best.normal = (len > 1e-12) ? n / len : glm::dvec3(0.0, 0.0, 1.0);
+                    }
+                }
+            }
+        } else {
+            nearestRec(nd.leftChild,  q, bestSq, best);
+            nearestRec(nd.rightChild, q, bestSq, best);
+        }
+    }
+};
+
 } // anonymous namespace
 
 // -----------------------------------------------------------------------------
@@ -554,6 +752,7 @@ QualityReport computeReport(const tetgenio& out, const FEAParams& p)
     QualityReport rpt;
     rpt.radiusEdgeBound     = static_cast<double>(p.tetRadiusEdge);
     rpt.minDihedralBoundDeg = static_cast<double>(p.tetMinDihedralDeg);
+    rpt.hardMinDihedralFailDeg = 5.0;
 
     const int nTets = out.numberoftetrahedra;
     rpt.numElements = nTets;
@@ -597,6 +796,8 @@ QualityReport computeReport(const tetgenio& out, const FEAParams& p)
     const int verticesPerTet = out.numberofcorners > 0 ? out.numberofcorners : 4;
     // We only need the first 4 corners (linear tet) regardless of high-order
     // mid-edge nodes the user may have requested.
+    const bool isTet10 = (verticesPerTet == 10);
+    rpt.isTet10 = isTet10;
 
     const bool useMT = p.useMultithreading;
 
@@ -629,11 +830,20 @@ QualityReport computeReport(const tetgenio& out, const FEAParams& p)
             const glm::dvec3 p2(PL[i2*3+0], PL[i2*3+1], PL[i2*3+2]);
             const glm::dvec3 p3(PL[i3*3+0], PL[i3*3+1], PL[i3*3+2]);
 
-            const double q        = knuppShape(p0, p1, p2, p3);
+            double q              = knuppShape(p0, p1, p2, p3);
             const DihedralRange dr = dihedralRangeDeg(p0, p1, p2, p3);
-            const double sJ       = scaledJacobianMin(p0, p1, p2, p3);
+            double sJ             = scaledJacobianMin(p0, p1, p2, p3);
             const double rr       = radiusRatio(p0, p1, p2, p3);
             const double sk       = equiangularSkew(p0, p1, p2, p3);
+            if (isTet10) {
+                glm::dvec3 nodes[10];
+                for (int k = 0; k < 10; ++k) {
+                    const int ik = TL[el * verticesPerTet + k] - firstN;
+                    nodes[k] = glm::dvec3(PL[ik*3+0], PL[ik*3+1], PL[ik*3+2]);
+                }
+                q  = tet10IsoparametricKnupp(nodes);
+                sJ = tet10ScaledJacobianMin(nodes);
+            }
 
             knuppArr[el]       = q;
             dihedralArr[el]    = dr.minDeg;
@@ -659,11 +869,20 @@ QualityReport computeReport(const tetgenio& out, const FEAParams& p)
         const glm::dvec3 p2(PL[i2*3+0], PL[i2*3+1], PL[i2*3+2]);
         const glm::dvec3 p3(PL[i3*3+0], PL[i3*3+1], PL[i3*3+2]);
 
-        const double q        = knuppShape(p0, p1, p2, p3);
+        double q              = knuppShape(p0, p1, p2, p3);
         const DihedralRange dr = dihedralRangeDeg(p0, p1, p2, p3);
-        const double sJ       = scaledJacobianMin(p0, p1, p2, p3);
+        double sJ             = scaledJacobianMin(p0, p1, p2, p3);
         const double rr       = radiusRatio(p0, p1, p2, p3);
         const double sk       = equiangularSkew(p0, p1, p2, p3);
+        if (isTet10) {
+            glm::dvec3 nodes[10];
+            for (int k = 0; k < 10; ++k) {
+                const int ik = TL[el * verticesPerTet + k] - firstN;
+                nodes[k] = glm::dvec3(PL[ik*3+0], PL[ik*3+1], PL[ik*3+2]);
+            }
+            q  = tet10IsoparametricKnupp(nodes);
+            sJ = tet10ScaledJacobianMin(nodes);
+        }
 
         knuppArr[el]       = q;
         dihedralArr[el]    = dr.minDeg;
@@ -689,16 +908,21 @@ QualityReport computeReport(const tetgenio& out, const FEAParams& p)
         rpt.skewHist.bin_80_100  += tb[7];
     }
 
-    // Count inverted / sliver elements.  These two counters drive the
-    // PASS / FAIL verdict.
+    // Count inverted / sliver elements.  `sliverCount` tracks the user/TetGen
+    // target threshold, while `severeSliverCount` tracks the hard-reject floor.
+    // The verdict allows a small sliver tail by percentage because TetGen's
+    // min-dihedral switch is a target, not a guarantee.
     const double sliverThr = static_cast<double>(p.tetMinDihedralDeg);
-    int inv = 0, sliv = 0;
+    const double hardSliverThr = rpt.hardMinDihedralFailDeg;
+    int inv = 0, sliv = 0, severeSliv = 0;
     for (int el = 0; el < nTets; ++el) {
         if (sJacArr[el]    <= 0.0)        ++inv;
         if (dihedralArr[el] < sliverThr)  ++sliv;
+        if (dihedralArr[el] < hardSliverThr) ++severeSliv;
     }
-    rpt.invertedCount = inv;
-    rpt.sliverCount   = sliv;
+    rpt.invertedCount     = inv;
+    rpt.sliverCount       = sliv;
+    rpt.severeSliverCount = severeSliv;
 
     // Min / max / median for the printed summary lines.
     {
@@ -755,7 +979,10 @@ QualityReport computeReport(const tetgenio& out, const FEAParams& p)
         }
     }
 
-    rpt.pass = (inv == 0) && (sliv == 0);
+    const double severePct = (nTets > 0) ? (100.0 * static_cast<double>(severeSliv) / static_cast<double>(nTets)) : 0.0;
+    const double targetPct = (nTets > 0) ? (100.0 * static_cast<double>(sliv) / static_cast<double>(nTets)) : 0.0;
+    rpt.pass = (inv == 0) && (severePct <= rpt.acceptableSliverPercent) && (targetPct <= rpt.acceptableSliverPercent);
+    rpt.warn = (inv == 0) && !rpt.pass;
     return rpt;
 }
 
@@ -788,6 +1015,7 @@ QualityReport computeReportTet10(
     rpt.isTet10             = true;
     rpt.radiusEdgeBound     = static_cast<double>(p.tetRadiusEdge);
     rpt.minDihedralBoundDeg = static_cast<double>(p.tetMinDihedralDeg);
+    rpt.hardMinDihedralFailDeg = 5.0;
 
     if (tet10Connectivity.size() % 10 != 0 || positions.empty()) return rpt;
 
@@ -829,7 +1057,7 @@ QualityReport computeReportTet10(
         const glm::dvec3& c2 = nodes[2];
         const glm::dvec3& c3 = nodes[3];
 
-        const double q        = knuppShape(c0, c1, c2, c3);
+        const double q        = tet10IsoparametricKnupp(nodes);
         const DihedralRange dr = dihedralRangeDeg(c0, c1, c2, c3);
         const double sJ       = tet10ScaledJacobianMin(nodes); // isoparametric
         const double rr       = radiusRatio(c0, c1, c2, c3);
@@ -870,13 +1098,16 @@ QualityReport computeReportTet10(
     }
 
     const double sliverThr = static_cast<double>(p.tetMinDihedralDeg);
-    int inv = 0, sliv = 0;
+    const double hardSliverThr = rpt.hardMinDihedralFailDeg;
+    int inv = 0, sliv = 0, severeSliv = 0;
     for (int el = 0; el < nTets; ++el) {
         if (sJacArr[el]    <= 0.0)        ++inv;
         if (dihedralArr[el] < sliverThr)  ++sliv;
+        if (dihedralArr[el] < hardSliverThr) ++severeSliv;
     }
-    rpt.invertedCount = inv;
-    rpt.sliverCount   = sliv;
+    rpt.invertedCount     = inv;
+    rpt.sliverCount       = sliv;
+    rpt.severeSliverCount = severeSliv;
 
     {
         double dMin = 1e300, dMax = -1e300, sMin = 1e300, sMax = -1e300;
@@ -922,7 +1153,10 @@ QualityReport computeReportTet10(
         }
     }
 
-    rpt.pass = (inv == 0) && (sliv == 0);
+    const double severePct = (nTets > 0) ? (100.0 * static_cast<double>(severeSliv) / static_cast<double>(nTets)) : 0.0;
+    const double targetPct = (nTets > 0) ? (100.0 * static_cast<double>(sliv) / static_cast<double>(nTets)) : 0.0;
+    rpt.pass = (inv == 0) && (severePct <= rpt.acceptableSliverPercent) && (targetPct <= rpt.acceptableSliverPercent);
+    rpt.warn = (inv == 0) && !rpt.pass;
     return rpt;
 }
 
@@ -985,14 +1219,40 @@ static void emitReportImpl(const QualityReport& r, const FEAParams& p, std::ostr
            << ")\n";
     }
 
-    if (r.pass) {
-        os << "  Verdict: PASS ("
-           << r.invertedCount << " inverted, "
-           << r.sliverCount   << " slivers below threshold)\n";
-    } else {
+    const double severePct = (r.numElements > 0) ? (100.0 * static_cast<double>(r.severeSliverCount) / static_cast<double>(r.numElements)) : 0.0;
+    const double targetPct = (r.numElements > 0) ? (100.0 * static_cast<double>(r.sliverCount) / static_cast<double>(r.numElements)) : 0.0;
+    if (r.invertedCount > 0) {
         os << "  Verdict: FAIL -- "
            << r.invertedCount << " inverted, "
-           << r.sliverCount   << " slivers below threshold\n";
+           << r.severeSliverCount << " severe slivers < "
+           << std::fixed << std::setprecision(1) << r.hardMinDihedralFailDeg
+           << " deg [" << std::fixed << std::setprecision(3) << severePct
+           << "%]; " << r.sliverCount << " below target "
+           << std::fixed << std::setprecision(1) << r.minDihedralBoundDeg
+           << " deg [" << std::fixed << std::setprecision(3) << targetPct
+           << "%]\n";
+    } else if (r.warn) {
+        os << "  Verdict: WARN ("
+           << r.invertedCount << " inverted, "
+           << r.severeSliverCount << " severe slivers < "
+           << std::fixed << std::setprecision(1) << r.hardMinDihedralFailDeg
+           << " deg [" << std::fixed << std::setprecision(3) << severePct
+           << "%]; " << r.sliverCount << " below target "
+           << std::fixed << std::setprecision(1) << r.minDihedralBoundDeg
+           << " deg [" << std::fixed << std::setprecision(3) << targetPct
+           << "%], allowed <= " << std::fixed << std::setprecision(1) << r.acceptableSliverPercent
+           << "% )\n";
+    } else {
+        os << "  Verdict: PASS ("
+           << r.invertedCount << " inverted, "
+           << r.severeSliverCount << " severe slivers < "
+           << std::fixed << std::setprecision(1) << r.hardMinDihedralFailDeg
+           << " deg [" << std::fixed << std::setprecision(3) << severePct
+           << "%]; " << r.sliverCount << " below target "
+           << std::fixed << std::setprecision(1) << r.minDihedralBoundDeg
+           << " deg [" << std::fixed << std::setprecision(3) << targetPct
+           << "%], allowed <= " << std::fixed << std::setprecision(1) << r.acceptableSliverPercent
+           << "% )\n";
     }
 
     os.flags(savedFlags);
@@ -1019,6 +1279,508 @@ void emitReportTet10(
     const FEAParams&              p)
 {
     emitReportTet10(positions, tet10Connectivity, p, std::cout);
+}
+
+// =============================================================================
+//  Public: computeFidelity (TODO_03)
+// =============================================================================
+FidelityReport computeFidelity(const RefSurface& ref, const tetgenio& out,
+                               const FEAParams& p)
+{
+    FidelityReport result;
+
+    if (ref.positions.empty() || ref.indices.empty() || out.numberoftrifaces <= 0)
+        return result;
+
+    const int   nRefVerts = static_cast<int>(ref.positions.size());
+    const int   nRefTris  = static_cast<int>(ref.indices.size() / 3);
+    const int   nVolTris  = out.numberoftrifaces;
+    const int   nVolVerts = out.numberofpoints;
+    const int   firstN    = out.firstnumber;
+    const REAL* volPts    = out.pointlist;
+    const int*  volTris   = out.trifacelist;
+
+    if (nRefTris <= 0 || nVolVerts <= 0) return result;
+
+    // -------------------------------------------------------------------------
+    // 1. Reference surface: convert to double precision.
+    // -------------------------------------------------------------------------
+    std::vector<glm::dvec3> refPos(nRefVerts);
+    for (int i = 0; i < nRefVerts; ++i) refPos[i] = glm::dvec3(ref.positions[i]);
+
+    std::vector<int> refIdx(ref.indices.begin(), ref.indices.end());
+
+    // Pre-compute per-triangle face normals for the reference surface.
+    // Used in the forward pass instead of interpolated vertex normals so
+    // that flat-faced geometry (cubes, boxes) doesn't produce false failures:
+    // corner vertices have averaged normals pointing diagonally, which would
+    // give >50° deviation even for a perfectly meshed cube.  The face normal
+    // of the nearest reference triangle is the correct plane normal for any
+    // piecewise-linear surface.
+    std::vector<glm::dvec3> refTriNrm(nRefTris, glm::dvec3(0.0, 0.0, 1.0));
+    for (int t = 0; t < nRefTris; ++t) {
+        const int i0 = refIdx[t*3+0], i1 = refIdx[t*3+1], i2 = refIdx[t*3+2];
+        const glm::dvec3 fn = glm::cross(refPos[i1]-refPos[i0], refPos[i2]-refPos[i0]);
+        const double len = glm::length(fn);
+        if (len > 1e-30) refTriNrm[t] = fn / len;
+    }
+
+    // -------------------------------------------------------------------------
+    // 2. Bbox diagonal from vol-mesh point list.
+    // -------------------------------------------------------------------------
+    {
+        glm::dvec3 lo{ 1e300, 1e300, 1e300}, hi{-1e300,-1e300,-1e300};
+        for (int i = 0; i < nVolVerts; ++i) {
+            const glm::dvec3 pt(volPts[i*3+0], volPts[i*3+1], volPts[i*3+2]);
+            lo = glm::min(lo, pt);
+            hi = glm::max(hi, pt);
+        }
+        result.bboxDiag = glm::length(hi - lo);
+        if (result.bboxDiag < 1e-12) result.bboxDiag = 1.0;
+    }
+
+    // -------------------------------------------------------------------------
+    // 3. Build BVH over reference surface (no vertex normals stored — we
+    //    look up refTriNrm[r.triIdx] directly in the forward pass).
+    // -------------------------------------------------------------------------
+    TriBVH refBVH;
+    refBVH.build(refPos.data(), refIdx.data(), nRefTris);
+
+    // -------------------------------------------------------------------------
+    // 4. Forward pass: vol boundary → ref surface.
+    //    4 quadrature points per face: centroid + 3 edge midpoints.
+    //    Parallel over boundary faces (read-only BVH queries).
+    // -------------------------------------------------------------------------
+    const int nSamplesFwd = nVolTris * 4;
+    std::vector<double>     fwdDist(nSamplesFwd, 0.0);
+    std::vector<double>     fwdNDev(nSamplesFwd, 0.0);  // degrees
+    std::vector<glm::dvec3> fwdPos (nSamplesFwd, glm::dvec3(0.0));
+
+    constexpr double kRad2Deg = 57.29577951308232087679815481;
+
+#ifdef _OPENMP
+    #pragma omp parallel for if(p.useMultithreading) schedule(static)
+#endif
+    for (int t = 0; t < nVolTris; ++t) {
+        const int i0 = volTris[t*3+0] - firstN;
+        const int i1 = volTris[t*3+1] - firstN;
+        const int i2 = volTris[t*3+2] - firstN;
+        const glm::dvec3 va(volPts[i0*3+0], volPts[i0*3+1], volPts[i0*3+2]);
+        const glm::dvec3 vb(volPts[i1*3+0], volPts[i1*3+1], volPts[i1*3+2]);
+        const glm::dvec3 vc(volPts[i2*3+0], volPts[i2*3+1], volPts[i2*3+2]);
+
+        const glm::dvec3 rawN   = glm::cross(vb - va, vc - va);
+        const double     rawLen = glm::length(rawN);
+        const glm::dvec3 faceN  = (rawLen > 1e-30) ? rawN / rawLen
+                                                     : glm::dvec3(0.0, 0.0, 1.0);
+        const glm::dvec3 samples[4] = {
+            (va + vb + vc) / 3.0,
+            (va + vb) * 0.5,
+            (vb + vc) * 0.5,
+            (vc + va) * 0.5
+        };
+        for (int s = 0; s < 4; ++s) {
+            const int si = t * 4 + s;
+            fwdPos[si] = samples[s];
+            const auto r = refBVH.nearest(samples[s]);
+            fwdDist[si] = std::sqrt(r.sqDist);
+            // Compare against the face normal of the nearest reference triangle.
+            // Vertex-normal interpolation fails at sharp edges/corners (averaged
+            // normals point diagonally and cause false 45-60° deviations on cubes).
+            // abs() handles the inward/outward convention difference between
+            // TetGen's trifacelist and the input PLCs.
+            const glm::dvec3& refN = (r.triIdx >= 0)
+                ? refTriNrm[r.triIdx]
+                : glm::dvec3(0.0, 0.0, 1.0);
+            const double cosT = std::clamp(glm::dot(faceN, refN), -1.0, 1.0);
+            fwdNDev[si] = std::acos(std::abs(cosT)) * kRad2Deg;
+        }
+    }
+
+    // Serial reduction: max forward drift and its location.
+    double     maxDriftFwd = 0.0;
+    int        maxDriftTriId = -1;
+    glm::dvec3 maxDriftPos(0.0);
+    for (int i = 0; i < nSamplesFwd; ++i) {
+        if (fwdDist[i] > maxDriftFwd) {
+            maxDriftFwd  = fwdDist[i];
+            maxDriftTriId = i / 4;
+            maxDriftPos   = fwdPos[i];
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // 5. Reverse pass: ref surface → vol boundary (symmetric Hausdorff).
+    // -------------------------------------------------------------------------
+    std::vector<glm::dvec3> volPos(nVolVerts);
+    for (int i = 0; i < nVolVerts; ++i)
+        volPos[i] = glm::dvec3(volPts[i*3+0], volPts[i*3+1], volPts[i*3+2]);
+
+    std::vector<int> volTriIdx(nVolTris * 3);
+    for (int t = 0; t < nVolTris; ++t) {
+        volTriIdx[t*3+0] = volTris[t*3+0] - firstN;
+        volTriIdx[t*3+1] = volTris[t*3+1] - firstN;
+        volTriIdx[t*3+2] = volTris[t*3+2] - firstN;
+    }
+
+    TriBVH volBVH;
+    volBVH.build(volPos.data(), volTriIdx.data(), nVolTris);
+
+    const int nSamplesRev = nRefTris * 4;
+    std::vector<double> revDist(nSamplesRev, 0.0);
+
+#ifdef _OPENMP
+    #pragma omp parallel for if(p.useMultithreading) schedule(static)
+#endif
+    for (int t = 0; t < nRefTris; ++t) {
+        const int i0 = refIdx[t*3+0], i1 = refIdx[t*3+1], i2 = refIdx[t*3+2];
+        const glm::dvec3& ra = refPos[i0], &rb = refPos[i1], &rc = refPos[i2];
+        const glm::dvec3 samples[4] = {
+            (ra + rb + rc) / 3.0,
+            (ra + rb) * 0.5,
+            (rb + rc) * 0.5,
+            (rc + ra) * 0.5
+        };
+        for (int s = 0; s < 4; ++s)
+            revDist[t*4+s] = std::sqrt(volBVH.nearest(samples[s]).sqDist);
+    }
+
+    const double maxDriftRev = revDist.empty() ? 0.0
+        : *std::max_element(revDist.begin(), revDist.end());
+
+    // -------------------------------------------------------------------------
+    // 6. Aggregate stats.
+    // -------------------------------------------------------------------------
+    result.hausdorffMax  = std::max(maxDriftFwd, maxDriftRev);
+    result.maxDriftTriId = maxDriftTriId;
+    result.maxDriftPos   = maxDriftPos;
+
+    // p95 from combined forward + reverse sample distances.
+    {
+        std::vector<double> all;
+        all.reserve(fwdDist.size() + revDist.size());
+        all.insert(all.end(), fwdDist.begin(), fwdDist.end());
+        all.insert(all.end(), revDist.begin(), revDist.end());
+        std::sort(all.begin(), all.end());
+        const std::size_t n = all.size();
+        if (n > 0) {
+            const auto pick = [&](double pct) {
+                const std::size_t k = std::min(
+                    n - 1,
+                    static_cast<std::size_t>(pct * static_cast<double>(n-1) + 0.5));
+                return all[k];
+            };
+            result.hausdorffP95 = pick(0.95);
+        }
+    }
+
+    // Normal-deviation percentiles (forward direction only).
+    {
+        std::vector<double> nd(fwdNDev);
+        std::sort(nd.begin(), nd.end());
+        const std::size_t n = nd.size();
+        if (n > 0) {
+            const auto pick = [&](double pct) {
+                const std::size_t k = std::min(
+                    n - 1,
+                    static_cast<std::size_t>(pct * static_cast<double>(n-1) + 0.5));
+                return nd[k];
+            };
+            result.normalDev_p50 = pick(0.50);
+            result.normalDev_p95 = pick(0.95);
+            result.normalDev_p99 = pick(0.99);
+            result.normalDev_max = nd.back();
+        }
+    }
+
+    // Pass: Hausdorff < 1% of bbox diagonal AND normal p95 < 15 deg.
+    result.pass = (result.hausdorffMax < 0.01 * result.bboxDiag)
+               && (result.normalDev_p95 < 15.0);
+
+    return result;
+}
+
+// =============================================================================
+//  Public: emitFidelityReport (TODO_03)
+// =============================================================================
+static void emitFidelityImpl(const FidelityReport& r, std::ostream& os)
+{
+    std::ios_base::fmtflags savedFlags = os.flags();
+    std::streamsize         savedPrec  = os.precision();
+
+    const double target = 0.01 * r.bboxDiag;
+    const double ratio  = (target > 1e-30) ? r.hausdorffMax / target : 0.0;
+
+    os << "[Fidelity vs input surface]\n";
+    os << "  Hausdorff (symmetric) : "
+       << std::scientific << std::setprecision(2) << r.hausdorffMax
+       << " m  (target: < " << std::scientific << std::setprecision(2) << target
+       << " m, ratio " << std::fixed << std::setprecision(2) << ratio << ")\n";
+    os << "  normal deviation      : "
+       << "p50=" << std::fixed << std::setprecision(1) << r.normalDev_p50 << " deg   "
+       << "p95=" << std::fixed << std::setprecision(1) << r.normalDev_p95 << " deg   "
+       << "p99=" << std::fixed << std::setprecision(1) << r.normalDev_p99 << " deg   "
+       << "max=" << std::fixed << std::setprecision(1) << r.normalDev_max << " deg\n";
+    if (r.maxDriftTriId >= 0) {
+        os << "  Max-drift triangle    : id=" << r.maxDriftTriId
+           << " at (" << std::fixed << std::setprecision(2) << r.maxDriftPos.x
+           << ", "    << std::fixed << std::setprecision(2) << r.maxDriftPos.y
+           << ", "    << std::fixed << std::setprecision(2) << r.maxDriftPos.z
+           << ") drift=" << std::scientific << std::setprecision(2) << r.hausdorffMax << "\n";
+    }
+    os << "  Verdict: " << (r.pass ? "PASS" : "FAIL") << "\n";
+
+    os.flags(savedFlags);
+    os.precision(savedPrec);
+    os.flush();
+}
+
+void emitFidelityReport(const RefSurface& ref, const tetgenio& out,
+                        const FEAParams& p, std::ostream& os)
+{
+    emitFidelityImpl(computeFidelity(ref, out, p), os);
+}
+
+void emitFidelityReport(const RefSurface& ref, const tetgenio& out,
+                        const FEAParams& p)
+{
+    emitFidelityReport(ref, out, p, std::cout);
+}
+
+// =============================================================================
+//  TODO_04: BRep-exact fidelity overloads
+//
+//  Forward pass: for each vol-boundary sample point, call
+//  brep.nearestPointOnShape() (exact NURBS) instead of the BVH.
+//  Normal deviation: use brep.normalAtNearest() for exact surface normal.
+//  Reverse pass: unchanged — samples ref-surface tris → vol-mesh BVH.
+//
+//  When HAS_OCCT is not defined BRepHandle::nearestPointOnShape() and
+//  normalAtNearest() both return the query point unchanged, so distances
+//  collapse to zero — meaningful only in a HAS_OCCT build.  We fall back
+//  gracefully but log a warning.
+// =============================================================================
+
+FidelityReport computeFidelity(const RefSurface& ref, const BRepHandle& brep,
+                               const tetgenio& out, const FEAParams& p)
+{
+    // If the BRep has no geometry, fall back to triangulated-reference path.
+    if (brep.numFaces() == 0) {
+        std::cout << "[Fidelity] BRepHandle has no faces; "
+                     "falling back to triangulated reference.\n";
+        return computeFidelity(ref, out, p);
+    }
+
+    // Run the standard computation to get the reverse pass (ref→vol BVH) and
+    // all aggregation logic, then REPLACE the forward distances with OCC values.
+    // Strategy: call computeFidelity(ref, out, p) for the full result, then
+    // redo the forward pass with OCC and patch hausdorffMax / hausdorffP95 /
+    // maxDrift* / normalDev_* accordingly.
+
+    // --- Shared setup (mirrors computeFidelity internals) ---
+    if (ref.positions.empty() || ref.indices.empty() || out.numberoftrifaces <= 0)
+        return FidelityReport{};
+
+    const int   nVolTris  = out.numberoftrifaces;
+    const int   nVolVerts = out.numberofpoints;
+    const int   firstN    = out.firstnumber;
+    const REAL* volPts    = out.pointlist;
+    const int*  volTris   = out.trifacelist;
+    if (nVolVerts <= 0 || nVolTris <= 0) return FidelityReport{};
+
+    // Bbox diagonal (same as triangulated path).
+    double bboxDiag = 1.0;
+    {
+        glm::dvec3 lo{ 1e300, 1e300, 1e300}, hi{-1e300,-1e300,-1e300};
+        for (int i = 0; i < nVolVerts; ++i) {
+            const glm::dvec3 pt(volPts[i*3+0], volPts[i*3+1], volPts[i*3+2]);
+            lo = glm::min(lo, pt); hi = glm::max(hi, pt);
+        }
+        bboxDiag = glm::length(hi - lo);
+        if (bboxDiag < 1e-12) bboxDiag = 1.0;
+    }
+
+    // --- OCC forward pass ---
+    constexpr double kRad2Deg = 57.29577951308232087679815481;
+
+    const int nSamplesFwd = nVolTris * 4;
+    std::vector<double>     fwdDist(nSamplesFwd, 0.0);
+    std::vector<double>     fwdNDev(nSamplesFwd, 0.0);
+    std::vector<glm::dvec3> fwdPos (nSamplesFwd, glm::dvec3(0.0));
+
+#ifdef _OPENMP
+    #pragma omp parallel for if(p.useMultithreading) schedule(dynamic, 16)
+#endif
+    for (int t = 0; t < nVolTris; ++t) {
+        const int i0 = volTris[t*3+0] - firstN;
+        const int i1 = volTris[t*3+1] - firstN;
+        const int i2 = volTris[t*3+2] - firstN;
+        const glm::dvec3 va(volPts[i0*3+0], volPts[i0*3+1], volPts[i0*3+2]);
+        const glm::dvec3 vb(volPts[i1*3+0], volPts[i1*3+1], volPts[i1*3+2]);
+        const glm::dvec3 vc(volPts[i2*3+0], volPts[i2*3+1], volPts[i2*3+2]);
+
+        const glm::dvec3 rawN  = glm::cross(vb - va, vc - va);
+        const double     rLen  = glm::length(rawN);
+        const glm::dvec3 faceN = (rLen > 1e-30) ? rawN / rLen
+                                                  : glm::dvec3(0.0, 0.0, 1.0);
+        const glm::dvec3 samples[4] = {
+            (va + vb + vc) / 3.0,
+            (va + vb) * 0.5,
+            (vb + vc) * 0.5,
+            (vc + va) * 0.5
+        };
+        for (int s = 0; s < 4; ++s) {
+            const int si = t * 4 + s;
+            fwdPos[si] = samples[s];
+            // Exact OCC nearest-point.
+            const glm::dvec3 nearest = brep.nearestPointOnShape(samples[s]);
+            fwdDist[si] = glm::length(samples[s] - nearest);
+            // Exact surface normal at nearest point.
+            const glm::dvec3 refN = brep.normalAtNearest(samples[s]);
+            const double cosT = std::clamp(glm::dot(faceN, refN), -1.0, 1.0);
+            fwdNDev[si] = std::acos(std::abs(cosT)) * kRad2Deg;
+        }
+    }
+
+    // --- Reverse pass: reuse triangulation BVH (same as existing path) ---
+    // Obtain via the existing computeFidelity, which re-runs everything but
+    // we only need the reverse distances.  To avoid full duplication we just
+    // call computeFidelity(ref, out, p) for the reverse stats and patch.
+    FidelityReport r = computeFidelity(ref, out, p);
+
+    // --- Replace forward stats with OCC values ---
+    double maxDriftFwd = 0.0;
+    int    maxDriftTriId = -1;
+    glm::dvec3 maxDriftPos(0.0);
+    for (int i = 0; i < nSamplesFwd; ++i) {
+        if (fwdDist[i] > maxDriftFwd) {
+            maxDriftFwd   = fwdDist[i];
+            maxDriftTriId = i / 4;
+            maxDriftPos   = fwdPos[i];
+        }
+    }
+
+    // Rebuild hausdorffMax using OCC forward + existing reverse.
+    // r.hausdorffMax currently equals max(triangulated_fwd, rev).
+    // We need max(occ_fwd, rev).  Extract reverse max from r's p95/combined
+    // is tricky; simpler: just rerun the reverse internally.
+    {
+        const int nRefTris = static_cast<int>(ref.indices.size() / 3);
+        std::vector<glm::dvec3> refPos(ref.positions.size());
+        for (size_t i = 0; i < ref.positions.size(); ++i)
+            refPos[i] = glm::dvec3(ref.positions[i]);
+        std::vector<int> refIdx(ref.indices.begin(), ref.indices.end());
+
+        // Build vol BVH for reverse pass.
+        std::vector<glm::dvec3> volPos(nVolVerts);
+        for (int i = 0; i < nVolVerts; ++i)
+            volPos[i] = glm::dvec3(volPts[i*3+0], volPts[i*3+1], volPts[i*3+2]);
+        std::vector<int> volTriIdx(nVolTris * 3);
+        for (int t = 0; t < nVolTris; ++t) {
+            volTriIdx[t*3+0] = volTris[t*3+0] - firstN;
+            volTriIdx[t*3+1] = volTris[t*3+1] - firstN;
+            volTriIdx[t*3+2] = volTris[t*3+2] - firstN;
+        }
+
+        TriBVH volBVH;
+        volBVH.build(volPos.data(), volTriIdx.data(), nVolTris);
+
+        const int nSamplesRev = nRefTris * 4;
+        std::vector<double> revDist(nSamplesRev, 0.0);
+#ifdef _OPENMP
+        #pragma omp parallel for if(p.useMultithreading) schedule(static)
+#endif
+        for (int t = 0; t < nRefTris; ++t) {
+            const int i0 = refIdx[t*3+0], i1 = refIdx[t*3+1], i2 = refIdx[t*3+2];
+            const glm::dvec3& ra = refPos[i0], &rb = refPos[i1], &rc = refPos[i2];
+            const glm::dvec3 samples[4] = {
+                (ra+rb+rc)/3.0, (ra+rb)*0.5, (rb+rc)*0.5, (rc+ra)*0.5 };
+            for (int s = 0; s < 4; ++s)
+                revDist[t*4+s] = std::sqrt(volBVH.nearest(samples[s]).sqDist);
+        }
+
+        const double maxDriftRev = revDist.empty() ? 0.0
+            : *std::max_element(revDist.begin(), revDist.end());
+
+        r.hausdorffMax  = std::max(maxDriftFwd, maxDriftRev);
+        r.maxDriftTriId = maxDriftTriId;
+        r.maxDriftPos   = maxDriftPos;
+
+        // Rebuild combined p95 with OCC forward + reverse.
+        std::vector<double> all;
+        all.reserve(fwdDist.size() + revDist.size());
+        all.insert(all.end(), fwdDist.begin(), fwdDist.end());
+        all.insert(all.end(), revDist.begin(), revDist.end());
+        std::sort(all.begin(), all.end());
+        if (!all.empty()) {
+            const std::size_t n = all.size();
+            r.hausdorffP95 = all[std::min(n-1,
+                static_cast<std::size_t>(0.95*static_cast<double>(n-1)+0.5))];
+        }
+    }
+
+    // Rebuild normal-deviation percentiles from OCC fwdNDev.
+    {
+        std::vector<double> nd(fwdNDev);
+        std::sort(nd.begin(), nd.end());
+        const std::size_t n = nd.size();
+        if (n > 0) {
+            const auto pick = [&](double pct) {
+                return nd[std::min(n-1,
+                    static_cast<std::size_t>(pct*static_cast<double>(n-1)+0.5))];
+            };
+            r.normalDev_p50 = pick(0.50);
+            r.normalDev_p95 = pick(0.95);
+            r.normalDev_p99 = pick(0.99);
+            r.normalDev_max = nd.back();
+        }
+    }
+
+    r.bboxDiag      = bboxDiag;
+    r.pass          = (r.hausdorffMax < 0.01 * bboxDiag) && (r.normalDev_p95 < 15.0);
+    r.usedExactBRep = true;
+    return r;
+}
+
+void emitFidelityReport(const RefSurface& ref, const BRepHandle& brep,
+                        const tetgenio& out, const FEAParams& p, std::ostream& os)
+{
+    FidelityReport r = computeFidelity(ref, brep, out, p);
+    // Inject the "NURBS reference" label into the emit.
+    std::ios_base::fmtflags savedFlags = os.flags();
+    std::streamsize         savedPrec  = os.precision();
+
+    const double target = 0.01 * r.bboxDiag;
+    const double ratio  = (target > 1e-30) ? r.hausdorffMax / target : 0.0;
+
+    os << "[Fidelity vs input surface] [NURBS B-rep exact]\n";
+    os << "  Hausdorff (symmetric) : "
+       << std::scientific << std::setprecision(2) << r.hausdorffMax
+       << " m  (target: < " << std::scientific << std::setprecision(2) << target
+       << " m, ratio " << std::fixed << std::setprecision(2) << ratio << ")\n";
+    os << "  normal deviation      : "
+       << "p50=" << std::fixed << std::setprecision(1) << r.normalDev_p50 << " deg   "
+       << "p95=" << std::fixed << std::setprecision(1) << r.normalDev_p95 << " deg   "
+       << "p99=" << std::fixed << std::setprecision(1) << r.normalDev_p99 << " deg   "
+       << "max=" << std::fixed << std::setprecision(1) << r.normalDev_max << " deg\n";
+    if (r.maxDriftTriId >= 0) {
+        os << "  Max-drift triangle    : id=" << r.maxDriftTriId
+           << " at (" << std::fixed << std::setprecision(2) << r.maxDriftPos.x
+           << ", "    << std::fixed << std::setprecision(2) << r.maxDriftPos.y
+           << ", "    << std::fixed << std::setprecision(2) << r.maxDriftPos.z
+           << ") drift=" << std::scientific << std::setprecision(2) << r.hausdorffMax << "\n";
+    }
+    os << "  Verdict: " << (r.pass ? "PASS" : "FAIL") << "\n";
+
+    os.flags(savedFlags);
+    os.precision(savedPrec);
+    os.flush();
+}
+
+void emitFidelityReport(const RefSurface& ref, const BRepHandle& brep,
+                        const tetgenio& out, const FEAParams& p)
+{
+    emitFidelityReport(ref, brep, out, p, std::cout);
 }
 
 } // namespace MeshQuality

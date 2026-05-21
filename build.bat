@@ -48,7 +48,7 @@ if "%1"=="run" goto :run
 echo [*] Building...
 if not exist build\CMakeCache.txt (
     echo [*] No CMake cache found, auto-configuring first...
-    "%CMAKE%" -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl
+    call :configure
     if errorlevel 1 exit /b 1
 )
 "%CMAKE%" --build build --config Debug
@@ -56,7 +56,15 @@ exit /b %errorlevel%
 
 :configure
 echo [*] Configuring CMake...
-"%CMAKE%" -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl
+REM vcpkg toolchain lets find_package(OpenCASCADE) find the vcpkg install
+REM automatically. If OCCT is not in vcpkg, the hardcoded PATHS in CMakeLists.txt
+REM still cover the official OCCT installer locations.
+set "VCPKG_TOOLCHAIN=D:\program_files_delta\vcpkg\scripts\buildsystems\vcpkg.cmake"
+if exist "!VCPKG_TOOLCHAIN!" (
+    "%CMAKE%" -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl -DCMAKE_TOOLCHAIN_FILE="!VCPKG_TOOLCHAIN!" -DVCPKG_TARGET_TRIPLET=x64-windows
+) else (
+    "%CMAKE%" -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl
+)
 exit /b %errorlevel%
 
 :clean

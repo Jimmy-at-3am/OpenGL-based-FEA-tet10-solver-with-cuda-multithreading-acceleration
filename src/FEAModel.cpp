@@ -1,4 +1,6 @@
 #include "FEAModel.h"
+#include "BRepHandle.h"     // must be included here so unique_ptr<BRepHandle> destructor
+#include "StepLoader.h"     // can see the complete BRepHandle type
 #include <meshoptimizer.h>
 #include <glad/glad.h>
 #include <fstream>
@@ -20,6 +22,10 @@ FEAModel::FEAModel() {
     glGenVertexArrays(1, &VAO); glGenBuffers(1, &VBO); glGenBuffers(1, &EBO);
     generateCube();
 }
+
+// Destructor defined here so unique_ptr<BRepHandle> can call ~BRepHandle()
+// with the full type visible (pImpl pattern).
+FEAModel::~FEAModel() = default;
 
 // Rebuild the volumetric surface from alive Tet4 elements for fracture visualization.
 // For each face of a tet, count how many alive tets share it.  Faces shared by
@@ -199,6 +205,21 @@ bool FEAModel::load3MF(const std::string& filepath) {
 }
 
 // =============================================================================
+// FEAModel::loadSTEP  (TODO_04)
+// =============================================================================
+// Loads a .step/.stp file, retains the analytic B-rep in `brep`, and routes
+// the tessellated triangle mesh through the shared processRawGeometry pipeline.
+bool FEAModel::loadSTEP(const std::string& filepath) {
+    LoadedGeometry geo;
+    std::unique_ptr<BRepHandle> newBrep;
+    StepLoader loader;
+    if (!loader.loadWithBRep(filepath, geo, newBrep, params)) return false;
+    if (!processRawGeometry(geo, "STEP")) return false;
+    brep = std::move(newBrep); // set AFTER processRawGeometry (which clears brep)
+    return true;
+}
+
+// =============================================================================
 // FEAModel::loadFile
 // =============================================================================
 // Dispatch by extension — call this when you don't know the format ahead of time.
@@ -206,7 +227,8 @@ bool FEAModel::loadFile(const std::string& filepath) {
     std::string ext = std::filesystem::path(filepath).extension().string();
     std::transform(ext.begin(), ext.end(), ext.begin(),
                    [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
-    if (ext == ".3mf") return load3MF(filepath);
+    if (ext == ".3mf")  return load3MF(filepath);
+    if (ext == ".step" || ext == ".stp") return loadSTEP(filepath);
     return loadSTL(filepath); // default — covers .stl
 }
 
@@ -400,6 +422,12 @@ bool FEAModel::processRawGeometry(LoadedGeometry& geo, const std::string& format
     totalAppliedForce    = 0.0f;
     appliedForcePerNode  = 0.0f;
 
+    // Clear stale fidelity reference; rebuilt on next generateVolumetricMesh().
+    refSurfaceForFidelity = {};
+
+    // Clear stale B-rep; loadSTEP() re-assigns it after this returns.
+    brep.reset();
+
     // Metadata for UI
     loadedFileName          = geo.sourceLabel;
     lastLoadedFormat        = formatTag;
@@ -514,6 +542,14 @@ bool FEAModel::generateVolumetricMesh() {
 
     std::cout << "Starting TetGen Meshing..." << std::endl;
 
+    // TODO_03: snapshot the input surface BEFORE TetGen so fidelity check
+    // compares the original boundary, not any post-optimisation state.
+    refSurfaceForFidelity.positions.clear();
+    refSurfaceForFidelity.positions.reserve(surfaceVertices.size());
+    for (const auto& sv : surfaceVertices)
+        refSurfaceForFidelity.positions.push_back(sv.position);
+    refSurfaceForFidelity.indices.assign(surfaceIndices.begin(), surfaceIndices.end());
+
     tetgenio in, out;
     in.firstnumber = 0;
 
@@ -606,9 +642,13 @@ bool FEAModel::generateVolumetricMesh() {
               << " tetrahedrons, " << out.numberoftrifaces
               << " tri-faces (" << out.numberoftrifaces << " boundary)." << std::endl;
 
-    // TODO_01: print the verbatim per-element quality block (Knupp histogram,
-    // min-dihedral & scaled-Jacobian summaries, worst-N, PASS/FAIL verdict).
     MeshQuality::emitReport(out, params);
+    // TODO_04: if a B-rep is retained, use exact OCC nearest-point for the
+    // forward Hausdorff pass (dramatically tighter result on smooth geometry).
+    if (hasBRep())
+        MeshQuality::emitFidelityReport(refSurfaceForFidelity, *brep, out, params);
+    else
+        MeshQuality::emitFidelityReport(refSurfaceForFidelity, out, params);
 
     volumetricVertices.clear();
     volumetricIndices.clear();

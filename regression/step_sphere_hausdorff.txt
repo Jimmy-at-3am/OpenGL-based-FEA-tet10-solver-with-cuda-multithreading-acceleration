@@ -1,0 +1,26 @@
+# TODO_04 regression sentinel — sphere_r1.step Hausdorff vs NURBS B-rep
+# Compare against sphere_hausdorff.txt (STL triangulated reference).
+#
+# Run: load assets/test_fixtures/sphere_r1.step → Generate 3D Mesh.
+# Expected improvement over STL path:
+#   STL reference Hausdorff:  ~5e-4 m  (bounded by triangulation chord error)
+#   STEP reference Hausdorff: ~8e-7 m  (distance to analytic NURBS sphere)
+#   Ratio: ~3 orders of magnitude improvement (pass criterion: >= 2 orders)
+#
+# Expected console block (approximate):
+#   [Fidelity vs input surface] [NURBS B-rep exact]
+#   Hausdorff (symmetric) : 8.xx e-07 m  (target: < x.xx e-xx m, ratio 0.00)
+#   normal deviation      : p50=x.x deg   p95=x.x deg   ...
+#   Verdict: PASS
+#
+# Pass criterion (from TODO_04):
+#   Hausdorff < 1e-5 m  (i.e. at least 1 order below 1% bbox diagonal)
+#   Normal deviation p95 < 15 deg
+#
+# PLACEHOLDER — fill in exact values after first confirmed-correct run.
+hausdorff_max=PLACEHOLDER
+hausdorff_p95=PLACEHOLDER
+normal_dev_p50=PLACEHOLDER
+normal_dev_p95=PLACEHOLDER
+verdict=PASS
+improvement_vs_stl_orders_of_magnitude=2

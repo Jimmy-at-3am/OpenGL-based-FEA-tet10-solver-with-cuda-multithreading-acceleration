@@ -2,10 +2,17 @@
 #include <vector>
 #include <string>
 #include <map>
+#include <memory>
 #include <glm/glm.hpp>
 #include "FEAData.h"
 #include "BuiltInShader.h"
 #include "IGeometryLoader.h"
+#include "MeshQuality.h"
+
+// Forward-declare only — keeps OCC headers out of every TU that includes FEAModel.h.
+// BRepHandle.h is included in FEAModel.cpp where Impl is complete (required by
+// unique_ptr destructor and move operations).
+class BRepHandle;
 
 struct ForceArrow {
     glm::vec3 start;
@@ -22,8 +29,12 @@ public:
     float bboxVolume = 1000.0f; // NEW: Stores overall part volume
 
     std::string loadedFileName = "";
-    std::string lastLoadedFormat = "";  // "STL" | "3MF" | ""
+    std::string lastLoadedFormat = "";  // "STL" | "3MF" | "STEP" | ""
     int         lastLoadedObjectCount = 0; // number of objects found in last load
+
+    // TODO_04: retained analytic B-rep (non-null when last load was STEP).
+    std::unique_ptr<BRepHandle> brep;
+    bool hasBRep() const { return brep != nullptr; }
     bool hasVolumetricMesh = false;
     bool showVolumetricMesh = false;
     
@@ -66,15 +77,22 @@ public:
     std::vector<glm::vec3> originalVolumetricPositions; // NEW: stores initial positions before deformation
     std::vector<glm::vec3> deformedPositions; // NEW: stores displaced positions
 
+    // TODO_03: snapshot of the input surface taken immediately before TetGen.
+    // Compared against the vol-mesh boundary to compute Hausdorff + normal dev.
+    MeshQuality::RefSurface refSurfaceForFidelity;
+
     FEAModel();
+    // Destructor must be in .cpp where BRepHandle is complete (pImpl pattern).
+    ~FEAModel();
 
     void buildBuffers();
     void generateCube();
     void generate_face(glm::vec3 normal, glm::vec3 u, glm::vec3 v, int sub);
     // --- Format-specific load entry points ---
-    // Both route through processRawGeometry() for identical post-processing.
+    // All route through processRawGeometry() for identical post-processing.
     bool loadSTL(const std::string& filepath);
     bool load3MF(const std::string& filepath);
+    bool loadSTEP(const std::string& filepath); // TODO_04: STEP + B-rep retention
 
     // Load any supported format (dispatches by extension).
     bool loadFile(const std::string& filepath);

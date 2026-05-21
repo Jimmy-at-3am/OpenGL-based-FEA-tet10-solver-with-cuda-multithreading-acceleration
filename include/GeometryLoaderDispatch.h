@@ -22,6 +22,7 @@
 #include "IGeometryLoader.h"
 #include "STLLoader.h"
 #include "ThreeMFLoader.h"
+#include "StepLoader.h"
 
 #include <memory>
 #include <string>
@@ -40,6 +41,7 @@ inline std::unique_ptr<IGeometryLoader> makeLoader(const std::string& path) {
 
     if (ext == ".stl")  return std::make_unique<STLLoader>();
     if (ext == ".3mf")  return std::make_unique<ThreeMFLoader>();
+    if (ext == ".step" || ext == ".stp") return std::make_unique<StepLoader>();
 
     return nullptr; // unsupported format
 }

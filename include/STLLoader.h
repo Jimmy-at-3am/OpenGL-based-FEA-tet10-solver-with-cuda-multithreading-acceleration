@@ -9,8 +9,8 @@
 // is here; all post-processing (decimation, normal recomputation, bbox
 // centering) remains in FEAModel::processRawGeometry.
 //
-// ASCII STL is not supported (returns false with a console message).
-// The file size check (84 + nTris * 50 bytes) distinguishes binary from ASCII.
+// Both binary and ASCII STL formats are supported.
+// Detection: if first 5 bytes are "solid" AND size != 84 + N*50, parsed as ASCII.
 // =============================================================================
 
 #include "IGeometryLoader.h"

@@ -240,54 +240,91 @@ Because CG performance degrades rapidly with condition number $\kappa(K)$, PolyF
 
 When Eigen is compiled with OpenMP support, its internal SpMV and dot-product kernels parallelize automatically across all available threads, using the same thread count set via `omp_get_max_threads()`. If CG fails to converge within the iteration budget, the solver falls back to serial SimplicialLDLT.
 
-### 7.3 GPU Direct Solver — cuSOLVER Sparse Cholesky
+### 7.3 GPU Iterative Solver — cuSPARSE Preconditioned Conjugate Gradient
 
-When `useGPU = true`, PolyFEA solves $K u = F$ on the GPU using NVIDIA's **cuSOLVER** library, which performs a **sparse Cholesky factorization** ($K = LL^T$). This is a direct solver, not an iterative one.
+When `useGPU = true`, PolyFEA solves $K u = F$ on the GPU using a **Jacobi-preconditioned Conjugate Gradient** (PCG) algorithm built on NVIDIA's **cuSPARSE** sparse matrix–vector product (SpMV) plus custom CUDA kernels for the vector operations. This is an *iterative* solver, identical in mathematics to the CPU CG path of Section 7.2 but executed entirely in VRAM.
+
+**Why PCG and not sparse Cholesky.** A GPU sparse Cholesky factorization (`cusolverSpDcsrlsvchol`) produces a dense fill-in factor: for a large 3D stiffness matrix with tens of millions of nonzeros this can require 5–20× the input memory (gigabytes), readily exceeding the available VRAM. PCG never factorizes — it needs only $O(\text{nnz})$ memory at all times (the original matrix plus a handful of length-$n$ work vectors), so no fill-in ever occurs and the entire iteration stays resident on the device.
 
 The complete pipeline:
 
-1. **CSC → CSR format.** Eigen stores sparse matrices in Compressed Sparse Column (CSC) format. For a symmetric matrix $K$, the column pointers, row indices, and values of CSC$(K)$ are identical to CSR$(K^T) =$ CSR$(K)$. The raw arrays are therefore transferred to GPU VRAM without any format conversion.
+1. **CSC → CSR transfer.** Eigen stores sparse matrices in Compressed Sparse Column (CSC) format. For a symmetric matrix $K$, CSC$(K)$ is bit-identical to CSR$(K)$, so the raw column-pointer, row-index, and value arrays are uploaded to VRAM without any format conversion.
 
-2. **Symbolic analysis.** cuSOLVER analyzes the sparsity pattern of $K$ to determine the nonzero structure of the Cholesky factor $L$, applying a reordering strategy (e.g., Approximate Minimum Degree) to minimize fill-in.
+2. **Jacobi preconditioner.** The diagonal $\operatorname{diag}(K)$ is extracted and both $K$ and $F$ are scaled by $1/\operatorname{diag}(K)$. This mirrors the CPU path's diagonal preconditioner and immediately normalizes the enormous penalty-method diagonal entries at fixed DOFs to $\approx 1$, sharply reducing the condition number that governs CG convergence.
 
-3. **Numerical factorization.** The full $K = LL^T$ factorization is computed on the GPU in VRAM.
+3. **PCG iteration.** Each step performs one cuSPARSE SpMV $Ap = K p$ plus device-kernel dot products and AXPY updates. Iteration continues until the residual norm satisfies tolerance or the iteration budget is exhausted.
 
-4. **Triangular solves.** Forward substitution solves $Lz = F$, then backward substitution solves $L^T u = z$, giving the solution $u = K^{-1} F$. Both passes execute on the GPU.
+4. **Result transfer.** The converged solution vector $u$ is copied back from VRAM to host memory.
 
-5. **Result transfer.** The solution vector $u$ is copied back from VRAM to host memory.
+If the GPU solve fails (e.g., unsupported GPU, allocation failure, or non-convergence), `useGPU` is set to false and the solver falls back to the CPU cascade (CG → LDL$^T$) for all remaining load steps.
 
-If the GPU solve fails (e.g., unsupported GPU, factorization failure), `useGPU` is set to false and the solver falls back to the CPU cascade (PCG → LDL$^T$) for all remaining load steps.
-
-**Key distinction from CPU path.** The CPU uses LDL$^T$ (which does not require strict positive definiteness), while cuSOLVER's Cholesky requires $K$ to be strictly positive definite. After penalty enforcement, $K$ is SPD, so this requirement is always satisfied.
+**Key distinction from CPU path.** The GPU and CPU CG paths solve the same preconditioned system; the GPU path simply keeps every iteration in device memory, eliminating the per-iteration PCIe round-trips that would otherwise dominate runtime. As an SPD-only Krylov method, CG requires $K$ to be symmetric positive-definite — guaranteed here by penalty enforcement (Section 5).
 
 ---
 
 ## 8. Mesh Quality Metrics
 
-PolyFEA computes two per-element quality metrics to identify degenerate (sliver) tetrahedra that degrade solver accuracy.
+PolyFEA computes five per-element shape measures to identify degenerate (sliver) tetrahedra that degrade solver accuracy. All are evaluated in double precision and guarded against degenerate denominators. Exact arithmetic predicates (Shewchuk's `orient3d`/`insphere`, bootstrapped via `initExactPredicates`) underpin the robustness of the volume sign tests. The `MeshQuality` module aggregates them into per-mesh histograms, percentile summaries (p05/p50/p95/p99), and a worst-$N$ element list, and classifies each element as inverted (scaled Jacobian $\le 0$), severe sliver ($\theta_{\min} < 5°$), or sliver ($\theta_{\min} < $ `tetMinDihedralDeg`).
 
-### 8.1 Minimum Dihedral Angle
+### 8.1 Knupp/Pebay Shape
 
-The minimum dihedral angle is the smallest of the six edge dihedral angles of the tetrahedron. For a tetrahedron with vertices $\{v_0, v_1, v_2, v_3\}$:
+The Knupp shape metric is the primary scalar quality measure, normalized so a regular tetrahedron returns exactly $1$. With edge vectors $e_1 = p_1 - p_0$, $e_2 = p_2 - p_0$, $e_3 = p_3 - p_0$:
 
-1. Compute the four outward-pointing unit face normals $\hat{n}_0, \hat{n}_1, \hat{n}_2, \hat{n}_3$, where $\hat{n}_i$ is the normal of the face opposite vertex $v_i$, oriented so that $\hat{n}_i \cdot (v_i - v_j) < 0$ (pointing away from the interior).
+$$ q_{\text{shape}} = 2^{1/3}\, \frac{3\,(\det)^{2/3}}{\|e_1\|^2 + \|e_2\|^2 + \|e_3\|^2}, \qquad \det = (e_1 \times e_2)\cdot e_3 = 6 V_e $$
 
-2. For each of the six edges $(i, j)$, the dihedral angle $\theta_{ij}$ is the angle between the two faces meeting at that edge, i.e., the faces opposite vertices $k$ and $l$ (where $\{i,j,k,l\} = \{0,1,2,3\}$). Using outward normals:
-$$ \cos\theta_{ij} = -\hat{n}_k \cdot \hat{n}_l $$
-The negation arises because outward normals of adjacent faces point away from each other — their dot product equals $-\cos(\text{dihedral angle})$.
+The leading factor $2^{1/3}$ rescales $q_{\text{shape}}(\text{regular}) = 1$. If $\det < 10^{-30}$ (degenerate or inverted) the metric returns $0$. Results are clamped to $[0, 1]$.
 
-3. The minimum dihedral angle is:
-$$ \theta_{\min} = \min_{(i,j)} \arccos(-\hat{n}_k \cdot \hat{n}_l) $$
+### 8.2 Minimum and Maximum Dihedral Angle
 
-A regular tetrahedron has $\theta_{\min} \approx 70.53°$. Elements with $\theta_{\min} < 10°$ are classified as slivers and severely impair the condition number of $K$.
+The six edge dihedral angles bound the angular distortion of the tetrahedron. For an edge running $a \to b$ with the two opposite vertices $c$ and $d$, the dihedral is the angle between the two faces meeting at that edge. Writing $e = b - a$, the two in-plane vectors normal to the edge are $n_1 = e \times (c-a)$ and $n_2 = e \times (d-a)$, giving:
 
-### 8.2 Normalized Volume
+$$ \cos\theta = \frac{n_1 \cdot n_2}{\|n_1\|\,\|n_2\|} $$
 
-The normalized volume quality measure divides the element volume by the cube of its longest edge:
+The cosine is clamped to $[-1, 1]$ before $\arccos$ to absorb floating-point noise. The smallest and largest of the six $\theta$ values are reported as $\theta_{\min}$ and $\theta_{\max}$. A regular tetrahedron has every dihedral $\approx 70.53°$. Elements with $\theta_{\min}$ below `tetMinDihedralDeg` (default 10°, matching ANSYS Fluent's sliver threshold) are flagged as slivers; below 5° (NAFEMS/COMSOL hard-reject) they are severe slivers.
 
-$$ q_V = \frac{|V_e|}{e_{\max}^3} $$
+### 8.3 Scaled Jacobian
 
-where $e_{\max}$ is the length of the longest edge. For a regular tetrahedron, $q_V = \sqrt{2}/12 \approx 0.11785$. Sliver elements with flat or needle-like geometry approach $q_V \approx 0$. Elements with $q_V < 10^{-3}$ are flagged in diagnostic output.
+The scaled Jacobian measures corner orthogonality and detects inverted elements. At each of the four corners a local Jacobian is formed from the three outgoing edges (in a fixed cyclic order so all four corner determinants carry the sign of the tetrahedron's signed volume); the corner value is:
+
+$$ sJ_{\text{corner}} = \sqrt{2}\,\frac{(e_1 \times e_2)\cdot e_3}{\|e_1\|\,\|e_2\|\,\|e_3\|} $$
+
+The $\sqrt{2}$ factor normalizes a regular tetrahedron to $+1$. The element value is the minimum over the four corners. **A non-positive minimum scaled Jacobian indicates an inverted (tangled) element** and is the FAIL criterion for the mesh — unlike slivers, which only WARN.
+
+### 8.4 Radius Ratio
+
+The radius ratio compares the inscribed and circumscribed sphere radii:
+
+$$ \rho = \frac{3\,r_{\text{in}}}{R_{\text{circ}}}, \qquad r_{\text{in}} = \frac{3 V_e}{A_{\text{total}}} $$
+
+where $A_{\text{total}}$ is the sum of the four face areas and $R_{\text{circ}} = \|x_c - p_0\|$ is found from the circumcenter, computed via the cofactor form $x_c = \frac{1}{2\det}\left(\|e_1\|^2\,(e_2\times e_3) + \|e_2\|^2\,(e_3\times e_1) + \|e_3\|^2\,(e_1\times e_2)\right)$. The factor $3$ normalizes $\rho(\text{regular}) = 1$; sliver and needle elements approach $\rho \to 0$. Result clamped to $[0, 1]$.
+
+### 8.5 Equiangular Skew (volume-based)
+
+The skew measures how much smaller the element is than the regular tetrahedron inscribed in the same circumscribed sphere of radius $R$:
+
+$$ S = \frac{V_{\text{equi}} - V_e}{V_{\text{equi}}}, \qquad V_{\text{equi}} = \frac{8\sqrt{3}}{27}\,R^3 $$
+
+$S = 0$ for a regular tetrahedron (where $V_e = V_{\text{equi}}$) and $S \to 1$ for a degenerate sliver. Result clamped to $[0, 1]$ and reported as a four-bin histogram alongside the Knupp histogram.
+
+### 8.6 Tet10 Isoparametric Variants
+
+For quadratic meshes the Knupp shape and scaled Jacobian are re-evaluated isoparametrically at the four points of the standard Gauss rule (Section 2.2), using the $3\times3$ physical Jacobian $J$ assembled from the 10 nodal positions. The shape-function reference gradients used here are kept bit-for-bit identical to those in `Tet10Element` to ensure the quality report reflects the same mapping the solver integrates over.
+
+### 8.7 Geometric Fidelity — Hausdorff Distance and Normal Deviation
+
+The per-element metrics above measure element *shape*; they say nothing about how faithfully the volumetric mesh boundary reproduces the *input geometry*. PolyFEA therefore also computes a geometric fidelity report comparing the post-tetrahedralization boundary surface against a reference snapshot of the input surface (`RefSurface`, captured before TetGen runs).
+
+**Symmetric Hausdorff distance.** Two directed passes are evaluated:
+
+$$ d(A \to B) = \max_{a \in A}\, \min_{b \in B} \|a - b\|, \qquad d_H = \max\big(d(A\to B),\, d(B\to A)\big) $$
+
+The forward pass samples the volumetric boundary faces (a 4-point quadrature per triangle) and measures their distance to the reference surface; the reverse pass does the opposite. Both directions use a median-split bounding-volume hierarchy (BVH) over the triangle set for $O(\log n)$ nearest-triangle queries. The report records both the maximum Hausdorff distance and its 95th percentile (which suppresses single-point outliers from Steiner vertices), normalized against the mesh bounding-box diagonal.
+
+**Normal deviation.** At each sample the angle between the volumetric-boundary normal and the reference-surface normal at the nearest point is recorded; the p50/p95/p99/max of this distribution quantify how well surface orientation is preserved. A face-orientation bug manifests unmistakably as $\approx 180°$ deviation.
+
+A mesh **passes** fidelity when the Hausdorff distance is below 1 % of the bounding-box diagonal and the p95 normal deviation is below 15°.
+
+**Exact B-rep nearest-point (STEP input).** When the model retains an analytic B-rep (Section 11), the forward pass replaces the BVH-on-triangulation query with OpenCASCADE's `BRepExtrema_DistShapeShape`, which returns the exact nearest point on the underlying NURBS surface rather than on its discrete approximation. On smooth geometry this improves Hausdorff accuracy by 2–3 orders of magnitude (e.g., a sphere drops from $\sim\!5\times10^{-4}$ to $\sim\!8\times10^{-7}$), and the report flags `usedExactBRep`. The reverse pass continues to use the triangulation BVH.
 
 ---
 
@@ -331,3 +368,33 @@ The `FEASolver` automatically extracts $L$, $b$, $h$ from the AABB (Axis-Aligned
 $$ \text{error} = \frac{|\delta_\text{FEA} - \delta_\text{analytical}|}{\delta_\text{analytical}} \times 100\% $$
 
 This validation is activated by the `CantileverBendingZ` load type, which fixes nodes at $X_{\min}$, applies a single concentrated $-Z$ force at the node closest to the centroid of the $X_{\max}$ face, and compares the maximum nodal displacement magnitude against $\delta_{\max}$.
+
+---
+
+## 11. Geometry Input Pipeline
+
+PolyFEA accepts three input formats, dispatched by file extension through a single `IGeometryLoader` interface (`GeometryLoaderDispatch`). Every loader produces a common `LoadedGeometry` (surface vertices + triangle indices) which `processRawGeometry` then normalizes — translating the centroid to the origin and uniformly scaling so the bounding-box diagonal spans 3 units — before tetrahedralization. Because normalization is unconditional, no per-format unit conversion is required.
+
+### 11.1 STL — Triangulated Surface
+
+The baseline format. Raw triangle soup is parsed, welded into an indexed mesh, and (optionally) decimated by `meshoptimizer`'s feature-preserving simplification to remove pathologically dense regions (e.g., spherical polar caps) while locking sharp boundary edges.
+
+### 11.2 3MF — Compressed Mesh Container
+
+3MF models are ZIP archives containing an XML mesh payload. The loader unzips the `3D/3dmodel.model` part (via `miniz`) and parses its `<vertices>` / `<triangles>` elements into the same `LoadedGeometry` structure. Unlike STL, 3MF carries a well-defined vertex index list, so no welding pass is needed.
+
+### 11.3 STEP — Analytic B-rep with Retained NURBS
+
+STEP (`.step` / `.stp`) input is handled via **OpenCASCADE (OCCT)** and is the highest-fidelity path because it retains the exact boundary representation rather than discarding it after tessellation.
+
+**Pipeline:**
+
+1. **Read and heal.** `STEPControl_Reader` transfers the file into a `TopoDS_Shape`. `ShapeFix_Shape` then repairs open edges, inconsistent vertex tolerances, and bad face orientations that STEP exporters commonly emit. The cascade unit (`xstep.cascade.unit`) is read for logging only.
+
+2. **Tessellate.** `BRepMesh_IncrementalMesh` triangulates the healed shape with a curvature-driven discretization controlled by two parameters:
+$$ \text{lin\_def} = \texttt{sizingChordError} \times L_{\text{diag}}, \qquad \text{ang\_def} = 0.3\ \text{rad} \approx 17° $$
+   where `sizingChordError` defaults to $10^{-3}$ (0.1 % chord error) and $L_{\text{diag}}$ is the shape's bounding-box diagonal. The mesher freezes a 1-D discretization of each edge first, then meshes each face in $(u,v)$ parameter space under the first fundamental form, guaranteeing that sharp feature edges are preserved *exactly* — without any heuristic dihedral threshold.
+
+3. **Harvest triangles, respecting face orientation.** Each `TopoDS_Face` carries an orientation flag. For `TopAbs_REVERSED` faces the triangle winding is flipped (swap two indices); omitting this would invert half the surface normals.
+
+4. **Retain the B-rep.** The healed `TopoDS_Shape` is kept live on `FEAModel` as `brep` (a `unique_ptr<BRepHandle>`). OCCT is isolated behind this pImpl handle so only two translation units compile against its headers; all other code, and the entire build when `USE_OCCT=OFF`, sees an inline stub. The retained B-rep enables the exact-NURBS fidelity pass of Section 8.7 via `BRepExtrema_DistShapeShape` (nearest point) and `BRepLProp_SLProps` (surface normal at that point).

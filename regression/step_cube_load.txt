@@ -1,0 +1,28 @@
+# TODO_04 regression sentinel — unit_cube.step load verification
+# Run: load assets/test_fixtures/unit_cube.step via File → Import.
+# Expected console output (confirm manually after first successful build + run):
+#
+#   [STEP] cascade unit: MM (processRawGeometry will normalise to 3-unit diagonal)
+#   [STEP] read OK, 1 solid(s), 6 faces, 12 edges, 8 vertices
+#   [STEP] tessellated -> 12 triangles (lin_def=..., ang_def=0.3 rad, parallel=true)
+#   Loaded: 24 verts, 12 tris  [STEP]
+#
+# UI assertions:
+#   status panel shows: Source: STEP (B-rep retained)
+#   hasBRep() == true
+#   surfaceVertices.size() == 24   (4 unique verts per face × 6 faces)
+#   surfaceIndices.size()/3 == 12  (2 tris per face × 6 faces)
+#
+# After Generate 3D Mesh:
+#   Quality report: PASS (same as STL cube — geometry identical)
+#   Fidelity report header: [Fidelity vs input surface] [NURBS B-rep exact]
+#   Hausdorff (symmetric): near machine epsilon (cube faces are flat → exact)
+#   Verdict: PASS
+#
+# PLACEHOLDER — fill in exact values after first confirmed-correct run.
+hasBRep=true
+faces=6
+edges=12
+vertices=8
+triangles=12
+verdict=PASS

@@ -20,7 +20,7 @@ struct FEAParams {
     float tetRadiusEdge      = 1.2f;
     // Minimum dihedral angle bound (degrees) used for two purposes:
     //   1. Passed to TetGen as `.../<this>` -- a TARGET for its smoother, NOT a guarantee.
-    //   2. PASS/FAIL verdict in MeshQuality::emitReport (slivers = elements below this).
+    //   2. Reported by MeshQuality::emitReport (slivers = elements below this target).
     // 10 deg matches ANSYS Fluent's default sliver-removal threshold (industry standard).
     // Hard-reject is <5 deg (NAFEMS/COMSOL). 18 deg is too strict for raw TetGen output.
     float tetMinDihedralDeg  = 10.0f;
@@ -34,4 +34,10 @@ struct FEAParams {
     // --- Quality-report controls (consumed by MeshQuality::emitReport) ---
     int   worstNCount        = 10;     // How many worst elements to dump.
     bool  useMultithreading  = true;   // Per-element parallel quality computation.
+
+    // --- TODO_04: STEP / BRep tessellation controls ---
+    // Chord error as a fraction of the bounding-box diagonal.
+    // lin_def = sizingChordError * L_diag  (absolute linear deflection for OCC mesher).
+    // 1e-3 → 0.1% chord error (COMSOL "Fine" equivalent on a 1 m part: 1 mm deflection).
+    float sizingChordError   = 1e-3f;
 };

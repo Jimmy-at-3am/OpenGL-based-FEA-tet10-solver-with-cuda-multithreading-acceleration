@@ -110,6 +110,13 @@ session*.md
 # =============================================================
 build_out.txt
 knowledge/
+tmp/
+
+# =============================================================
+# Third-party headers fetched at configure time (FetchContent)
+# glm/ is now fetched via CMake FetchContent — do not commit.
+# =============================================================
+include/glm/
 
 # =============================================================
 # Unused tutorial/stub headers (learnopengl examples)

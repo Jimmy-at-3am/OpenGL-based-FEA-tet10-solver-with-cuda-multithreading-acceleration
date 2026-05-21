@@ -31,19 +31,27 @@ CUDA-accelerated solver — no commercial FEA libraries used.
 
 ## What it does
 
-PolyFEA takes an arbitrary STL mesh, tetrahedralizes it into a volumetric finite
-element model, applies structural loads and boundary conditions, and solves for
-nodal displacements and reaction forces. Results are visualised in real time via
-a hardware-accelerated OpenGL renderer with scalar heatmaps.
+PolyFEA takes an arbitrary STL, 3MF, or STEP model, tetrahedralizes it into a
+volumetric finite element model, applies structural loads and boundary
+conditions, and solves for nodal displacements and reaction forces. Results are
+visualised in real time via a hardware-accelerated OpenGL renderer with scalar
+heatmaps.
 
 **Current capabilities:**
-- STL import with feature-preserving mesh decimation via `meshoptimizer`
+- Multi-format geometry import via a single dispatch interface:
+  - **STL** with feature-preserving decimation via `meshoptimizer`
+  - **3MF** compressed mesh containers (unzipped via `miniz`)
+  - **STEP** with analytic B-rep retention via OpenCASCADE (exact NURBS kept live)
 - 3D Delaunay tetrahedralization via `TetGen`
 - Linear tetrahedral elements (Tet4) and quadratic tetrahedral elements (Tet10)
 - Automatic adaptive promotion from Tet4 → Tet10 on curved geometry
 - Linear static analysis and full Newton-Raphson nonlinear static analysis
-- Point force and surface compression boundary conditions
+- Point force, surface compression, cantilever bending, and tension load types
 - Load symmetry enforcement across XZ reflection planes and polar radii
+- Per-element mesh quality metrics (Knupp shape, dihedral angles, scaled
+  Jacobian, radius ratio, equiangular skew) with histograms and worst-N reports
+- Geometric fidelity validation (Hausdorff distance + normal deviation), with
+  exact NURBS nearest-point comparison when a STEP B-rep is present
 - Three solver backends: CUDA PCG, CPU Conjugate Gradient, CPU direct LDLT
 - Automatic fallback cascade between all three solvers
 - Real-time OpenGL 3.3+ visualiser with displacement and force heatmaps
@@ -66,7 +74,10 @@ problem encountered in the previous one:
 | 6 | OpenMP multithreaded assembly | Single-threaded stiffness assembly was the primary bottleneck at scale |
 | 7 | Selective material properties (`IMaterial`) | Needed to model different materials without rewriting the assembly loop |
 | 8 | CUDA PCG solver | CPU solvers were too slow for large meshes; PCIe bottleneck eliminated by keeping iteration in VRAM |
-| 9 | Adaptive meshing (current) | Tet4 elements produced inaccurate strain gradients on curved surfaces |
+| 9 | Adaptive meshing | Tet4 elements produced inaccurate strain gradients on curved surfaces |
+| 10 | Mesh quality + fidelity reports | Needed to detect sliver elements and quantify how well the mesh reproduces the input geometry |
+| 11 | Multi-format loaders (3MF, STEP) | STL discards units and exact geometry; STEP retains analytic NURBS for far higher fidelity |
+| 12 | STEP B-rep retention (current) | Discrete-triangulation Hausdorff error masked true surface accuracy; exact NURBS nearest-point fixes it |
 
 ---
 
@@ -75,23 +86,36 @@ problem encountered in the previous one:
 ```
 PolyFEA/
 ├── include/
-│   ├── IElement.h        # Abstract element interface (Tet4, Tet10 implement this)
-│   ├── FEASolver.h       # Solver orchestration, load types, solver selection
-│   └── FEAModel.h        # Mesh data, deformed positions, GPU buffer flags
+│   ├── IElement.h               # Abstract element interface (Tet4, Tet10 implement this)
+│   ├── IMaterial.h              # Constitutive model interface (LinearElastic)
+│   ├── IGeometryLoader.h        # Common loader interface → LoadedGeometry
+│   ├── GeometryLoaderDispatch.h # Extension → loader factory (STL / 3MF / STEP)
+│   ├── STLLoader.h / ThreeMFLoader.h / StepLoader.h
+│   ├── BRepHandle.h             # pImpl wrapper isolating OpenCASCADE (analytic B-rep)
+│   ├── MeshQuality.h            # Per-element quality + Hausdorff/normal-deviation fidelity
+│   ├── FEASolver.h              # Solver orchestration, load types, solver selection
+│   ├── CudaSolver.h             # GPU PCG entry point
+│   └── FEAModel.h               # Mesh data, deformed positions, retained B-rep, GPU flags
 ├── src/
-│   ├── FEAModel.cpp      # Mesh construction, TetGen interface, meshoptimizer pipeline
-│   ├── FEASolver.cpp     # Stiffness assembly (OpenMP), boundary conditions, Newton-Raphson
-│   ├── cuda_solver/      # Custom PCG implementation in CUDA (cuSPARSE + device kernels)
-│   └── main.cpp          # OpenGL render loop, GLFW/GLAD, SimpleUI overlay
-├── assets/               # Example STL files and result screenshots
+│   ├── FEAModel.cpp             # Mesh construction, TetGen interface, meshoptimizer pipeline
+│   ├── FEASolver.cpp            # Stiffness assembly (OpenMP), boundary conditions, Newton-Raphson
+│   ├── MeshQuality.cpp          # Quality metrics, BVH fidelity, OCC exact-nearest-point path
+│   ├── StepLoader.cpp / BRepHandle.cpp  # OpenCASCADE-aware translation units
+│   ├── CudaSolver.cu            # Jacobi-preconditioned CG in CUDA (cuSPARSE SpMV + kernels)
+│   └── main.cpp                 # OpenGL render loop, GLFW/GLAD, SimpleUI overlay
+├── assets/               # Example models and result screenshots
 ├── lib/                  # Third-party compiled dependencies
 ├── CMakeLists.txt
 └── build.bat
 ```
 
-**Key design principle:** Element mathematics are fully separated from global
-assembly via the `IElement` interface. Adding a new element type (Hex8, shells)
+**Key design principles:** Element mathematics are fully separated from global
+assembly via the `IElement` interface — adding a new element type (Hex8, shells)
 requires no modification to the multithreaded assembly loop in `FEASolver.cpp`.
+Likewise, every input format implements `IGeometryLoader`, so adding a format
+touches only the dispatch factory, and OpenCASCADE is confined behind the
+`BRepHandle` pImpl so only two translation units pay its compile cost (and the
+whole project still builds with `USE_OCCT=OFF`).
 
 ---
 
@@ -158,13 +182,22 @@ iteration until the L₂ residual norm satisfies convergence tolerance.
 
 ### Mesh preparation
 
-1. Parse STL file → extract raw surface vertices and triangles
-2. Run `meshopt_simplify` for feature-preserving decimation — locks sharp
-   boundary edges, removes pathologically dense regions (spherical caps)
-3. Pass cleaned surface to `TetGen` for 3D Delaunay tetrahedralization
-4. Adaptive check: compute vertex-normal deviations via `GeometryAnalysisParams`.
-   If curvature exceeds threshold → promote mesh topology from Tet4 → Tet10,
-   generating mid-edge nodes automatically
+1. Dispatch on file extension to the matching loader (STL / 3MF / STEP) →
+   extract surface vertices and triangles into a common `LoadedGeometry`. STEP
+   additionally tessellates its B-rep via OpenCASCADE and retains the analytic
+   shape on the model.
+2. Normalise: translate centroid to origin, uniformly scale to a 3-unit
+   bounding-box diagonal. For STL, optionally run `meshopt_simplify` for
+   feature-preserving decimation — locks sharp boundary edges, removes
+   pathologically dense regions (spherical caps).
+3. Snapshot the input surface (`RefSurface`) for the post-mesh fidelity check.
+4. Pass cleaned surface to `TetGen` for 3D Delaunay tetrahedralization
+5. Adaptive check: compute vertex-normal deviations. If curvature exceeds
+   threshold → promote mesh topology from Tet4 → Tet10, generating mid-edge
+   nodes automatically.
+6. Emit the quality report (per-element shape metrics) and the fidelity report
+   (Hausdorff + normal deviation vs. the reference surface; exact NURBS
+   nearest-point when a STEP B-rep is present)
 
 ### Point force deformation (step by step)
 
@@ -221,6 +254,9 @@ Built on OpenGL 3.3+ with GLFW and GLAD.
 
 - Visual Studio 2019 or 2022 with **C++ Desktop** and **C++ CMake tools** workloads
 - CUDA Toolkit 11+ (optional — CPU fallback is automatic; pass `-DUSE_CUDA=OFF` to skip)
+- OpenCASCADE 7.8+ (optional — required only for STEP import; install separately
+  and pass `-DOCCT_ROOT=<path>`, or build without it via `-DUSE_OCCT=OFF`. STL
+  and 3MF import work regardless.)
 - OpenGL 3.3+ capable GPU
 
 Everything else (Eigen, miniz, meshoptimizer) is fetched automatically by CMake at configure time.
@@ -298,16 +334,19 @@ ratio is the primary driver of numerical accuracy, not node count.
 ## Roadmap
 
 - [x] STL mesh import and surface decimation
+- [x] 3MF and STEP mesh import (multi-format dispatch)
+- [x] STEP analytic B-rep retention (OpenCASCADE)
 - [x] 3D Delaunay tetrahedralization (TetGen)
 - [x] Linear Tet4 elements
-- [x] Point force static analysis
+- [x] Point force, surface compression, and tension static analysis
 - [x] Newton-Raphson nonlinear solver
 - [x] OpenMP multithreaded assembly
 - [x] Selective material properties (IMaterial interface)
 - [x] CUDA PCG accelerated solver
 - [x] Adaptive Tet4 → Tet10 mesh promotion
+- [x] Per-element mesh quality metrics + Hausdorff/normal-deviation fidelity
 - [ ] Von Mises stress and principal stress output
-- [ ] Distributed load and pressure boundary conditions
+- [ ] Pressure boundary conditions
 - [ ] Thermal analysis coupling (heat conduction FEA)
 - [ ] Additional element types (Hex8, shell elements)
 - [ ] Export to VTK / ParaView format
@@ -318,6 +357,8 @@ ratio is the primary driver of numerical accuracy, not node count.
 
 - **[TetGen](http://www.tetgen.org)** — Hang Si, WIAS Berlin. 3D Delaunay tetrahedralization.
 - **[meshoptimizer](https://github.com/zeux/meshoptimizer)** — Arseny Kapoulkine. Feature-preserving mesh decimation.
+- **[OpenCASCADE](https://www.opencascade.com)** — STEP I/O, B-rep tessellation, exact NURBS nearest-point queries (optional, `USE_OCCT`).
+- **[miniz](https://github.com/richgel999/miniz)** — Rich Geldreich. ZIP decompression for 3MF containers.
 - **[Eigen](https://eigen.tuxfamily.org)** — Sparse matrix storage, SimplicialLDLT, ConjugateGradient solvers.
 - **[GLFW](https://www.glfw.org)** and **[GLAD](https://glad.dav1d.de)** — OpenGL context and extension loading.
 - **[CUDA Toolkit](https://developer.nvidia.com/cuda-toolkit)** / **cuSPARSE** — NVIDIA. GPU sparse matrix-vector products.
