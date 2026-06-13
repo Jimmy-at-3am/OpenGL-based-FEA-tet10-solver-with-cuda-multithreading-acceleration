@@ -171,6 +171,8 @@ set(SOURCES
     src/FEASolver.cpp
     src/MeshQuality.cpp
     src/Tet10Element.cpp
+    # new_TODO_02: headless agent self-test harness
+    src/ScenarioRunner.cpp
     src/glad.c
     src/tetgen.cxx
     src/predicates.cxx
@@ -328,6 +330,22 @@ foreach(MAT_FILE ${MAT_FILES})
             "$<TARGET_FILE_DIR:${PROJECT_NAME}>/materials"
     )
 endforeach()
+
+# --- Copy scenarios/ and regression/ next to the executable (new_TODO_02) ---
+# The headless harness reads scenarios/*.json and regression/*.txt relative to
+# the working directory, so mirror both folders into the build output.
+add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_SOURCE_DIR}/scenarios"
+        "$<TARGET_FILE_DIR:${PROJECT_NAME}>/scenarios"
+    COMMENT "Copying scenarios/ to build output"
+)
+add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_SOURCE_DIR}/regression"
+        "$<TARGET_FILE_DIR:${PROJECT_NAME}>/regression"
+    COMMENT "Copying regression/ to build output"
+)
 
 # --- Diagnostic tool ---
 # MeshQuality.cpp is linked into mesh_diag as well so both binaries share the

@@ -6,6 +6,10 @@
 #include <fstream>
 #include <iostream>
 #include <unordered_map>
+#include <map>
+#include <array>
+#include <cmath>
+#include <cfloat>
 #include <filesystem>
 #include <tuple>
 #include <algorithm>
@@ -550,22 +554,75 @@ bool FEAModel::generateVolumetricMesh() {
         refSurfaceForFidelity.positions.push_back(sv.position);
     refSurfaceForFidelity.indices.assign(surfaceIndices.begin(), surfaceIndices.end());
 
+    // Weld coincident surface vertices before handing the PLC to TetGen.
+    // Procedurally generated geometry (e.g. the cube preset) emits one vertex
+    // per face-corner, so adjacent faces duplicate their shared edge/corner
+    // vertices. TetGen treats those duplicates as overlapping boundary segments
+    // and aborts with "self-intersections". Loaded geometry is already welded
+    // in processRawGeometry(); this gives the generated path the same guarantee.
+    // We weld a LOCAL copy only — surfaceVertices/surfaceIndices still drive the
+    // render buffers untouched.
+    std::vector<glm::vec3> weldedPos;
+    std::vector<int>       remap(surfaceVertices.size(), -1);
+    {
+        // Quantise positions onto a fine grid keyed in a hash map. The grid is
+        // sized off the bounding box so the tolerance scales with the model.
+        glm::vec3 lo(FLT_MAX), hi(-FLT_MAX);
+        for (const auto& sv : surfaceVertices) {
+            lo = glm::min(lo, sv.position);
+            hi = glm::max(hi, sv.position);
+        }
+        float diag = glm::length(hi - lo);
+        if (!(diag > 0.0f)) diag = 1.0f;
+        const double inv = 1.0 / (double(diag) * 1e-6); // ~1e-6 of diagonal
+        // Exact key on the quantised integer triple: no false merges.
+        std::map<std::array<long long, 3>, int> grid;
+        for (size_t i = 0; i < surfaceVertices.size(); ++i) {
+            const glm::vec3& p = surfaceVertices[i].position;
+            std::array<long long, 3> k = {
+                llround(double(p.x) * inv),
+                llround(double(p.y) * inv),
+                llround(double(p.z) * inv)
+            };
+            auto it = grid.find(k);
+            if (it != grid.end()) {
+                remap[i] = it->second;
+            } else {
+                int idx = static_cast<int>(weldedPos.size());
+                weldedPos.push_back(p);
+                grid.emplace(k, idx);
+                remap[i] = idx;
+            }
+        }
+    }
+
+    // Remap triangles, dropping any that collapse to a degenerate after welding.
+    std::vector<std::array<int, 3>> weldedTris;
+    weldedTris.reserve(surfaceIndices.size() / 3);
+    for (size_t i = 0; i + 2 < surfaceIndices.size(); i += 3) {
+        int a = remap[surfaceIndices[i + 0]];
+        int b = remap[surfaceIndices[i + 1]];
+        int c = remap[surfaceIndices[i + 2]];
+        if (a == b || b == c || a == c) continue;
+        weldedTris.push_back({a, b, c});
+    }
+
     tetgenio in, out;
     in.firstnumber = 0;
 
-    in.numberofpoints = surfaceVertices.size();
+    in.numberofpoints = static_cast<int>(weldedPos.size());
     in.pointlist = new REAL[in.numberofpoints * 3];
-    for (size_t i = 0; i < surfaceVertices.size(); ++i) {
-        in.pointlist[i * 3 + 0] = surfaceVertices[i].position.x;
-        in.pointlist[i * 3 + 1] = surfaceVertices[i].position.y;
-        in.pointlist[i * 3 + 2] = surfaceVertices[i].position.z;
+    for (size_t i = 0; i < weldedPos.size(); ++i) {
+        in.pointlist[i * 3 + 0] = weldedPos[i].x;
+        in.pointlist[i * 3 + 1] = weldedPos[i].y;
+        in.pointlist[i * 3 + 2] = weldedPos[i].z;
     }
 
-    in.numberoffacets = surfaceIndices.size() / 3;
+    in.numberoffacets = static_cast<int>(weldedTris.size());
     in.facetlist = new tetgenio::facet[in.numberoffacets];
     in.facetmarkerlist = new int[in.numberoffacets];
 
-    for (size_t i = 0; i < in.numberoffacets; ++i) {
+    for (size_t i = 0; i < static_cast<size_t>(in.numberoffacets); ++i) {
         tetgenio::facet* f = &in.facetlist[i];
         f->polygonlist = new tetgenio::polygon[1];
         f->numberofpolygons = 1;
@@ -575,11 +632,11 @@ bool FEAModel::generateVolumetricMesh() {
         tetgenio::polygon* p = &f->polygonlist[0];
         p->numberofvertices = 3;
         p->vertexlist = new int[3];
-        p->vertexlist[0] = surfaceIndices[i * 3 + 0];
-        p->vertexlist[1] = surfaceIndices[i * 3 + 1];
-        p->vertexlist[2] = surfaceIndices[i * 3 + 2];
+        p->vertexlist[0] = weldedTris[i][0];
+        p->vertexlist[1] = weldedTris[i][1];
+        p->vertexlist[2] = weldedTris[i][2];
 
-        in.facetmarkerlist[i] = 1; 
+        in.facetmarkerlist[i] = 1;
     }
 
     float absoluteMaxVol = bboxVolume * (params.maxVolPercent / 100.0f);

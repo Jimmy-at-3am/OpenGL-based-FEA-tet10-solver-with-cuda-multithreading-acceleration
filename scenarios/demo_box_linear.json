@@ -1,0 +1,21 @@
+{
+  "v": 1,
+  "geometry": { "preset": "box", "size": [2.0, 1.0, 1.0] },
+  "material": "materials/pla.mat",
+  "mesh": { "maxVolume": 0.05, "quality": 1.6 },
+  "loads": [ { "type": "preset", "name": "cantileverZ", "mag": 2.0e6 } ],
+  "constraints": [ { "preset": "fixedMinX" } ],
+  "solve": { "kind": "linear", "gpu": false },
+  "probes": [
+    { "id": "freeEndTop", "pos": [1.0, 0.5, 0.0], "quantity": "displacement" }
+  ],
+  "screenshots": [
+    { "name": "iso_disp", "camera": "iso", "scalarMode": 1, "deformScale": 0.0 }
+  ],
+  "asserts": [
+    { "path": "mesh.nTets", "op": ">", "value": 0 },
+    { "path": "solver.ok", "op": "==", "value": 1 },
+    { "path": "probes.freeEndTop.magnitude", "op": ">", "value": 0.0 },
+    { "path": "screenshots.iso_disp.stdRGBmax", "op": ">", "value": 0.0 }
+  ]
+}

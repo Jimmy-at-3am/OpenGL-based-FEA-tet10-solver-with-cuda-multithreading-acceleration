@@ -213,7 +213,7 @@ void emitReport(const tetgenio& out, const FEAParams& p);
 // tet10Connectivity : flat array, 10 indices per element (0-based).
 // These functions evaluate isoparametric quality at the 4 standard Gauss
 // points.  The Tet10 entry point is shipped as forward-looking API for
-// TODO_05/08; it does NOT gate TODO_02 acceptance (the cube smoke test uses
+// TODO_08/08; it does NOT gate TODO_02 acceptance (the cube smoke test uses
 // the Tet4 tetgenio path).
 QualityReport computeReportTet10(
     const std::vector<glm::vec3>& positions,

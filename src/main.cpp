@@ -12,6 +12,7 @@
 #include "SimpleUI.h"
 #include "FEAModel.h"
 #include "FEASolver.h"
+#include "ScenarioRunner.h"
 
 #include <iostream>
 #include <filesystem>
@@ -147,7 +148,7 @@ bool projectToScreen(const glm::vec3& point, const glm::mat4& view, const glm::m
     return true;
 }
 
-int main() {
+int runInteractive() {
     glfwInit();
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
@@ -828,4 +829,72 @@ void mouse_callback(GLFWwindow* window, double xposIn, double yposIn) {
 void scroll_callback(GLFWwindow* window, double xoffset, double yoffset) {
     if (mouseX >= scrWidth - panelWidth) return;
     camera.ProcessMouseScroll(static_cast<float>(yoffset));
+}
+
+// =============================================================================
+//  CLI dispatch (new_TODO_02). No args -> interactive UI. Otherwise headless
+//  scenario harness. Same pipeline functions as the UI buttons (TOP RULE).
+//    FEAPreProcessor --run scenarios/x.json --out report.json --shots shots/
+//    FEAPreProcessor --regress all
+//    FEAPreProcessor --dump-ui            (stub: prints "{}" until new_TODO_16)
+// =============================================================================
+static void printUsage() {
+    std::cout <<
+        "Usage:\n"
+        "  FEAPreProcessor                       run interactive UI\n"
+        "  FEAPreProcessor --run <scenario.json> [--out <report.json>] [--shots <dir>]\n"
+        "  FEAPreProcessor --regress all\n"
+        "  FEAPreProcessor --dump-ui\n";
+}
+
+int main(int argc, char** argv) {
+    if (argc <= 1) return runInteractive();
+
+    std::string arg1 = argv[1];
+
+    if (arg1 == "--dump-ui") {
+        // Real widget tree lands in new_TODO_16; until then emit empty object.
+        std::cout << "{}" << std::endl;
+        return 0;
+    }
+
+    if (arg1 == "--regress") {
+        std::string which = (argc > 2) ? argv[2] : "all";
+        if (which != "all") {
+            std::cerr << "--regress expects 'all'\n";
+            return 2;
+        }
+        return ScenarioRunner::runRegress();
+    }
+
+    if (arg1 == "--run") {
+        std::string scenario, out = "report.json", shots = "shots";
+        for (int i = 2; i < argc; ++i) {
+            std::string a = argv[i];
+            auto next = [&](const char* flag) -> std::string {
+                if (i + 1 >= argc) {
+                    std::cerr << flag << " requires an argument\n";
+                    std::exit(2);
+                }
+                return argv[++i];
+            };
+            if (a == "--out")        out   = next("--out");
+            else if (a == "--shots") shots = next("--shots");
+            else if (scenario.empty() && !a.empty() && a[0] != '-') scenario = a;
+            else if (a == "--run")   scenario = next("--run");
+            else { std::cerr << "unknown argument: " << a << "\n"; return 2; }
+        }
+        if (scenario.empty()) {
+            // Allow "--run <file>" where file directly follows.
+            if (argc > 2 && argv[2][0] != '-') scenario = argv[2];
+        }
+        if (scenario.empty()) {
+            std::cerr << "--run requires a scenario path\n";
+            return 2;
+        }
+        return ScenarioRunner::runScenario(scenario, out, shots);
+    }
+
+    printUsage();
+    return 2;
 }

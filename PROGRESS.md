@@ -1,3 +1,7 @@
+> **2026-06-12 NOTE:** roadmap restructured. For what to do next, read
+> `knowledge/TODOs/TODO_00_MASTER_ROADMAP.md` — it supersedes any "next TODO"
+> pointer in this file. Next implementation TODO: **TODO_07**, then 06A→06E.
+
 # TODO_04 Implementation Progress
 # STEP Loader as Primary Input + B-rep Retention
 
@@ -306,4 +310,11 @@ TODO_04 implementation is complete. All 16 source files written and verified.
 4. Run `tools/gen_step_fixtures.exe` to generate test fixtures
 5. Load fixtures in app, verify console output, fill in `regression/step_*.txt`
 
-**Next TODO to implement:** TODO_05 (quality HUD color overlay)
+**Next TODO to implement:** TODO_05 (interactive teaching panel) — NEW top
+priority. On 2026-05-24 three high-priority tasks were inserted ahead of the old
+chain and the former TODO_05–25 were renumbered to TODO_08–28:
+  - TODO_05 — interactive left-side teaching panel
+  - TODO_06 — layer-aware slicing & meshing for FDM parts (EPIC, phased)
+  - TODO_07 — fracture result visualization (deformation + failure mode)
+All three are PLAN-stage docs awaiting user approval before implementation.
+After them, the renumbered chain continues at TODO_08 (quality HUD color overlay).
