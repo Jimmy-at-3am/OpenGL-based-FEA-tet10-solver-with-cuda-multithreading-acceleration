@@ -5,16 +5,19 @@ inline const char* modelVS = R"(
 layout (location = 0) in vec3 aPos;
 layout (location = 1) in vec3 aNormal;
 layout (location = 2) in vec2 aTexCoords;
+layout (location = 3) in float aElementScalar;   // new_TODO_03: per-element value
 out vec3 FragPos;
 out vec3 Normal;
 out vec2 ScalarData;
+flat out float ElementScalar;                     // flat: no interpolation across an element
 uniform mat4 model;
 uniform mat4 view;
 uniform mat4 projection;
 void main() {
     FragPos = vec3(model * vec4(aPos, 1.0));
-    Normal = mat3(transpose(inverse(model))) * aNormal;  
+    Normal = mat3(transpose(inverse(model))) * aNormal;
     ScalarData = aTexCoords;
+    ElementScalar = aElementScalar;
     gl_Position = projection * view * vec4(FragPos, 1.0);
 }
 )";
@@ -25,11 +28,13 @@ out vec4 FragColor;
 in vec3 FragPos;
 in vec3 Normal;
 in vec2 ScalarData;
+flat in float ElementScalar;
 uniform vec3 viewPos;
 uniform vec3 objectColor;
 uniform int scalarMode;
 uniform float scalarMin;
 uniform float scalarMax;
+uniform float fragAlpha;          // new_TODO_03: 1.0 normally, <1 for GHOST dead pass
 
 vec3 contourColor(float t) {
     t = clamp(t, 0.0, 1.0);
@@ -39,6 +44,15 @@ vec3 contourColor(float t) {
     return mix(vec3(1.0, 0.92, 0.10), vec3(0.85, 0.00, 0.00), (t - 0.75) / 0.25);
 }
 
+// new_TODO_03: categorical failure-mode colour (matches the UI legend).
+vec3 categoricalColor(float m) {
+    int mi = int(m + 0.5);
+    if (mi == 1) return vec3(0.85, 0.05, 0.05); // interlayer tension - red
+    if (mi == 2) return vec3(1.00, 0.55, 0.00); // interlayer shear  - orange
+    if (mi == 3) return vec3(1.00, 0.92, 0.10); // intralayer        - yellow
+    return vec3(0.55, 0.55, 0.55);              // alive / unknown    - grey
+}
+
 void main() {
     vec3 lightDir = normalize(viewPos - FragPos);
     vec3 norm = normalize(Normal);
@@ -46,12 +60,20 @@ void main() {
     float diffuse = max(diff, 0.4);
     vec3 baseColor = objectColor;
     if (scalarMode == 1 || scalarMode == 2) {
+        // Per-vertex scalar (displacement / force) -> smooth contour.
         float scalarValue = scalarMode == 1 ? ScalarData.x : ScalarData.y;
         float normalizedValue = (scalarValue - scalarMin) / max(scalarMax - scalarMin, 1e-6);
         baseColor = contourColor(normalizedValue);
+    } else if (scalarMode == 3) {
+        // Per-element categorical failure mode (flat).
+        baseColor = categoricalColor(ElementScalar);
+    } else if (scalarMode == 4 || scalarMode == 5) {
+        // Per-element heatmap: 4 = failure iteration, 5 = von Mises at death.
+        float normalizedValue = (ElementScalar - scalarMin) / max(scalarMax - scalarMin, 1e-6);
+        baseColor = contourColor(normalizedValue);
     }
     float lighting = 0.60 + 0.40 * diffuse;
-    FragColor = vec4(baseColor * lighting, 1.0);
+    FragColor = vec4(baseColor * lighting, fragAlpha);
 }
 )";
 

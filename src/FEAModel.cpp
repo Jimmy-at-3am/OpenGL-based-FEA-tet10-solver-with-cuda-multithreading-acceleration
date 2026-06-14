@@ -125,7 +125,90 @@ void FEAModel::buildBuffers() {
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)0); glEnableVertexAttribArray(0);
     glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, normal)); glEnableVertexAttribArray(1);
     glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, texCoords)); glEnableVertexAttribArray(2);
+    glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, elementScalar)); glEnableVertexAttribArray(3);
+
+    // new_TODO_03: rebuild + upload the separate dead-element buffers so the
+    // fracture pattern can be drawn (ghosted / mode-coloured) in a second pass.
+    rebuildDeadElementBuffers();
+    if (!deadVertices.empty() && !deadIndices.empty()) {
+        if (deadVAO == 0) { glGenVertexArrays(1, &deadVAO); glGenBuffers(1, &deadVBO); glGenBuffers(1, &deadEBO); }
+        glBindVertexArray(deadVAO);
+        glBindBuffer(GL_ARRAY_BUFFER, deadVBO);
+        glBufferData(GL_ARRAY_BUFFER, deadVertices.size() * sizeof(Vertex), &deadVertices[0], GL_STATIC_DRAW);
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, deadEBO);
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER, deadIndices.size() * sizeof(unsigned int), &deadIndices[0], GL_STATIC_DRAW);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)0); glEnableVertexAttribArray(0);
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, normal)); glEnableVertexAttribArray(1);
+        glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, texCoords)); glEnableVertexAttribArray(2);
+        glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, elementScalar)); glEnableVertexAttribArray(3);
+        glBindVertexArray(VAO);
+    }
     needsUpdate = false;
+}
+
+// new_TODO_03: build the dead-element render geometry. Each dead element emits
+// its 4 triangular faces with DUPLICATED vertices, so every triangle carries a
+// single flat per-element value (selected by fractureViewMode) in elementScalar
+// — adjacent dead elements never blend colours. Positions are read from the
+// already-deformed volumetricVertices so the dead shells line up with the body.
+void FEAModel::rebuildDeadElementBuffers() {
+    deadVertices.clear();
+    deadIndices.clear();
+    deadScalarMin = 0.0f;
+    deadScalarMax = 1.0f;
+
+    if (elementFailureMode.empty() || tetrahedra.empty() || volumetricVertices.empty())
+        return;
+
+    const int nElems = static_cast<int>(tetrahedra.size() / 4);
+    // Per-element value selector for the current view mode.
+    auto selValue = [this](int el) -> float {
+        switch (fractureViewMode) {
+            case 4: { int it = (el < (int)elementFailureIter.size()) ? elementFailureIter[el] : -1;
+                      return it < 0 ? 0.0f : static_cast<float>(it); }
+            case 5: return (el < (int)elementVonMisesAtDeath.size()) ? elementVonMisesAtDeath[el] : 0.0f;
+            case 3:
+            default: return (el < (int)elementFailureMode.size()) ? static_cast<float>(elementFailureMode[el]) : 0.0f;
+        }
+    };
+
+    // Colour range for the heatmap modes (4 = crack order, 5 = stress).
+    float vmax = 0.0f, itmax = 0.0f;
+    for (int el = 0; el < nElems; ++el) {
+        if (el < (int)elementAlive.size() && elementAlive[el]) continue; // only dead
+        if (el < (int)elementVonMisesAtDeath.size()) vmax = std::max(vmax, elementVonMisesAtDeath[el]);
+        if (el < (int)elementFailureIter.size() && elementFailureIter[el] >= 0)
+            itmax = std::max(itmax, static_cast<float>(elementFailureIter[el]));
+    }
+    if (fractureViewMode == 4) { deadScalarMin = 0.0f; deadScalarMax = std::max(itmax, 1.0f); }
+    else if (fractureViewMode == 5) { deadScalarMin = 0.0f; deadScalarMax = std::max(vmax, 1.0f); }
+
+    // 4 faces per tet (corner-node winding); same table used by the surface rebuild.
+    static const int kFaces[4][3] = {{1,2,3},{0,3,2},{0,1,3},{0,2,1}};
+    for (int el = 0; el < nElems; ++el) {
+        if (el < (int)elementAlive.size() && elementAlive[el]) continue; // skip alive
+        float ev = selValue(el);
+        unsigned int n[4];
+        for (int i = 0; i < 4; ++i) n[i] = tetrahedra[el * 4 + i];
+        for (int f = 0; f < 4; ++f) {
+            glm::vec3 p0 = volumetricVertices[n[kFaces[f][0]]].position;
+            glm::vec3 p1 = volumetricVertices[n[kFaces[f][1]]].position;
+            glm::vec3 p2 = volumetricVertices[n[kFaces[f][2]]].position;
+            glm::vec3 nrm = glm::cross(p1 - p0, p2 - p0);
+            float len = glm::length(nrm);
+            nrm = (len > 1e-12f) ? nrm / len : glm::vec3(0.0f, 0.0f, 1.0f);
+            unsigned int base = static_cast<unsigned int>(deadVertices.size());
+            Vertex v0{p0, nrm, glm::vec2(0.0f), ev};
+            Vertex v1{p1, nrm, glm::vec2(0.0f), ev};
+            Vertex v2{p2, nrm, glm::vec2(0.0f), ev};
+            deadVertices.push_back(v0);
+            deadVertices.push_back(v1);
+            deadVertices.push_back(v2);
+            deadIndices.push_back(base + 0);
+            deadIndices.push_back(base + 1);
+            deadIndices.push_back(base + 2);
+        }
+    }
 }
 
 void FEAModel::generateCube() {
@@ -142,6 +225,7 @@ void FEAModel::generateCube() {
     surfaceIndices = indices;
     bboxVolume = params.sizeX * params.sizeY * params.sizeZ;
     if (bboxVolume < 0.0001f) bboxVolume = 1.0f;
+    importScale = 1.0f; // preset cube is authored in model units (no rescale)
     volumetricVertices.clear();
     volumetricIndices.clear();
     tetrahedra.clear();
@@ -402,6 +486,7 @@ bool FEAModel::processRawGeometry(LoadedGeometry& geo, const std::string& format
 
         for (auto& v : vertices) v.position = (v.position - center) * scale;
         bboxVolume *= (scale * scale * scale);
+        importScale = scale; // new_TODO_04: print-unit -> model-unit factor for slicer
     }
 
     // -----------------------------------------------------------------------
@@ -451,6 +536,7 @@ void FEAModel::draw(BuiltInShader& shader, glm::vec3 viewPos) {
     shader.use();
     shader.setMat4("model", glm::mat4(1.0f));
     shader.setVec3("viewPos", viewPos);
+    shader.setFloat("fragAlpha", 1.0f);   // new_TODO_03: opaque unless ghost pass overrides
     int scalarMode = getActiveScalarMode();
     shader.setInt("scalarMode", scalarMode);
     shader.setFloat("scalarMin", getActiveScalarMin());
@@ -469,6 +555,29 @@ void FEAModel::draw(BuiltInShader& shader, glm::vec3 viewPos) {
         glDrawElements(GL_TRIANGLES, static_cast<unsigned int>(indices.size()), GL_UNSIGNED_INT, 0);
     }
 
+    // new_TODO_03: second pass — draw the DEAD elements so the fracture pattern
+    // stays visible. HIDDEN skips it; GHOST draws translucent grey; COLORED draws
+    // them by the current fractureViewMode (mode / crack order / stress).
+    if (!elementFailureMode.empty() && fractureDeadView != DEAD_HIDDEN
+        && deadVAO != 0 && !deadIndices.empty()) {
+        glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+        glBindVertexArray(deadVAO);
+        if (fractureDeadView == DEAD_GHOST) {
+            shader.setInt("scalarMode", 0);
+            shader.setVec3("objectColor", 0.55f, 0.55f, 0.55f);
+            shader.setFloat("fragAlpha", 0.30f);
+        } else { // DEAD_COLORED
+            // DEFORM(1) has no per-element source -> show failure mode instead.
+            int deadMode = (fractureViewMode == 1) ? 3 : fractureViewMode;
+            shader.setInt("scalarMode", deadMode);
+            shader.setFloat("scalarMin", deadScalarMin);
+            shader.setFloat("scalarMax", deadScalarMax);
+            shader.setFloat("fragAlpha", 1.0f);
+        }
+        glDrawElements(GL_TRIANGLES, static_cast<unsigned int>(deadIndices.size()), GL_UNSIGNED_INT, 0);
+        shader.setFloat("fragAlpha", 1.0f);
+    }
+
     glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
     glBindVertexArray(0);
 }
@@ -484,14 +593,64 @@ void FEAModel::updateScalarFieldData() {
 
     size_t displacementCount = std::min(volumetricVertices.size(), nodalDisplacementMagnitudes.size());
     if (displacementCount > 0) {
-        displacementMin = nodalDisplacementMagnitudes[0];
-        displacementMax = nodalDisplacementMagnitudes[0];
-        for (size_t i = 0; i < displacementCount; ++i) {
-            float magnitude = nodalDisplacementMagnitudes[i];
-            volumetricVertices[i].texCoords.x = magnitude;
-            displacementMin = std::min(displacementMin, magnitude);
-            displacementMax = std::max(displacementMax, magnitude);
+        for (size_t i = 0; i < displacementCount; ++i)
+            volumetricVertices[i].texCoords.x = nodalDisplacementMagnitudes[i];
+
+        // new_TODO_03 §2a: after fracture, detached / near-singular nodes pick up
+        // enormous displacements that blow up the raw max and collapse the contour
+        // to flat blue. When fracture state is active, base the colour range on the
+        // 1st/99th PERCENTILE over only the nodes that still belong to >=1 alive
+        // element. Otherwise keep the simple raw min/max.
+        const bool fractureActive = !elementAlive.empty() && !tetrahedra.empty();
+        if (fractureActive) {
+            std::vector<uint8_t> nodeAlive(displacementCount, 0);
+            const bool useQuad = hasQuadraticMesh && !tetrahedraQuadratic.empty();
+            const int nodesPerEl = useQuad ? 10 : 4;
+            const std::vector<unsigned int>& conn = useQuad ? tetrahedraQuadratic : tetrahedra;
+            const int nElems = static_cast<int>(conn.size() / nodesPerEl);
+            for (int el = 0; el < nElems; ++el) {
+                if (el < static_cast<int>(elementAlive.size()) && !elementAlive[el]) continue;
+                for (int k = 0; k < nodesPerEl; ++k) {
+                    unsigned int nid = conn[static_cast<size_t>(el) * nodesPerEl + k];
+                    if (nid < nodeAlive.size()) nodeAlive[nid] = 1;
+                }
+            }
+            std::vector<float> mags;
+            mags.reserve(displacementCount);
+            for (size_t i = 0; i < displacementCount; ++i)
+                if (nodeAlive[i]) mags.push_back(nodalDisplacementMagnitudes[i]);
+
+            if (mags.empty()) {            // nothing alive -> fall back to raw range
+                displacementMin = nodalDisplacementMagnitudes[0];
+                displacementMax = nodalDisplacementMagnitudes[0];
+                for (size_t i = 0; i < displacementCount; ++i) {
+                    displacementMin = std::min(displacementMin, nodalDisplacementMagnitudes[i]);
+                    displacementMax = std::max(displacementMax, nodalDisplacementMagnitudes[i]);
+                }
+            } else {
+                auto pctl = [&mags](double p) {
+                    size_t n = mags.size();
+                    size_t k = static_cast<size_t>(p * (n - 1) + 0.5);
+                    if (k >= n) k = n - 1;
+                    std::nth_element(mags.begin(), mags.begin() + k, mags.end());
+                    return mags[k];
+                };
+                displacementMin = pctl(0.01);
+                displacementMax = pctl(0.99);
+            }
+        } else {
+            displacementMin = nodalDisplacementMagnitudes[0];
+            displacementMax = nodalDisplacementMagnitudes[0];
+            for (size_t i = 0; i < displacementCount; ++i) {
+                float magnitude = nodalDisplacementMagnitudes[i];
+                displacementMin = std::min(displacementMin, magnitude);
+                displacementMax = std::max(displacementMax, magnitude);
+            }
         }
+        // Percentile guard: avoid a zero-width range (shader already clamps, but
+        // keep the legend honest).
+        if (displacementMax <= displacementMin)
+            displacementMax = displacementMin + 1e-6f;
     }
 
     size_t forceCount = std::min(volumetricVertices.size(), nodalForceMagnitudes.size());
@@ -520,6 +679,14 @@ void FEAModel::updateBounds() {
 
 int FEAModel::getActiveScalarMode() const {
     if (showVolumetricMesh && hasVolumetricMesh) {
+        // new_TODO_03: with fracture results present, the ALIVE body is coloured
+        // by displacement only in the DEFORM view; for MODE / CRACK ORDER / STRESS
+        // it goes grey so the colour-coded dead elements (second pass) read clearly.
+        if (!elementFailureMode.empty()) {
+            if (fractureViewMode == 1 && hasDeformation && !nodalDisplacementMagnitudes.empty())
+                return 1;
+            return 0;
+        }
         if (showAppliedForceField && !nodalForceMagnitudes.empty() && appliedForceMax > 0.0f) return 2;
         if (hasDeformation && !nodalDisplacementMagnitudes.empty()) return 1;
     }
@@ -857,4 +1024,72 @@ void FEAModel::generateMidEdgeNodes()
     std::cout << "Tet10: generated " << edgeToMidNode.size()
               << " mid-edge nodes (" << originalVolumetricPositions.size()
               << " total nodes, " << nElems << " quadratic elements)." << std::endl;
+}
+
+// =============================================================================
+// new_TODO_04: layered-FDM slice data model + 2-D section preview.
+// These methods take only glm/std types so LayerSlicer.h (and OCC) never leak
+// into FEAModel.h. The slicer free functions live in src/LayerSlicer.cpp.
+// =============================================================================
+
+// Populate the FE-facing LayerStack. `slabBoundaryCoords` is ascending and has
+// nSlabs+1 entries (slab boundaries along the build axis). Per-tet fields
+// (elemSlabIndex / elemRegion) are filled later by new_TODO_05.
+void FEAModel::setLayerStack(int buildAxis, float physicalLayerThickness,
+                             int layersPerSlab,
+                             const std::vector<float>& slabBoundaryCoords) {
+    if (!layers) layers = std::make_unique<LayerStack>();
+    layers->buildAxis             = buildAxis;
+    layers->physicalLayerThickness = physicalLayerThickness;
+    layers->layersPerSlab         = layersPerSlab;
+    layers->planeCoords           = slabBoundaryCoords;
+    layers->elemSlabIndex.clear();
+    layers->elemRegion.clear();
+    std::cout << "[SLICE] LayerStack: axis=" << buildAxis
+              << " physThick=" << physicalLayerThickness
+              << " k=" << layersPerSlab
+              << " nSlabs=" << layers->nSlabs() << std::endl;
+}
+
+// Rebuild the preview line buffer from already-projected 3-D segment endpoints
+// (consecutive pairs = one GL line). A dedicated VAO/VBO keeps the model buffers
+// untouched. Empty input clears the preview.
+void FEAModel::buildSlicePreview(const std::vector<glm::vec3>& segmentEndpoints) {
+    sliceLineVertexCount = static_cast<int>(segmentEndpoints.size());
+    if (segmentEndpoints.empty()) return;
+
+    // Fixed normal (build-plane facing) so the shader's lighting term is finite
+    // when these lines render with scalarMode 0 (normalize(0) would be NaN).
+    std::vector<Vertex> verts;
+    verts.reserve(segmentEndpoints.size());
+    for (const glm::vec3& p : segmentEndpoints)
+        verts.push_back({ p, glm::vec3(0.0f, 0.0f, 1.0f), glm::vec2(0.0f), 0.0f });
+
+    if (sliceVAO == 0) { glGenVertexArrays(1, &sliceVAO); glGenBuffers(1, &sliceVBO); }
+    glBindVertexArray(sliceVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, sliceVBO);
+    glBufferData(GL_ARRAY_BUFFER, verts.size() * sizeof(Vertex), &verts[0], GL_DYNAMIC_DRAW);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)0); glEnableVertexAttribArray(0);
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, normal)); glEnableVertexAttribArray(1);
+    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, texCoords)); glEnableVertexAttribArray(2);
+    glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, elementScalar)); glEnableVertexAttribArray(3);
+    glBindVertexArray(0);
+}
+
+// Draw the preview overlay. No-op unless showSlicePreview and a buffer exist.
+// Reuses the model shader (projection/view already set by the caller); draws the
+// section polygons as bright GL_LINES at their plane height.
+void FEAModel::drawSlicePreview(BuiltInShader& shader) {
+    if (!showSlicePreview || sliceVAO == 0 || sliceLineVertexCount <= 0) return;
+    shader.use();
+    shader.setMat4("model", glm::mat4(1.0f));
+    shader.setInt("scalarMode", 0);
+    shader.setFloat("fragAlpha", 1.0f);
+    shader.setVec3("objectColor", 1.0f, 0.45f, 0.05f); // bright orange contour
+    glDisable(GL_DEPTH_TEST);   // overlay so the section reads over the body
+    glLineWidth(2.5f);
+    glBindVertexArray(sliceVAO);
+    glDrawArrays(GL_LINES, 0, sliceLineVertexCount);
+    glBindVertexArray(0);
+    glEnable(GL_DEPTH_TEST);
 }

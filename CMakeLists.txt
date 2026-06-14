@@ -145,6 +145,37 @@ if(NOT miniz_POPULATED)
 endif()
 # miniz_SOURCE_DIR is now set; add include path and .c to SOURCES below.
 
+# --- Clipper2 (optional): robust 2-D polygon boolean + cleanup for slicing ---
+# new_TODO_04: LayerSlicer uses Clipper2 Union(EvenOdd)+SimplifyPaths as a
+# robustness backstop when stitching slice-plane contours from dirty STL. It is
+# OPTIONAL — LayerSlicer.cpp has a raw-loop fallback guarded by HAS_CLIPPER2, so
+# a failed/disabled fetch degrades gracefully (clean meshes still slice).
+# Populated like miniz (raw sources compiled into the exe; no add_subdirectory).
+option(USE_CLIPPER2 "Enable Clipper2 polygon cleanup for slicing" ON)
+set(HAS_CLIPPER2 FALSE)
+if(USE_CLIPPER2)
+  FetchContent_Declare(
+    clipper2
+    GIT_REPOSITORY https://github.com/AngusJohnson/Clipper2.git
+    GIT_TAG        Clipper2_1.4.0
+  )
+  FetchContent_GetProperties(clipper2)
+  if(NOT clipper2_POPULATED)
+    FetchContent_Populate(clipper2)
+  endif()
+  if(EXISTS "${clipper2_SOURCE_DIR}/CPP/Clipper2Lib/include/clipper2/clipper.h")
+    set(HAS_CLIPPER2 TRUE)
+    set(CLIPPER2_INCLUDE_DIR "${clipper2_SOURCE_DIR}/CPP/Clipper2Lib/include")
+    set(CLIPPER2_SOURCES
+      "${clipper2_SOURCE_DIR}/CPP/Clipper2Lib/src/clipper.engine.cpp"
+      "${clipper2_SOURCE_DIR}/CPP/Clipper2Lib/src/clipper.offset.cpp"
+      "${clipper2_SOURCE_DIR}/CPP/Clipper2Lib/src/clipper.rectclip.cpp")
+    message(STATUS "Clipper2 enabled: ${clipper2_SOURCE_DIR}")
+  else()
+    message(WARNING "Clipper2 sources not found after fetch; slicing uses raw-loop fallback.")
+  endif()
+endif()
+
 # --- Include directories ---
 include_directories(
     ${CMAKE_SOURCE_DIR}/include        # glad, GLFW, KHR, stb_image headers
@@ -171,6 +202,9 @@ set(SOURCES
     src/FEASolver.cpp
     src/MeshQuality.cpp
     src/Tet10Element.cpp
+    # new_TODO_04: layered-FDM slice data model + contour extraction
+    src/LayerSlicer.cpp
+    src/StepSlicer.cpp        # B-rep section seam (OCC body deferred to 04B)
     # new_TODO_02: headless agent self-test harness
     src/ScenarioRunner.cpp
     src/glad.c
@@ -187,6 +221,8 @@ set(SOURCES
     ${miniz_SOURCE_DIR}/miniz_tdef.c
     ${miniz_SOURCE_DIR}/miniz_tinfl.c
     ${miniz_SOURCE_DIR}/miniz_zip.c
+    # Clipper2 raw sources (empty when USE_CLIPPER2=OFF or fetch failed)
+    ${CLIPPER2_SOURCES}
 )
 
 add_subdirectory(ext/meshoptimizer)
@@ -212,6 +248,12 @@ endif()
 
 # --- Create executable (C/C++ only; CUDA linked via FEACudaKernels) ---
 add_executable(${PROJECT_NAME} ${SOURCES})
+
+# --- Clipper2 (new_TODO_04): include path + HAS_CLIPPER2 only when populated ---
+if(HAS_CLIPPER2)
+    target_include_directories(${PROJECT_NAME} PRIVATE ${CLIPPER2_INCLUDE_DIR})
+    target_compile_definitions(${PROJECT_NAME} PRIVATE HAS_CLIPPER2=1)
+endif()
 
 # --- Link libraries ---
 find_package(OpenMP REQUIRED)

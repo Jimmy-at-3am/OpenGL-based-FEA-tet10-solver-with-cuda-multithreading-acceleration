@@ -20,6 +20,7 @@
 #include "FEAModel.h"
 #include "FEASolver.h"
 #include "MeshQuality.h"
+#include "LayerSlicer.h"   // new_TODO_04: SLICE stage (same free fns as the UI)
 #include "tetgen.h"
 #include "../ext/json/json.hpp"
 
@@ -35,6 +36,7 @@
 #include <string>
 #include <unordered_set>
 #include <algorithm>
+#include <climits>
 #include <ctime>
 
 namespace fs = std::filesystem;
@@ -181,6 +183,7 @@ ShotStats captureScreenshot(GLFWwindow* window, FEAModel& model,
     shader.setMat4("projection", projection);
     shader.setMat4("view", view);
     model.draw(shader, eye); // [same-path: render loop model.draw]
+    model.drawSlicePreview(shader); // [same-path: render loop drawSlicePreview]
 
     glFinish();
 
@@ -358,7 +361,7 @@ public:
             throw RunError("unsupported scenario schema version (need v=1)");
 
         checkKeys(sc, {"v", "geometry", "material", "fdm", "mesh", "loads",
-                       "constraints", "solve", "probes", "screenshots",
+                       "constraints", "solve", "slice", "probes", "screenshots",
                        "asserts"}, "scenario");
 
         // ---- echo the resolved scenario -------------------------------
@@ -377,28 +380,35 @@ public:
                 throw RunError("cannot open material file '" + mv->str + "'");
         }
 
-        // ---- mesh -----------------------------------------------------
-        if (const Value* mev = sc.find("mesh")) {
-            checkKeys(*mev, {"maxVolume", "quality"}, "mesh");
-            if (const Value* q = mev->find("quality"))
-                m_model.params.tetRadiusEdge = static_cast<float>(num(*q, "mesh.quality"));
-            if (const Value* mv = mev->find("maxVolume")) {
-                double absV = num(*mv, "mesh.maxVolume");
-                double bbox = std::max(1e-9, double(m_model.bboxVolume));
-                m_model.params.maxVolPercent = static_cast<float>(100.0 * absV / bbox);
+        // ---- mesh + solve (skipped for slice-only runs) ---------------
+        // new_TODO_04: "solve" is now optional. A scenario may carry only a
+        // "slice" block (contour extraction needs just the surface mesh), so
+        // meshing + solving run only when "solve" is present.
+        if (const Value* solveV = sc.find("solve")) {
+            if (const Value* mev = sc.find("mesh")) {
+                checkKeys(*mev, {"maxVolume", "quality"}, "mesh");
+                if (const Value* q = mev->find("quality"))
+                    m_model.params.tetRadiusEdge = static_cast<float>(num(*q, "mesh.quality"));
+                if (const Value* mv = mev->find("maxVolume")) {
+                    double absV = num(*mv, "mesh.maxVolume");
+                    double bbox = std::max(1e-9, double(m_model.bboxVolume));
+                    m_model.params.maxVolPercent = static_cast<float>(100.0 * absV / bbox);
+                }
             }
+            if (!m_model.generateVolumetricMesh()) // [same-path: GENERATE 3D MESH]
+                throw RunError("volumetric meshing failed (see console)");
+
+            // mesh stats captured on the clean Tet4 mesh, before any Tet10 promotion.
+            report.set("mesh", meshStats(m_model));
+
+            checkKeys(*solveV, {"kind", "maxIter", "gpu", "fdmAnisotropy", "buildAxis"},
+                      "solve");
+            runSolve(sc, *solveV, mat, report);
         }
-        if (!m_model.generateVolumetricMesh()) // [same-path: GENERATE 3D MESH]
-            throw RunError("volumetric meshing failed (see console)");
 
-        // mesh stats captured on the clean Tet4 mesh, before any Tet10 promotion.
-        report.set("mesh", meshStats(m_model));
-
-        // ---- solve ----------------------------------------------------
-        const Value& solve = *req(sc, "solve", "scenario");
-        checkKeys(solve, {"kind", "maxIter", "gpu", "fdmAnisotropy", "buildAxis"},
-                  "solve");
-        runSolve(sc, solve, mat, report);
+        // ---- slice (new_TODO_04; runs on the surface mesh) ------------
+        if (const Value* sliceV = sc.find("slice"))
+            report.set("slice", runSlice(*sliceV));
 
         // ---- probes ---------------------------------------------------
         report.set("probes", evalProbes(sc));
@@ -415,6 +425,7 @@ private:
     std::string m_shotsDir;
     FEAModel    m_model;            // ctor needs a live GL context (provided by caller)
     BuiltInShader m_shader{modelVS, modelFS};
+    LayerSlicer::SliceResult m_slice; // new_TODO_04: cached for the screenshot preview
 
     void applyGeometry(const Value& geom) {
         if (const Value* preset = geom.find("preset")) {
@@ -561,6 +572,119 @@ private:
         return f;
     }
 
+    // -----------------------------------------------------------------------
+    // new_TODO_04: SLICE stage. Maps the scenario's "slice" block onto the same
+    // FEAParams the UI sliders write, then calls the EXACT free functions the
+    // SLICE PREVIEW button calls (LayerSlicer::computeSlices + model.setLayerStack
+    // + model.buildSlicePreview). Returns the slice report object.
+    // -----------------------------------------------------------------------
+    Value runSlice(const Value& slice) {
+        checkKeys(slice, {"layerThickness", "buildAxis", "maxSlabs", "wallCount",
+                          "wallWidth", "infillPattern", "infillDensity"}, "slice");
+        FEAParams& p = m_model.params;       // [same-path: SLICE sliders write FEAParams]
+        p.enableLayerSlicing = true;
+        if (const Value* v = slice.find("layerThickness")) p.layerThickness = static_cast<float>(num(*v, "slice.layerThickness"));
+        if (const Value* v = slice.find("buildAxis"))      p.buildAxisSel   = static_cast<int>(num(*v, "slice.buildAxis"));
+        if (const Value* v = slice.find("maxSlabs"))       p.maxSlabs       = static_cast<int>(num(*v, "slice.maxSlabs"));
+        if (const Value* v = slice.find("wallCount"))      p.wallCount      = static_cast<int>(num(*v, "slice.wallCount"));
+        if (const Value* v = slice.find("wallWidth"))      p.wallWidth      = static_cast<float>(num(*v, "slice.wallWidth"));
+        if (const Value* v = slice.find("infillPattern"))  p.infillPattern  = static_cast<int>(num(*v, "slice.infillPattern"));
+        if (const Value* v = slice.find("infillDensity"))  p.infillDensity  = static_cast<float>(num(*v, "slice.infillDensity"));
+
+        LayerSlicer::SliceGrouping grp;
+        std::vector<LayerSlicer::PlaneStats> stats;
+        const BRepHandle* brep = m_model.hasBRep() ? m_model.brep.get() : nullptr;
+        // [same-path: SLICE PREVIEW button -> LayerSlicer::computeSlices]
+        m_slice = LayerSlicer::computeSlices(
+            m_model.surfaceVertices, m_model.surfaceIndices,
+            m_model.currentMinBounds, m_model.currentMaxBounds,
+            p, m_model.importScale, brep, grp, stats);
+
+        // [same-path: SLICE -> model.setLayerStack] publish the FE-facing slabs.
+        m_model.setLayerStack(LayerSlicer::axisFromParams(p),
+                              grp.physicalLayerThickness, grp.layersPerSlab,
+                              grp.slabBoundaries);
+
+        // Pre-build the mid-layer preview so a screenshot with no explicit
+        // sliceLayer still shows a section. [same-path: model.buildSlicePreview]
+        if (!m_slice.sections.empty()) {
+            int mid = static_cast<int>(m_slice.sections.size()) / 2;
+            auto segs = LayerSlicer::sectionToSegments(m_slice.sections[mid],
+                                                       m_slice.buildAxis,
+                                                       m_slice.planeCoords[mid]);
+            m_model.buildSlicePreview(segs);
+            m_model.showSlicePreview = true;
+        }
+        return sliceReport(grp, stats);
+    }
+
+    Value sliceReport(const LayerSlicer::SliceGrouping& grp,
+                      const std::vector<LayerSlicer::PlaneStats>& stats) {
+        Value s = Value::makeObject();
+
+        // grouping = {nPhysical, k, nSlabs} (+ thicknesses) — see spec schema.
+        Value g = Value::makeObject();
+        g.set("nPhysical", Value(grp.nPhysical));
+        g.set("k", Value(grp.layersPerSlab));
+        g.set("nSlabs", Value(grp.nSlabs));
+        g.set("physThick", Value(static_cast<double>(grp.physicalLayerThickness)));
+        g.set("slabThick", Value(static_cast<double>(grp.slabThickness)));
+        s.set("grouping", g);
+
+        // summary = scalar aggregates over all planes. resolvePath navigates
+        // objects only (arrays are not indexable), so per-plane asserts ("every
+        // plane loops==1") are expressed as min/max scalars here.
+        int    nP = static_cast<int>(stats.size());
+        int    minLoops = INT_MAX, maxLoops = 0;
+        int    minHoles = INT_MAX, maxHoles = 0;
+        int    maxDisc  = 0; long long totalDisc = 0;
+        double minNet = 1e300, maxNet = -1e300;
+        double totalOuter = 0.0, totalHole = 0.0;
+        for (const auto& ps : stats) {
+            minLoops = std::min(minLoops, ps.loops); maxLoops = std::max(maxLoops, ps.loops);
+            minHoles = std::min(minHoles, ps.holes); maxHoles = std::max(maxHoles, ps.holes);
+            maxDisc  = std::max(maxDisc, ps.discardedChains); totalDisc += ps.discardedChains;
+            minNet = std::min(minNet, ps.netArea); maxNet = std::max(maxNet, ps.netArea);
+            totalOuter += ps.outerArea; totalHole += ps.holeArea;
+        }
+        if (nP == 0) { minLoops = maxLoops = minHoles = maxHoles = 0; minNet = maxNet = 0.0; }
+
+        Value sum = Value::makeObject();
+        sum.set("nPlanes", Value(nP));
+        sum.set("minLoops", Value(minLoops));
+        sum.set("maxLoops", Value(maxLoops));
+        sum.set("minHoles", Value(minHoles));
+        sum.set("maxHoles", Value(maxHoles));
+        sum.set("maxDiscardedChains", Value(maxDisc));
+        sum.set("totalDiscardedChains", Value(totalDisc));
+        sum.set("minNetArea", Value(minNet));
+        sum.set("maxNetArea", Value(maxNet));
+        sum.set("totalOuterArea", Value(totalOuter));
+        sum.set("totalHoleArea", Value(totalHole));
+        double holeFrac = (totalOuter > 1e-12) ? (totalHole / totalOuter) : 0.0;
+        sum.set("holeAreaFraction", Value(holeFrac));
+        sum.set("netAreaFraction", Value((totalOuter > 1e-12)
+                                         ? (totalOuter - totalHole) / totalOuter : 0.0));
+        s.set("summary", sum);
+
+        // planes[] = {z, loops, holes, area, discardedChains} (informational;
+        // matches the spec schema; not assertable via resolvePath).
+        Value planes = Value::makeArray();
+        for (const auto& ps : stats) {
+            Value pv = Value::makeObject();
+            pv.set("z", Value(static_cast<double>(ps.z)));
+            pv.set("loops", Value(ps.loops));
+            pv.set("holes", Value(ps.holes));
+            pv.set("area", Value(ps.netArea));
+            pv.set("outerArea", Value(ps.outerArea));
+            pv.set("holeArea", Value(ps.holeArea));
+            pv.set("discardedChains", Value(ps.discardedChains));
+            planes.push(pv);
+        }
+        s.set("planes", planes);
+        return s;
+    }
+
     Value evalProbes(const Value& sc) {
         Value out = Value::makeObject();
         const Value* probes = sc.find("probes");
@@ -614,20 +738,44 @@ private:
         showWireframe = true;
 
         for (const auto& s : shots->arr) {
-            checkKeys(s, {"name", "camera", "scalarMode", "deformScale"}, "screenshots[]");
+            checkKeys(s, {"name", "camera", "scalarMode", "deformScale", "deadView", "sliceLayer"}, "screenshots[]");
             std::string name = s.find("name") ? s.find("name")->asString() : "shot";
             std::string cam  = s.find("camera") ? s.find("camera")->asString() : "iso";
             int scalarMode = 1;
             if (const Value* sm = s.find("scalarMode")) scalarMode = static_cast<int>(sm->asNumber());
             double deformScale = 1.0;
             if (const Value* ds = s.find("deformScale")) deformScale = ds->asNumber();
+            // new_TODO_03: optional dead-element view for fracture results.
+            std::string deadView = "hidden";
+            if (const Value* dv = s.find("deadView")) deadView = dv->asString();
 
             // Drive the existing scalar/deformation toggles, then rebuild buffers
-            // exactly as the UI does after toggling SHOWING/FORCE MAP.
+            // exactly as the UI does after toggling SHOWING/FORCE MAP/FRACTURE VIEW.
             m_model.showVolumetricMesh    = m_model.hasVolumetricMesh;
             m_model.showDeformedMesh      = (deformScale != 0.0);
             m_model.showAppliedForceField = (scalarMode == 2);
+            // new_TODO_03: scalarMode 1/3/4/5 select the fracture view (same-path
+            // as the UI "FRACTURE VIEW" button); deadView mirrors "DEAD ELEMS".
+            if (scalarMode == 1 || scalarMode == 3 || scalarMode == 4 || scalarMode == 5)
+                m_model.fractureViewMode = scalarMode;
+            m_model.fractureDeadView =
+                (deadView == "colored" || deadView == "coloured") ? FEAModel::DEAD_COLORED :
+                (deadView == "ghost")                              ? FEAModel::DEAD_GHOST  :
+                                                                     FEAModel::DEAD_HIDDEN;
             m_model.buildBuffers();
+
+            // new_TODO_04: rebuild the section preview for this shot's layer so a
+            // 3-shot scenario can show the polygon tracking the plane height.
+            // [same-path: layer slider -> sectionToSegments + buildSlicePreview]
+            if (!m_slice.sections.empty() && s.find("sliceLayer")) {
+                int li = static_cast<int>(s.find("sliceLayer")->asNumber());
+                li = std::max(0, std::min(li, static_cast<int>(m_slice.sections.size()) - 1));
+                auto segs = LayerSlicer::sectionToSegments(m_slice.sections[li],
+                                                           m_slice.buildAxis,
+                                                           m_slice.planeCoords[li]);
+                m_model.buildSlicePreview(segs);
+                m_model.showSlicePreview = true;
+            }
 
             std::string file = (fs::path(m_shotsDir) / (name + ".png")).string();
             ShotStats st;

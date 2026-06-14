@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "geometry": { "preset": "box", "size": [1.0, 1.0, 1.0] },
+  "slice": { "layerThickness": 0.01, "buildAxis": 2, "maxSlabs": 40 },
+  "screenshots": [
+    { "name": "slice_mid_z", "camera": "iso", "sliceLayer": 17 }
+  ],
+  "asserts": [
+    { "path": "slice.grouping.nPhysical", "op": "==", "value": 100 },
+    { "path": "slice.grouping.k", "op": "==", "value": 3 },
+    { "path": "slice.grouping.nSlabs", "op": "==", "value": 34 },
+    { "path": "slice.summary.nPlanes", "op": "==", "value": 34 },
+    { "path": "slice.summary.minLoops", "op": "==", "value": 1 },
+    { "path": "slice.summary.maxLoops", "op": "==", "value": 1 },
+    { "path": "slice.summary.minHoles", "op": "==", "value": 0 },
+    { "path": "slice.summary.maxHoles", "op": "==", "value": 0 },
+    { "path": "slice.summary.maxDiscardedChains", "op": "==", "value": 0 },
+    { "path": "slice.summary.minNetArea", "op": "~=", "value": 1.0, "rel": 0.02 },
+    { "path": "slice.summary.maxNetArea", "op": "~=", "value": 1.0, "rel": 0.02 },
+    { "path": "screenshots.slice_mid_z.stdRGBmax", "op": ">", "value": 0.0 }
+  ]
+}

@@ -12,6 +12,7 @@
 #include "SimpleUI.h"
 #include "FEAModel.h"
 #include "FEASolver.h"
+#include "LayerSlicer.h"   // new_TODO_04: SLICE controls call the same free fns
 #include "ScenarioRunner.h"
 
 #include <iostream>
@@ -240,6 +241,7 @@ int runInteractive() {
         schematicShader.setMat4("projection", projection);
         schematicShader.setMat4("view", view);
         model.draw(schematicShader, camera.Position);
+        model.drawSlicePreview(schematicShader); // new_TODO_04: section overlay
 
         glDisable(GL_DEPTH_TEST);
         float panelW = panelWidth; float panelX = scrWidth - panelW;
@@ -424,6 +426,73 @@ int runInteractive() {
         static float curvAngleThreshold = 15.0f;
         static float curvFracLimit = 0.25f;
 
+        // --- new_TODO_04: SLICE controls (shared by CUBE + IMPORT, handoff 5.4) ---
+        // The SLICE PREVIEW button calls the EXACT free functions the headless
+        // harness calls in ScenarioRunner::runSlice (LayerSlicer::computeSlices +
+        // model.setLayerStack + sectionToSegments + model.buildSlicePreview).
+        static LayerSlicer::SliceResult sliceResult; // UI-local cache (decoupled)
+        static int   slicePreviewLayer = 0;
+        static float sliceMaxSlabsF    = 40.0f;
+        auto rebuildSlicePreview = [&](int layer) {
+            int nL = static_cast<int>(sliceResult.sections.size());
+            if (nL == 0) { model.showSlicePreview = false; return; }
+            slicePreviewLayer = std::max(0, std::min(layer, nL - 1));
+            auto segs = LayerSlicer::sectionToSegments(
+                sliceResult.sections[slicePreviewLayer], sliceResult.buildAxis,
+                sliceResult.planeCoords[slicePreviewLayer]);
+            model.buildSlicePreview(segs);     // [same-path: harness buildSlicePreview]
+            model.showSlicePreview = true;
+        };
+        auto drawSliceControls = [&](float x, float& y, float w) {
+            ui.drawRect(x, y, w, 1.5f, glm::vec3(0.3f)); y += 10.0f;
+            std::string sl = model.params.enableLayerSlicing ? "SLICE: ON" : "SLICE: OFF";
+            if (ui.button(sl, x, y, w, 22.0f, model.params.enableLayerSlicing)) {
+                model.params.enableLayerSlicing = !model.params.enableLayerSlicing;
+                if (!model.params.enableLayerSlicing) model.showSlicePreview = false;
+            }
+            y += 28.0f;
+            if (!model.params.enableLayerSlicing) return;
+
+            ui.slider("LAYER THICK", model.params.layerThickness, 0.01f, 1.0f, x, y, w, 15.0f); y += 20.0f;
+            float bw = w / 3.0f - 3.0f;
+            if (ui.button("AXIS X", x, y, bw, 20.0f, model.params.buildAxisSel == 0)) model.params.buildAxisSel = 0;
+            if (ui.button("AXIS Y", x + bw + 4.0f, y, bw, 20.0f, model.params.buildAxisSel == 1)) model.params.buildAxisSel = 1;
+            if (ui.button("AXIS Z", x + 2.0f * (bw + 4.0f), y, bw, 20.0f, model.params.buildAxisSel == 2)) model.params.buildAxisSel = 2;
+            y += 26.0f;
+            ui.slider("MAX SLABS", sliceMaxSlabsF, 2.0f, 200.0f, x, y, w, 15.0f);
+            model.params.maxSlabs = static_cast<int>(sliceMaxSlabsF + 0.5f); y += 20.0f;
+            ui.slider("WALL WIDTH", model.params.wallWidth, 0.05f, 2.0f, x, y, w, 15.0f); y += 20.0f;
+
+            if (ui.button("SLICE PREVIEW", x, y, w, 28.0f)) {
+                LayerSlicer::SliceGrouping grp;
+                std::vector<LayerSlicer::PlaneStats> stats;
+                const BRepHandle* brep = model.hasBRep() ? model.brep.get() : nullptr;
+                // [same-path: harness LayerSlicer::computeSlices]
+                sliceResult = LayerSlicer::computeSlices(
+                    model.surfaceVertices, model.surfaceIndices,
+                    model.currentMinBounds, model.currentMaxBounds,
+                    model.params, model.importScale, brep, grp, stats);
+                // [same-path: harness model.setLayerStack]
+                model.setLayerStack(LayerSlicer::axisFromParams(model.params),
+                                    grp.physicalLayerThickness, grp.layersPerSlab,
+                                    grp.slabBoundaries);
+                rebuildSlicePreview(static_cast<int>(sliceResult.sections.size()) / 2);
+            }
+            y += 32.0f;
+
+            int nL = static_cast<int>(sliceResult.sections.size());
+            if (model.showSlicePreview && nL > 0) {
+                float layerF = static_cast<float>(slicePreviewLayer);
+                if (ui.slider("LAYER", layerF, 0.0f, static_cast<float>(nL - 1), x, y, w, 15.0f))
+                    rebuildSlicePreview(static_cast<int>(layerF + 0.5f));
+                y += 20.0f;
+                char sbuf[96];
+                snprintf(sbuf, sizeof(sbuf), "SLAB %d/%d  loops:%d", slicePreviewLayer + 1, nL,
+                         static_cast<int>(sliceResult.sections[slicePreviewLayer].size()));
+                ui.drawText(sbuf, x, y, 8.0f, glm::vec3(1.0f, 0.7f, 0.3f)); y += 16.0f;
+            }
+        };
+
         if (currentMode == MODE_CUBE) {
             if (ui.slider("X LENGTH (m)", model.params.sizeX, 0.1f, 10.0f, rX, rY, rW, 20.0f)) model.needsUpdate = true; rY += 40.0f;
             if (ui.slider("Y LENGTH (m)", model.params.sizeY, 0.1f, 5.0f, rX, rY, rW, 20.0f)) model.needsUpdate = true; rY += 40.0f;
@@ -436,6 +505,7 @@ int runInteractive() {
                 model.generateVolumetricMesh();
             }
             rY += 40.0f;
+            drawSliceControls(rX, rY, rW); // new_TODO_04: SLICE block (CUBE)
         }
         else if (currentMode == MODE_IMPORT) {
             std::string prLabel = model.params.enablePolarRemoval ? "VERTEX SMOOTHING: ON" : "VERTEX SMOOTHING: OFF";
@@ -637,6 +707,34 @@ int runInteractive() {
                 }
                 rY += 30.0f;
 
+                // new_TODO_03: fracture result controls (only when a fracture run
+                // has produced per-element failure data).
+                const bool hasFracture = !model.elementFailureMode.empty();
+                if (hasFracture) {
+                    const char* fvName =
+                        (model.fractureViewMode == 3) ? "MODE" :
+                        (model.fractureViewMode == 4) ? "CRACK ORDER" :
+                        (model.fractureViewMode == 5) ? "STRESS" : "DEFORM";
+                    std::string fvLabel = std::string("FRACTURE VIEW: ") + fvName;
+                    if (ui.button(fvLabel, rX, rY, rW, 25.0f, model.fractureViewMode != 1)) {
+                        model.fractureViewMode =
+                            (model.fractureViewMode == 1) ? 3 :
+                            (model.fractureViewMode == 3) ? 4 :
+                            (model.fractureViewMode == 4) ? 5 : 1;
+                        model.buildBuffers();
+                    }
+                    rY += 30.0f;
+
+                    const char* dvNames[3] = {"HIDDEN", "GHOST", "COLORED"};
+                    std::string dvLabel = std::string("DEAD ELEMS: ") + dvNames[(int)model.fractureDeadView];
+                    if (ui.button(dvLabel, rX, rY, rW, 25.0f, model.fractureDeadView != FEAModel::DEAD_HIDDEN)) {
+                        model.fractureDeadView =
+                            (FEAModel::FractureDeadView)(((int)model.fractureDeadView + 1) % 3);
+                        model.buildBuffers();
+                    }
+                    rY += 30.0f;
+                }
+
                 std::string forceMapLabel = model.showAppliedForceField ? "FORCE MAP: ON" : "FORCE MAP: OFF";
                 if (ui.button(forceMapLabel, rX, rY, rW, 25.0f, model.showAppliedForceField)) {
                     model.showAppliedForceField = !model.showAppliedForceField;
@@ -716,7 +814,43 @@ int runInteractive() {
                     snprintf(legendValue, sizeof(legendValue), "%.3f", scalarMin);
                     ui.drawText(legendValue, legendBarX - 72.0f, legendBarY + legendBarH - 6.0f, 7.8f, glm::vec3(0.9f));
                 }
+
+                // new_TODO_03: fracture legends for the per-element views. The
+                // categorical legend mirrors the shader's categoricalColor() exactly.
+                if (hasFracture && model.fractureDeadView == FEAModel::DEAD_COLORED) {
+                    if (model.fractureViewMode == 3 || model.fractureViewMode == 1) {
+                        ui.drawText("FAILURE MODE", rX, rY, 8.5f, glm::vec3(0.65f, 0.85f, 1.0f));
+                        rY += 16.0f;
+                        struct LegItem { glm::vec3 c; const char* t; };
+                        const LegItem items[3] = {
+                            { glm::vec3(0.85f, 0.05f, 0.05f), "INTERLAYER TENSION" },
+                            { glm::vec3(1.00f, 0.55f, 0.00f), "INTERLAYER SHEAR" },
+                            { glm::vec3(1.00f, 0.92f, 0.10f), "INTRALAYER" } };
+                        for (int i = 0; i < 3; ++i) {
+                            ui.drawRect(rX, rY, 16.0f, 12.0f, items[i].c);
+                            ui.drawText(items[i].t, rX + 22.0f, rY + 2.0f, 7.8f, glm::vec3(0.9f));
+                            rY += 16.0f;
+                        }
+                    } else if (model.fractureViewMode == 4 || model.fractureViewMode == 5) {
+                        const char* title = (model.fractureViewMode == 4)
+                            ? "CRACK ORDER (iter)" : "STRESS AT DEATH (Pa)";
+                        ui.drawText(title, rX, rY, 8.5f, glm::vec3(0.65f, 0.85f, 1.0f));
+                        rY += 16.0f;
+                        float barW = rW - 12.0f, barH = 14.0f;
+                        for (int i = 0; i < 48; ++i) {
+                            float t = (float)i / 48.0f;
+                            ui.drawRect(rX + barW * t, rY, barW / 48.0f + 1.0f, barH, contourColor(t));
+                        }
+                        rY += barH + 4.0f;
+                        char buf[80];
+                        snprintf(buf, sizeof(buf), "%.3g  ..  %.3g",
+                                 model.deadScalarMin, model.deadScalarMax);
+                        ui.drawText(buf, rX, rY, 7.8f, glm::vec3(0.9f));
+                        rY += 16.0f;
+                    }
+                }
             }
+            drawSliceControls(rX, rY, rW); // new_TODO_04: SLICE block (IMPORT)
         }
 
         static bool showReadme = false;

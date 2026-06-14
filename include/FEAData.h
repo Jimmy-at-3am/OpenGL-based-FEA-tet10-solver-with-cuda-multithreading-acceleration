@@ -1,7 +1,13 @@
 #pragma once
 #include <glm/glm.hpp>
 
-struct Vertex { glm::vec3 position; glm::vec3 normal; glm::vec2 texCoords; };
+// texCoords.x = per-vertex displacement magnitude (scalarMode 1)
+// texCoords.y = per-vertex applied-force magnitude (scalarMode 2)
+// elementScalar = per-ELEMENT value (flat, no interpolation) used by the
+//   fracture views: scalarMode 3 = failure mode, 4 = failure iteration,
+//   5 = von Mises at death, and reserved 6 = slab index (new_TODO_08).
+//   Kept as a dedicated channel so it never clobbers the force map.
+struct Vertex { glm::vec3 position; glm::vec3 normal; glm::vec2 texCoords; float elementScalar = 0.0f; };
 
 struct FEAParams {
     float sizeX = 5.0f;
@@ -40,4 +46,16 @@ struct FEAParams {
     // lin_def = sizingChordError * L_diag  (absolute linear deflection for OCC mesher).
     // 1e-3 → 0.1% chord error (COMSOL "Fine" equivalent on a 1 m part: 1 mm deflection).
     float sizingChordError   = 1e-3f;
+
+    // --- new_TODO_04: layered-FDM slice controls ---
+    // These describe the print/slice intent; consumed by LayerSlicer (this TODO)
+    // and the downstream extrusion/region pipeline (new_TODO_05+).
+    bool  enableLayerSlicing = false;
+    float layerThickness     = 0.2f;   // print units (resolved to absolute via import scale)
+    int   buildAxisSel       = 2;      // 0=X 1=Y 2=Z
+    int   infillPattern      = 0;      // 0=rect 1=grid 2=tri 3=gyroid 4=honeycomb
+    float infillDensity      = 0.20f;
+    int   wallCount          = 2;
+    float wallWidth          = 0.4f;
+    int   maxSlabs           = 40;     // layer-grouping cap (see LayerSlicer grouping)
 };

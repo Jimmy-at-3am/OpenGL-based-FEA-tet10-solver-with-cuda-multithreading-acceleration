@@ -2300,6 +2300,9 @@ bool FEASolver::solveBrittleFracture(FEAModel& model, float visualScale, int max
     if (static_cast<int>(model.elementFailureIter.size()) != nElems)
         model.elementFailureIter.assign(nElems, -1);
     model.elementFailureMode.assign(nElems, 0);
+    // new_TODO_03: per-element von Mises captured at the iteration each element
+    // dies (visualization only; reset to 0 = alive at the start of every run).
+    model.elementVonMisesAtDeath.assign(nElems, 0.0f);
 
     // Constitutive model used for stress recovery.
     std::unique_ptr<IMaterial> materialOwned;
@@ -2506,6 +2509,7 @@ bool FEASolver::solveBrittleFracture(FEAModel& model, float visualScale, int max
             if (kill) {
                 model.elementAlive[el]       = 0;
                 model.elementFailureIter[el] = iter;
+                model.elementVonMisesAtDeath[el] = sigmaVM[el]; // new_TODO_03: stress at death
                 ++killed;
             }
         }
