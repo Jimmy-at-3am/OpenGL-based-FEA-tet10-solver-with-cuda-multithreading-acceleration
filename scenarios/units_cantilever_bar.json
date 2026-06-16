@@ -1,0 +1,19 @@
+{
+  "v": 1,
+  "geometry": { "preset": "box", "size": [200.0, 10.0, 10.0] },
+  "material": "materials/pla.mat",
+  "mesh": { "maxVolume": 100.0, "quality": 1.6 },
+  "loads": [ { "type": "preset", "name": "cantileverZ", "mag": 5.0 } ],
+  "constraints": [ { "preset": "fixedMinX" } ],
+  "solve": { "kind": "linear", "gpu": false },
+  "screenshots": [
+    { "name": "iso_disp", "camera": "iso", "scalarMode": 1, "deformScale": 0.0 }
+  ],
+  "asserts": [
+    { "path": "mesh.nTets", "op": ">", "value": 0 },
+    { "path": "solver.ok", "op": "==", "value": 1 },
+    { "path": "solver.partSizeMM_x", "op": "~=", "value": 200.0, "rel": 0.01 },
+    { "path": "solver.maxDispMM", "op": "~=", "value": 4.5714, "rel": 0.12 },
+    { "path": "screenshots.iso_disp.stdRGBmax", "op": ">", "value": 0.0 }
+  ]
+}

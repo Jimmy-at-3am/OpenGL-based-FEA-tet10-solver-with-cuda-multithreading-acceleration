@@ -37,44 +37,54 @@ struct SliceResult {
 // Layer-grouping result (the "achievability key"): cap physical layers at maxSlabs
 // FE slabs by grouping k physical layers per slab.
 struct SliceGrouping {
-    int   nPhysical = 0;             // ceil(extent / physicalLayerThickness)
+    int   nPhysical = 0;             // ceil(physicalExtentMM / layerThicknessMM)
     int   layersPerSlab = 1;         // grouping factor k
     int   nSlabs = 0;                // ceil(nPhysical / k)
-    float physicalLayerThickness = 0.0f; // absolute (model) units, post import scale
-    float slabThickness = 0.0f;          // k * physicalLayerThickness
-    std::vector<float> slabBoundaries;   // ascending, nSlabs+1 (top slab may be thinner)
+    float physicalLayerThickness = 0.0f; // model-space layer thickness (for slab boundaries)
+    float slabThickness = 0.0f;          // k * physicalLayerThickness (model space)
+    // new_TODO_04C: physically-readable thicknesses in MILLIMETRES.
+    float physThickMM = 0.0f;            // = FEAParams::layerThickness (mm)
+    float slabThickMM = 0.0f;            // = k * layerThickness (mm)
+    std::vector<float> slabBoundaries;   // model-space, ascending, nSlabs+1 (top may be thinner)
 };
 
-// Per-plane diagnostic stats (for the report + console).
+// Per-plane diagnostic stats (for the report + console). Areas carry BOTH the
+// model-space value (for back-compat / scale-invariant ratios) and the physical
+// mm / mm^2 value (new_TODO_04C: the physically-readable numbers).
 struct PlaneStats {
-    float  z = 0.0f;
+    float  z = 0.0f;            // model-space plane height
+    float  zMM = 0.0f;          // physical plane height (mm, from model centre)
     int    loops = 0;
     int    holes = 0;
     int    discardedChains = 0;
-    double outerArea = 0.0;
+    double outerArea = 0.0;     // model-space area^2
     double holeArea  = 0.0;
     double netArea   = 0.0;
+    double outerAreaMM2 = 0.0;  // physical area (mm^2)
+    double holeAreaMM2  = 0.0;
+    double netAreaMM2   = 0.0;
 };
 
 // Map FEAParams.buildAxisSel (0/1/2) to a valid axis index.
 int axisFromParams(const FEAParams& p);
 
 // Compute layer grouping from the part extent along the build axis.
-//   physicalThicknessModel = layerThickness (print units) * importScale.
+//   modelToMM converts a model-space length to physical millimetres; grouping is
+//   done in mm (nPhysical = ceil(physicalExtentMM / layerThickness_mm)).
 SliceGrouping computeGrouping(float axisMin, float axisMax,
-                              const FEAParams& p, float importScale);
+                              const FEAParams& p, float modelToMM);
 
 // MAIN ENTRY. Slices the surface triangle mesh (always available) at every slab
 // centre. If `brep` is non-null and the B-rep section path succeeds for a plane,
 // that path is used for that plane; otherwise the triangle path is used.
 //   surfVerts/surfIdx : the model's surfaceVertices/surfaceIndices (model space).
 //   minB/maxB         : surface AABB (model space) — defines extent + L_diag.
-//   importScale       : 3.0/maxDim for loaded geometry, 1.0 for the preset cube.
+//   modelToMM         : model-space length -> physical mm (FEAModel::modelToMM).
 // Fills grpOut + statsOut (one PlaneStats per sampled plane).
 SliceResult computeSlices(const std::vector<Vertex>& surfVerts,
                           const std::vector<unsigned int>& surfIdx,
                           const glm::vec3& minB, const glm::vec3& maxB,
-                          const FEAParams& p, float importScale,
+                          const FEAParams& p, float modelToMM,
                           const BRepHandle* brep,
                           SliceGrouping& grpOut,
                           std::vector<PlaneStats>& statsOut);

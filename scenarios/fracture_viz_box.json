@@ -1,13 +1,13 @@
 {
   "v": 1,
-  "geometry": { "preset": "box", "size": [2.0, 1.0, 1.0] },
+  "geometry": { "preset": "box", "size": [20.0, 10.0, 10.0] },
   "material": "materials/pla.mat",
-  "mesh": { "maxVolume": 0.05, "quality": 1.6 },
-  "loads": [ { "type": "preset", "name": "tensionZ", "mag": 3.0e7 } ],
+  "mesh": { "maxVolume": 8.33, "quality": 1.6 },
+  "loads": [ { "type": "preset", "name": "tensionZ", "mag": 4500.0 } ],
   "constraints": [ { "preset": "fixedMinX" } ],
   "solve": { "kind": "fracture", "maxIter": 50, "gpu": false, "fdmAnisotropy": true, "buildAxis": 2 },
   "probes": [
-    { "id": "freeEndTop", "pos": [1.0, 0.5, 0.0], "quantity": "displacement" }
+    { "id": "freeEndTop", "pos": [10.0, 5.0, 0.0], "quantity": "displacement" }
   ],
   "screenshots": [
     { "name": "deform",       "camera": "iso", "scalarMode": 1, "deformScale": 0.0, "deadView": "hidden"  },

@@ -51,7 +51,11 @@ struct FEAParams {
     // These describe the print/slice intent; consumed by LayerSlicer (this TODO)
     // and the downstream extrusion/region pipeline (new_TODO_05+).
     bool  enableLayerSlicing = false;
-    float layerThickness     = 0.2f;   // print units (resolved to absolute via import scale)
+    // new_TODO_04C: STL is unitless; this multiplies STL coords to millimetres
+    // (1.0 = treat STL as mm, the slicer/printer convention). 3MF/STEP carry their
+    // own declared unit and ignore this. Used for non-mm STL imports.
+    float stlUnitToMM        = 1.0f;
+    float layerThickness     = 0.2f;   // MILLIMETRES (physical FDM layer height)
     int   buildAxisSel       = 2;      // 0=X 1=Y 2=Z
     int   infillPattern      = 0;      // 0=rect 1=grid 2=tri 3=gyroid 4=honeycomb
     float infillDensity      = 0.20f;

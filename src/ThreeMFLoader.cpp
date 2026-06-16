@@ -516,6 +516,36 @@ bool ThreeMFLoader::load(const std::string& path, LoadedGeometry& out) {
     mz_free(primaryData);
 
     // ------------------------------------------------------------------
+    // new_TODO_04C: read the <model unit="..."> attribute so the real physical
+    // size survives import (3MF default is millimeter). Scoped to the <model>
+    // root tag so it cannot match a 'unit' substring elsewhere.
+    // ------------------------------------------------------------------
+    {
+        out.fileUnitToMM = 1.0f;
+        size_t mp = primaryXml.find("<model");
+        size_t te = (mp == std::string::npos) ? std::string::npos : primaryXml.find('>', mp);
+        if (mp != std::string::npos && te != std::string::npos) {
+            std::string tag = primaryXml.substr(mp, te - mp);
+            size_t up = tag.find("unit");
+            size_t q1 = (up == std::string::npos) ? std::string::npos : tag.find('"', up);
+            size_t q2 = (q1 == std::string::npos) ? std::string::npos : tag.find('"', q1 + 1);
+            if (q2 != std::string::npos) {
+                std::string u = tag.substr(q1 + 1, q2 - q1 - 1);
+                for (auto& c : u) c = (char)std::tolower((unsigned char)c);
+                if      (u == "micron")     out.fileUnitToMM = 0.001f;
+                else if (u == "millimeter") out.fileUnitToMM = 1.0f;
+                else if (u == "centimeter") out.fileUnitToMM = 10.0f;
+                else if (u == "inch")       out.fileUnitToMM = 25.4f;
+                else if (u == "foot")       out.fileUnitToMM = 304.8f;
+                else if (u == "meter")      out.fileUnitToMM = 1000.0f;
+                else                        out.fileUnitToMM = 1.0f;
+                std::cout << "[3MF] unit: " << u << " (= " << out.fileUnitToMM
+                          << " mm/unit; real size preserved)" << std::endl;
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------
     // Parse the primary manifest
     // ------------------------------------------------------------------
     std::vector<BuildItem>    buildItems;

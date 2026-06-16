@@ -357,6 +357,31 @@ static void symmetrizeLoadYAxial(VectorXd&               F_out,
 }
 
 // -----------------------------------------------------------------------------
+// new_TODO_04C: physical-units bridge (model space <-> real SI metres).
+// The whole solver reads geometry from model.originalVolumetricPositions, so
+// rescaling that one array to metres at the outermost solve entry makes every
+// downstream computation (stiffness, loads, stress, fracture) physical without
+// touching the assembly code. A saved copy restores the model-space coordinates
+// exactly (no float drift across the fracture iteration loop). The guard makes
+// the nested solveBrittleFracture -> solveLinearStatic call a no-op.
+// -----------------------------------------------------------------------------
+bool FEASolver::scaleGeometryToMeters(FEAModel& model) {
+    if (m_geomInMeters) return false; // an outer solve already scaled the geometry
+    m_geomScale = std::max(1e-12, static_cast<double>(model.modelToMM) * 0.001); // m / model-unit
+    m_savedModelPositions = model.originalVolumetricPositions;                    // exact restore
+    const float s = static_cast<float>(m_geomScale);
+    for (auto& p : model.originalVolumetricPositions) p *= s;
+    m_geomInMeters = true;
+    return true;
+}
+void FEASolver::restoreGeometryToModel(FEAModel& model) {
+    if (!m_geomInMeters) return;
+    model.originalVolumetricPositions = m_savedModelPositions; // exact model-space restore
+    m_savedModelPositions.clear();
+    m_geomInMeters = false;
+}
+
+// -----------------------------------------------------------------------------
 // FEASolver::solveLinearStatic
 // -----------------------------------------------------------------------------
 // Post-refactor architecture:
@@ -392,6 +417,12 @@ bool FEASolver::solveLinearStatic(FEAModel& model, float visualScale,
     if (useQuadraticElements && !model.hasQuadraticMesh) {
         model.generateMidEdgeNodes();
     }
+
+    // new_TODO_04C: run the FE math in real SI metres (after mid-edge nodes exist
+    // so they are scaled too). didScale is false when an outer solve (fracture)
+    // already scaled the geometry, so we neither re-scale nor restore here.
+    const bool didScale = scaleGeometryToMeters(model);
+    const double invLm  = (m_geomScale != 0.0) ? (1.0 / m_geomScale) : 1.0; // model-unit / metre
 
     const int nElems = static_cast<int>(model.tetrahedra.size() / 4);
     const int nNodes = static_cast<int>(model.originalVolumetricPositions.size());
@@ -985,11 +1016,13 @@ bool FEASolver::solveLinearStatic(FEAModel& model, float visualScale,
             ldlt.compute(K);
             if (ldlt.info() != Success) {
                 std::cout << "Matrix decomposition failed!" << std::endl;
+                if (didScale) restoreGeometryToModel(model);
                 return false;
             }
             U = ldlt.solve(F);
             if (ldlt.info() != Success) {
                 std::cout << "Solving failed!" << std::endl;
+                if (didScale) restoreGeometryToModel(model);
                 return false;
             }
         }
@@ -1001,12 +1034,14 @@ bool FEASolver::solveLinearStatic(FEAModel& model, float visualScale,
         solver.compute(K);
         if (solver.info() != Success) {
             std::cout << "Matrix decomposition failed!" << std::endl;
+            if (didScale) restoreGeometryToModel(model);
             return false;
         }
 
         U = solver.solve(F);
         if (solver.info() != Success) {
             std::cout << "Solving failed!" << std::endl;
+            if (didScale) restoreGeometryToModel(model);
             return false;
         }
     }
@@ -1037,6 +1072,12 @@ bool FEASolver::solveLinearStatic(FEAModel& model, float visualScale,
 
     if (U_out) *U_out = U;
 
+    // new_TODO_04C: U is now the PHYSICAL displacement in metres. Record the real
+    // max nodal displacement (mm) for the report, then convert the (exaggerated)
+    // displacement back to model space so the deformed overlay renders in the
+    // 3-unit render frame the camera expects.
+    model.physicalMaxDispMM = static_cast<float>(U.cwiseAbs().maxCoeff() * 1000.0);
+
     model.deformedPositions.resize(nNodes);
 
     // Per-node displacement update is embarrassingly parallel: each iteration
@@ -1045,18 +1086,25 @@ bool FEASolver::solveLinearStatic(FEAModel& model, float visualScale,
     // the master thread when the flag is off, so serial behaviour is unchanged.
     #pragma omp parallel for schedule(static) if(useMultithreading)
     for (int i = 0; i < nNodes; ++i) {
-        glm::vec3 displacement(
+        glm::vec3 dispMeters(
             static_cast<float>(U(i * 3 + 0) * visualScale),
             static_cast<float>(U(i * 3 + 1) * visualScale),
             static_cast<float>(U(i * 3 + 2) * visualScale)
         );
-        model.deformedPositions[i] = model.originalVolumetricPositions[i] + displacement;
-        model.nodalDisplacementMagnitudes[i] = glm::length(displacement);
+        glm::vec3 dispModel = dispMeters * static_cast<float>(invLm); // metres -> model units
+        // originalVolumetricPositions is in metres here; *invLm returns it to model space.
+        model.deformedPositions[i] =
+            model.originalVolumetricPositions[i] * static_cast<float>(invLm) + dispModel;
+        model.nodalDisplacementMagnitudes[i] = glm::length(dispModel);
     }
 
     model.hasDeformation = true;
     model.showDeformedMesh = true;
     model.needsUpdate = true;
+    // Restore model-space coordinates BEFORE buildBuffers so the rendered mesh and
+    // any later geometry reads see the original 3-unit frame (no-op if an outer
+    // fracture solve owns the scaling).
+    if (didScale) restoreGeometryToModel(model);
     model.buildBuffers();
 
     std::cout << "Updated mesh with deformations (scaled " << visualScale << "x)" << std::endl;
@@ -2342,6 +2390,15 @@ bool FEASolver::solveBrittleFracture(FEAModel& model, float visualScale, int max
     // isTet10 must be derived AFTER the auto-detection above.
     const bool isTet10 = useQuadraticElements && model.hasQuadraticMesh;
 
+    // new_TODO_04C: scale to real SI metres for the whole fracture loop. The
+    // precomputed per-element D*B below and the nested solveLinearStatic both read
+    // the now-metre originalVolumetricPositions, so recovered von Mises stress is
+    // physical Pa and the comparison vs fractureStress respects the actual part
+    // size (a 4 mm and a 400 mm part no longer fracture identically). The node set
+    // is final here (mid-edge nodes already exist whenever isTet10), so the saved
+    // model-space copy restores exactly.
+    const bool didScale = scaleGeometryToMeters(model);
+
     // Force multithreaded CG for every fracture iteration regardless of the UI
     // toggle. Serial LDLT (the non-MT path) is O(n^{1.5}) and memory-bandwidth
     // bound — it appears as "low CPU usage" while doing nothing useful on the
@@ -2417,6 +2474,7 @@ bool FEASolver::solveBrittleFracture(FEAModel& model, float visualScale, int max
         if (!ok || U.size() == 0) {
             std::cout << "[FRACTURE] Solver failed at iteration " << iter << "." << std::endl;
             useMultithreading = savedUseMT;
+            if (didScale) restoreGeometryToModel(model);
             return false;
         }
 
@@ -2559,5 +2617,6 @@ bool FEASolver::solveBrittleFracture(FEAModel& model, float visualScale, int max
     }
 
     useMultithreading = savedUseMT;
+    if (didScale) restoreGeometryToModel(model);
     return true;
 }

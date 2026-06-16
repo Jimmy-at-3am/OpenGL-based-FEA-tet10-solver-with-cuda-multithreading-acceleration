@@ -17,6 +17,8 @@
     { "path": "slice.summary.maxDiscardedChains", "op": "==", "value": 0 },
     { "path": "slice.summary.minNetArea", "op": "~=", "value": 1.0, "rel": 0.02 },
     { "path": "slice.summary.maxNetArea", "op": "~=", "value": 1.0, "rel": 0.02 },
+    { "path": "slice.grouping.physThickMM", "op": "~=", "value": 0.01, "rel": 0.02 },
+    { "path": "slice.summary.minNetAreaMM2", "op": "~=", "value": 1.0, "rel": 0.02 },
     { "path": "screenshots.slice_mid_z.stdRGBmax", "op": ">", "value": 0.0 }
   ]
 }

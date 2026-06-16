@@ -226,6 +226,11 @@ void FEAModel::generateCube() {
     bboxVolume = params.sizeX * params.sizeY * params.sizeZ;
     if (bboxVolume < 0.0001f) bboxVolume = 1.0f;
     importScale = 1.0f; // preset cube is authored in model units (no rescale)
+    // new_TODO_04C: preset cube is authored directly in millimetres, centred at
+    // the origin and spanning [-size/2, +size/2]; model space IS physical mm here.
+    modelToMM     = 1.0f;
+    physicalMaxMM = 0.5f * glm::vec3(params.sizeX, params.sizeY, params.sizeZ);
+    physicalMinMM = -physicalMaxMM;
     volumetricVertices.clear();
     volumetricIndices.clear();
     tetrahedra.clear();
@@ -245,6 +250,12 @@ void FEAModel::generateCube() {
     totalAppliedForce = 0.0f;
     appliedForcePerNode = 0.0f;
     loadedFileName = "";
+
+    // new_TODO_04: drop slice/layer state so a prior section overlay does not
+    // linger after a cube-dimension change or a switch back to CUBE mode.
+    layers.reset();
+    showSlicePreview     = false;
+    sliceLineVertexCount = 0;
 
     buildBuffers();
 }
@@ -484,9 +495,23 @@ bool FEAModel::processRawGeometry(LoadedGeometry& geo, const std::string& format
         if (maxDim < 0.001f) maxDim = 1.0f;
         float scale = 3.0f / maxDim;
 
+        // new_TODO_04C: preserve the REAL physical size (mm) BEFORE the render
+        // rescale. STL is unitless -> apply the FEAParams override; 3MF/STEP carry
+        // their declared unit in geo.fileUnitToMM (default 1.0 = mm).
+        float unitToMM = geo.fileUnitToMM;
+        if (formatTag == "STL") unitToMM *= std::max(1e-9f, params.stlUnitToMM);
+        physicalMinMM = minAABB * unitToMM;
+        physicalMaxMM = maxAABB * unitToMM;
+
         for (auto& v : vertices) v.position = (v.position - center) * scale;
         bboxVolume *= (scale * scale * scale);
         importScale = scale; // new_TODO_04: print-unit -> model-unit factor for slicer
+        // model-space length * modelToMM = physical millimetres.
+        modelToMM = unitToMM / scale;
+        glm::vec3 szMM = physicalMaxMM - physicalMinMM;
+        std::cout << "[UNITS] real size = " << szMM.x << " x " << szMM.y << " x "
+                  << szMM.z << " mm (unit " << unitToMM << " mm/file-unit, modelToMM "
+                  << modelToMM << ")" << std::endl;
     }
 
     // -----------------------------------------------------------------------
@@ -516,6 +541,12 @@ bool FEAModel::processRawGeometry(LoadedGeometry& geo, const std::string& format
 
     // Clear stale B-rep; loadSTEP() re-assigns it after this returns.
     brep.reset();
+
+    // new_TODO_04: drop any slice/layer state from the previously loaded model so
+    // a stale section overlay or LayerStack never carries across a reload.
+    layers.reset();
+    showSlicePreview     = false;
+    sliceLineVertexCount = 0;
 
     // Metadata for UI
     loadedFileName          = geo.sourceLabel;

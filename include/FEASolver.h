@@ -183,4 +183,20 @@ private:
     // When non-empty, the assembly loop in solveLinearStatic skips elements
     // where m_fractureAlive[el] == 0.  Set by solveBrittleFracture.
     std::vector<uint8_t> m_fractureAlive;
+
+    // new_TODO_04C: physical-units bridge. The renderer keeps geometry in the
+    // 3-unit model space, but the FE math must run in real SI (metres, N, Pa) so
+    // stress/displacement and the fracture comparison respect the ACTUAL part
+    // size. scaleGeometryToMeters() rescales originalVolumetricPositions to metres
+    // (factor modelToMM/1000) at the outermost solve entry and saves the model-
+    // space copy; restoreGeometryToModel() puts it back exactly. The re-entrancy
+    // guard makes the nested solveBrittleFracture -> solveLinearStatic call a
+    // no-op so coordinates are never double-scaled. m_geomScale is metres per
+    // model-unit (used to convert the metre displacement back to model space for
+    // the deformed overlay).
+    bool                   m_geomInMeters = false;
+    double                 m_geomScale    = 1.0;   // metres per model-space unit
+    std::vector<glm::vec3> m_savedModelPositions;  // exact model-space restore
+    bool scaleGeometryToMeters(FEAModel& model);   // returns true if it scaled
+    void restoreGeometryToModel(FEAModel& model);
 };

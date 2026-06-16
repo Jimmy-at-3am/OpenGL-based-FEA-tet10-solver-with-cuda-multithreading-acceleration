@@ -43,12 +43,21 @@ struct LoadedGeometry {
     // STL always reports 1.  .3mf may report N (one per <object> element).
     int objectCount = 1;
 
+    // new_TODO_04C: physical unit of the authored coordinates, as a factor to
+    // millimetres (the canonical internal length unit). STL is unitless -> 1.0
+    // (treated as mm; FEAModel applies FEAParams::stlUnitToMM as an override).
+    // 3MF reads <model unit=...>; STEP reads xstep.cascade.unit. Used by
+    // FEAModel::processRawGeometry to record the real physical size before the
+    // 3-unit render normalisation.
+    float fileUnitToMM = 1.0f;
+
     // Clear all fields (allows reuse without re-allocation overhead).
     void clear() {
         positions.clear();
         indices.clear();
         sourceLabel.clear();
         objectCount = 1;
+        fileUnitToMM = 1.0f;
     }
 };
 

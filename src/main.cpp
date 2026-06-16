@@ -431,6 +431,7 @@ int runInteractive() {
         // harness calls in ScenarioRunner::runSlice (LayerSlicer::computeSlices +
         // model.setLayerStack + sectionToSegments + model.buildSlicePreview).
         static LayerSlicer::SliceResult sliceResult; // UI-local cache (decoupled)
+        static LayerSlicer::SliceGrouping sliceGrp;   // new_TODO_04C: physical readout
         static int   slicePreviewLayer = 0;
         static float sliceMaxSlabsF    = 40.0f;
         auto rebuildSlicePreview = [&](int layer) {
@@ -471,7 +472,8 @@ int runInteractive() {
                 sliceResult = LayerSlicer::computeSlices(
                     model.surfaceVertices, model.surfaceIndices,
                     model.currentMinBounds, model.currentMaxBounds,
-                    model.params, model.importScale, brep, grp, stats);
+                    model.params, model.modelToMM, brep, grp, stats);
+                sliceGrp = grp; // new_TODO_04C: cache for the physical readout
                 // [same-path: harness model.setLayerStack]
                 model.setLayerStack(LayerSlicer::axisFromParams(model.params),
                                     grp.physicalLayerThickness, grp.layersPerSlab,
@@ -479,6 +481,22 @@ int runInteractive() {
                 rebuildSlicePreview(static_cast<int>(sliceResult.sections.size()) / 2);
             }
             y += 32.0f;
+
+            // new_TODO_04C: physical (real-world) readout — real mm dimensions and
+            // the true layer count, so the print is physically readable.
+            {
+                glm::vec3 mm = model.physicalSizeMM();
+                char dbuf[128];
+                snprintf(dbuf, sizeof(dbuf), "PART %.1f x %.1f x %.1f mm", mm.x, mm.y, mm.z);
+                ui.drawText(dbuf, x, y, 8.0f, glm::vec3(0.7f, 0.9f, 1.0f)); y += 14.0f;
+                if (sliceGrp.nPhysical > 0) {
+                    char lbuf[128];
+                    snprintf(lbuf, sizeof(lbuf), "%d layers @ %.2f mm  (%d slabs, k=%d)",
+                             sliceGrp.nPhysical, sliceGrp.physThickMM, sliceGrp.nSlabs,
+                             sliceGrp.layersPerSlab);
+                    ui.drawText(lbuf, x, y, 8.0f, glm::vec3(0.7f, 0.9f, 1.0f)); y += 16.0f;
+                }
+            }
 
             int nL = static_cast<int>(sliceResult.sections.size());
             if (model.showSlicePreview && nL > 0) {

@@ -32,9 +32,16 @@ namespace LayerSlicer {
 // the remaining two form the (u,v) cross-section plane. from2D is the exact
 // inverse of to2D at a given plane height.
 // ---------------------------------------------------------------------------
+// The (u,v) frame is chosen RIGHT-HANDED for every axis so that u x v = +axis
+// normal: X->(y,z) [y x z=+x], Y->(z,x) [z x x=+y], Z->(x,y) [x x y=+z]. A naive
+// Y->(x,z) is left-handed (x x z = -y), which would silently flip 'outer CCW' to
+// physically CW about +Y and mirror the section preview -- inconsistent with the
+// other two axes and a trap for the new_TODO_05 extrusion (which derives the
+// wall-offset side from the loop winding). Keeping all three right-handed makes
+// the documented "outer CCW" contract hold uniformly.
 static inline glm::vec2 to2D(const glm::vec3& p, int axis) {
     if (axis == 0) return glm::vec2(p.y, p.z);
-    if (axis == 1) return glm::vec2(p.x, p.z);
+    if (axis == 1) return glm::vec2(p.z, p.x);
     return glm::vec2(p.x, p.y);
 }
 static inline float axisCoord(const glm::vec3& p, int axis) {
@@ -42,7 +49,7 @@ static inline float axisCoord(const glm::vec3& p, int axis) {
 }
 static inline glm::vec3 from2D(const glm::vec2& q, int axis, float coord) {
     if (axis == 0) return glm::vec3(coord, q.x, q.y);
-    if (axis == 1) return glm::vec3(q.x, coord, q.y);
+    if (axis == 1) return glm::vec3(q.y, coord, q.x);
     return glm::vec3(q.x, q.y, coord);
 }
 
@@ -79,11 +86,20 @@ static bool pointInLoop(const glm::vec2& pt, const std::vector<glm::vec2>& loop)
     return inside;
 }
 
-static glm::vec2 loopCentroid(const std::vector<glm::vec2>& loop) {
-    glm::dvec2 c(0.0, 0.0);
-    for (const auto& p : loop) c += glm::dvec2(p.x, p.y);
-    if (!loop.empty()) c /= (double)loop.size();
-    return glm::vec2((float)c.x, (float)c.y);
+// A representative test point that lies ON the loop (midpoint of its first edge),
+// used for even-odd nesting classification. Unlike the loop centroid this is
+// guaranteed to share the loop's inside/outside status relative to every other
+// non-intersecting loop in the section: a boundary point of an outer loop can
+// never lie inside a hole nested within it (the hole is in the loop's interior,
+// disjoint from its boundary). A centroid carries no such guarantee -- for a
+// concentric hole the outer square's centroid lands INSIDE the hole, which made
+// the classifier count the hole as containing the outer loop and misclassify the
+// outer loop as a hole (outerArea -> 0, NEGATIVE net area). The first-edge
+// midpoint classifies concentric, off-centre, disjoint, and island-in-hole
+// sections alike.
+static glm::vec2 loopProbePoint(const std::vector<glm::vec2>& loop) {
+    if (loop.size() < 2) return loop.empty() ? glm::vec2(0.0f) : loop[0];
+    return 0.5f * (loop[0] + loop[1]);
 }
 
 // ---------------------------------------------------------------------------
@@ -97,18 +113,33 @@ static void slicePlaneTriangles(const std::vector<Vertex>& verts,
                                 const std::vector<unsigned int>& idx,
                                 int axis, float coord,
                                 std::vector<std::pair<glm::vec2, glm::vec2>>& segs) {
+    const size_t nVerts = verts.size();
     const size_t nTri = idx.size() / 3;
     for (size_t t = 0; t < nTri; ++t) {
-        const glm::vec3& p0 = verts[idx[t * 3 + 0]].position;
-        const glm::vec3& p1 = verts[idx[t * 3 + 1]].position;
-        const glm::vec3& p2 = verts[idx[t * 3 + 2]].position;
+        const unsigned int i0 = idx[t * 3 + 0], i1 = idx[t * 3 + 1], i2 = idx[t * 3 + 2];
+        // Bounds guard: a corrupt/soup index buffer (e.g. a malformed 3MF/STEP
+        // tessellation) could index past the vertex array -> OOB read / UB.
+        // Skip such triangles so the headless slicer never crashes on bad input.
+        if (i0 >= nVerts || i1 >= nVerts || i2 >= nVerts) continue;
+        const glm::vec3& p0 = verts[i0].position;
+        const glm::vec3& p1 = verts[i1].position;
+        const glm::vec3& p2 = verts[i2].position;
         const glm::vec3 P[3] = { p0, p1, p2 };
         float s[3] = { axisCoord(p0, axis) - coord,
                        axisCoord(p1, axis) - coord,
                        axisCoord(p2, axis) - coord };
 
+        // NOTE: the skip test is `above in {0,3}`, NOT a strict above&&below
+        // straddle. This is deliberate: when the plane coincides with a horizontal
+        // mesh edge ring (a prism wall split exactly at coord), the real contour is
+        // carried by the ON-PLANE edge of the s=[0,0,+] triangle, while its lower
+        // neighbour s=[0,0,-] is skipped -- so the ring edge is emitted exactly
+        // once. A strict straddle would drop it and the section would vanish at
+        // that plane. The only residual artefact is a pure tangent ridge (both
+        // neighbours above) emitting a doubled on-plane edge, which stitchLoops
+        // discards as a benign 2-cycle (a discardedChains++ but no loop corruption).
         int above = (s[0] > 0.0f) + (s[1] > 0.0f) + (s[2] > 0.0f);
-        if (above == 0 || above == 3) continue; // no crossing (or coplanar)
+        if (above == 0 || above == 3) continue; // no strict crossing (or coplanar)
 
         glm::vec2 hits[2];
         int nh = 0;
@@ -141,21 +172,31 @@ static void stitchLoops(const std::vector<std::pair<glm::vec2, glm::vec2>>& segs
     if (segs.empty()) return;
 
     const float invTol = 1.0f / std::max(tol, 1e-12f);
-    auto cellKey = [&](const glm::vec2& p) -> int64_t {
-        int64_t ix = (int64_t)std::llround(p.x * invTol);
-        int64_t iy = (int64_t)std::llround(p.y * invTol);
-        return (ix << 32) ^ (iy & 0xffffffffLL);
+    // Pack an integer cell (ix,iy) into a 64-bit key. Neighbour keys MUST be built
+    // by re-packing the OFFSET integer cell (cellKeyI(bix+dx, biy+dy)), never by
+    // arithmetic on an already-packed key: adding dy to the packed value lets a
+    // low-word borrow/carry bleed into the ix field exactly at the iy = 0 / iy = -1
+    // seam (the v = 0 centreline of origin-centred geometry). That silently probed
+    // the wrong diagonal neighbour cell and could fail to weld two coincident
+    // contour endpoints -> an open chain dropped by stitchLoops -> a lost loop.
+    auto cellKeyI = [](int64_t ix, int64_t iy) -> int64_t {
+        // Unsigned shift/xor: a signed left-shift of a negative ix (half of any
+        // origin-centred model has negative cell indices) is UB in C++17; the
+        // uint64_t cast makes the bit-packing well-defined on every toolchain.
+        return (int64_t)(((uint64_t)ix << 32) ^ ((uint64_t)iy & 0xffffffffULL));
     };
 
     std::vector<glm::vec2> pts;                 // canonical welded points
     std::unordered_map<int64_t, std::vector<int>> grid; // cell -> point indices
     auto weld = [&](const glm::vec2& p) -> int {
-        int64_t base = cellKey(p);
+        const int64_t bix = (int64_t)std::llround(p.x * invTol);
+        const int64_t biy = (int64_t)std::llround(p.y * invTol);
         // Search the 3x3 neighbourhood so points straddling a cell border still
-        // merge (robust weld, TODO_03/04 convention).
+        // merge (robust weld, TODO_03/04 convention). Each neighbour key is
+        // re-packed from the integer cell so the iy-seam carry bug cannot occur.
         for (int dy = -1; dy <= 1; ++dy)
             for (int dx = -1; dx <= 1; ++dx) {
-                int64_t k = base + ((int64_t)dx << 32) + dy;
+                int64_t k = cellKeyI(bix + dx, biy + dy);
                 auto it = grid.find(k);
                 if (it == grid.end()) continue;
                 for (int pi : it->second) {
@@ -165,7 +206,7 @@ static void stitchLoops(const std::vector<std::pair<glm::vec2, glm::vec2>>& segs
             }
         int id = (int)pts.size();
         pts.push_back(p);
-        grid[base].push_back(id);
+        grid[cellKeyI(bix, biy)].push_back(id);
         return id;
     };
 
@@ -268,10 +309,12 @@ static Section cleanupSection(std::vector<std::vector<glm::vec2>> loops,
     // OTHER loops that contain this loop's centroid; even -> outer, odd -> hole.
     Section sec;
     sec.reserve(loops.size());
-    std::vector<glm::vec2> centroids(loops.size());
-    for (size_t i = 0; i < loops.size(); ++i) centroids[i] = loopCentroid(loops[i]);
+    // Representative point ON each loop (see loopProbePoint) -- NOT the centroid,
+    // which misclassifies concentric holes into negative net area.
+    std::vector<glm::vec2> probes(loops.size());
+    for (size_t i = 0; i < loops.size(); ++i) probes[i] = loopProbePoint(loops[i]);
 
-    // Pass 1: classify every loop by even-odd centroid depth while all loops are
+    // Pass 1: classify every loop by even-odd nesting depth while all loops are
     // still intact. This MUST complete before any loop is moved out below --
     // moving loops[i] empties it, and a later loop's containment test against an
     // emptied neighbour would wrongly read depth 0 and miss the hole.
@@ -280,7 +323,7 @@ static Section cleanupSection(std::vector<std::vector<glm::vec2>> loops,
         int depth = 0;
         for (size_t j = 0; j < loops.size(); ++j) {
             if (i == j) continue;
-            if (pointInLoop(centroids[i], loops[j])) ++depth;
+            if (pointInLoop(probes[i], loops[j])) ++depth;
         }
         isHole[i] = (depth % 2) == 1;
     }
@@ -302,13 +345,17 @@ static Section cleanupSection(std::vector<std::vector<glm::vec2>> loops,
 }
 
 SliceGrouping computeGrouping(float axisMin, float axisMax,
-                              const FEAParams& p, float importScale) {
+                              const FEAParams& p, float modelToMM) {
     SliceGrouping g;
-    float extent = std::max(0.0f, axisMax - axisMin);
-    float physThick = std::max(1e-6f, p.layerThickness * importScale);
-    // ceil with a small tolerance so an exact integer ratio (e.g. 1.0/0.01)
-    // does not spuriously round up to nPhysical+1 from float error.
-    int nPhysical = (int)std::ceil((double)extent / (double)physThick - 1e-4);
+    const float m2mm = std::max(1e-9f, modelToMM);
+    const float extentModel = std::max(0.0f, axisMax - axisMin);
+    const float extentMM    = extentModel * m2mm;                 // physical build-axis extent
+    const float layerMM     = std::max(1e-6f, p.layerThickness);  // physical FDM layer height (mm)
+    const float physThick   = std::max(1e-9f, layerMM / m2mm);    // model-space layer thickness
+    // Group in PHYSICAL mm: nPhysical = number of real layer heights along the
+    // build axis. ceil with a small tolerance so an exact integer ratio (e.g.
+    // 4.0/0.2) does not spuriously round up from float error.
+    int nPhysical = (int)std::ceil((double)extentMM / (double)layerMM - 1e-4);
     if (nPhysical < 1) nPhysical = 1;
     int maxSlabs = std::max(1, p.maxSlabs);
     int k = 1;
@@ -318,8 +365,10 @@ SliceGrouping computeGrouping(float axisMin, float axisMax,
     g.nPhysical = nPhysical;
     g.layersPerSlab = k;
     g.nSlabs = nSlabs;
-    g.physicalLayerThickness = physThick;
-    g.slabThickness = (float)k * physThick;
+    g.physicalLayerThickness = physThick;          // model space (for slab boundaries)
+    g.slabThickness = (float)k * physThick;        // model space
+    g.physThickMM = layerMM;                       // physically-readable (mm)
+    g.slabThickMM = (float)k * layerMM;
 
     g.slabBoundaries.clear();
     g.slabBoundaries.reserve(nSlabs + 1);
@@ -333,7 +382,7 @@ SliceGrouping computeGrouping(float axisMin, float axisMax,
 SliceResult computeSlices(const std::vector<Vertex>& surfVerts,
                           const std::vector<unsigned int>& surfIdx,
                           const glm::vec3& minB, const glm::vec3& maxB,
-                          const FEAParams& p, float importScale,
+                          const FEAParams& p, float modelToMM,
                           const BRepHandle* brep,
                           SliceGrouping& grpOut,
                           std::vector<PlaneStats>& statsOut) {
@@ -353,11 +402,14 @@ SliceResult computeSlices(const std::vector<Vertex>& surfVerts,
     const float axisMin = axisCoord(mn, axis);
     const float axisMax = axisCoord(mx, axis);
 
-    grpOut = computeGrouping(axisMin, axisMax, p, importScale);
+    grpOut = computeGrouping(axisMin, axisMax, p, modelToMM);
     out.buildAxis = axis;
 
+    const float m2mm = std::max(1e-9f, modelToMM);
+    const double mm2 = (double)m2mm * (double)m2mm;   // model area -> mm^2
     const float weldTol = std::max(1e-9f, 1e-5f * (float)Ldiag);
-    const float wallWidthAbs = std::max(1e-6f, p.wallWidth * importScale);
+    // wall width is authored in mm; convert to model space for the Clipper cleanup.
+    const float wallWidthAbs = std::max(1e-6f, p.wallWidth / m2mm);
 
     if (grpOut.layersPerSlab > 1)
         std::cout << "[SLICE] grouping " << grpOut.layersPerSlab
@@ -365,7 +417,7 @@ SliceResult computeSlices(const std::vector<Vertex>& surfVerts,
     std::cout << "[SLICE] nPhysical=" << grpOut.nPhysical
               << " k=" << grpOut.layersPerSlab
               << " slabs=" << grpOut.nSlabs
-              << " physThick(model)=" << grpOut.physicalLayerThickness
+              << " layerHeight=" << grpOut.physThickMM << "mm"
               << " axis=" << axis << std::endl;
 
     const int nSlabs = grpOut.nSlabs;
@@ -396,9 +448,10 @@ SliceResult computeSlices(const std::vector<Vertex>& surfVerts,
             sec = cleanupSection(std::move(loops), wallWidthAbs, Ldiag);
         }
 
-        // Per-plane stats.
+        // Per-plane stats (model-space + physically-readable mm / mm^2).
         PlaneStats ps;
-        ps.z = coord;
+        ps.z   = coord;
+        ps.zMM = coord * m2mm;
         ps.discardedChains = discarded;
         for (const auto& poly : sec) {
             double a = signedArea(poly.pts);
@@ -406,7 +459,10 @@ SliceResult computeSlices(const std::vector<Vertex>& surfVerts,
             else             { ps.outerArea += std::fabs(a); }
             ps.loops++;
         }
-        ps.netArea = ps.outerArea - ps.holeArea;
+        ps.netArea      = ps.outerArea - ps.holeArea;
+        ps.outerAreaMM2 = ps.outerArea * mm2;
+        ps.holeAreaMM2  = ps.holeArea  * mm2;
+        ps.netAreaMM2   = ps.netArea   * mm2;
         statsOut.push_back(ps);
         out.sections.push_back(std::move(sec));
     }

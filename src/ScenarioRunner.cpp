@@ -369,7 +369,7 @@ public:
 
         // ---- geometry -------------------------------------------------
         const Value& geom = *req(sc, "geometry", "scenario");
-        checkKeys(geom, {"preset", "size", "stl", "step"}, "geometry");
+        checkKeys(geom, {"preset", "size", "stl", "step", "unitMM"}, "geometry");
         applyGeometry(geom);
 
         // ---- material -------------------------------------------------
@@ -428,6 +428,10 @@ private:
     LayerSlicer::SliceResult m_slice; // new_TODO_04: cached for the screenshot preview
 
     void applyGeometry(const Value& geom) {
+        // new_TODO_04C: optional STL unit override (mm per file unit); must be set
+        // BEFORE loadFile so processRawGeometry records the real physical size.
+        if (const Value* u = geom.find("unitMM"))
+            m_model.params.stlUnitToMM = static_cast<float>(num(*u, "geometry.unitMM"));
         if (const Value* preset = geom.find("preset")) {
             if (preset->asString() != "box")
                 throw RunError("unknown geometry.preset '" + preset->asString() + "'");
@@ -537,6 +541,10 @@ private:
         sblk.set("wallMs", Value(wallMs));
         sblk.set("backend", Value(std::string(gpu ? "gpu(requested)" : "cpu")));
         sblk.set("fdmAnisotropy", Value(solver.useFdmAnisotropy));
+        // new_TODO_04C: real-world max nodal displacement (mm) of this solve, so a
+        // scenario can assert the physical result against a closed-form oracle.
+        sblk.set("maxDispMM", Value(static_cast<double>(m_model.physicalMaxDispMM)));
+        sblk.set("partSizeMM_x", Value(static_cast<double>(m_model.physicalSizeMM().x)));
         report.set("solver", sblk);
 
         if (!ok) throw RunError("solver '" + kind + "' returned failure");
@@ -598,7 +606,7 @@ private:
         m_slice = LayerSlicer::computeSlices(
             m_model.surfaceVertices, m_model.surfaceIndices,
             m_model.currentMinBounds, m_model.currentMaxBounds,
-            p, m_model.importScale, brep, grp, stats);
+            p, m_model.modelToMM, brep, grp, stats);
 
         // [same-path: SLICE -> model.setLayerStack] publish the FE-facing slabs.
         m_model.setLayerStack(LayerSlicer::axisFromParams(p),
@@ -629,6 +637,9 @@ private:
         g.set("nSlabs", Value(grp.nSlabs));
         g.set("physThick", Value(static_cast<double>(grp.physicalLayerThickness)));
         g.set("slabThick", Value(static_cast<double>(grp.slabThickness)));
+        // new_TODO_04C: physically-readable layer height / slab thickness (mm).
+        g.set("physThickMM", Value(static_cast<double>(grp.physThickMM)));
+        g.set("slabThickMM", Value(static_cast<double>(grp.slabThickMM)));
         s.set("grouping", g);
 
         // summary = scalar aggregates over all planes. resolvePath navigates
@@ -640,14 +651,19 @@ private:
         int    maxDisc  = 0; long long totalDisc = 0;
         double minNet = 1e300, maxNet = -1e300;
         double totalOuter = 0.0, totalHole = 0.0;
+        double minNetMM2 = 1e300, maxNetMM2 = -1e300;
+        double totalOuterMM2 = 0.0, totalHoleMM2 = 0.0;
         for (const auto& ps : stats) {
             minLoops = std::min(minLoops, ps.loops); maxLoops = std::max(maxLoops, ps.loops);
             minHoles = std::min(minHoles, ps.holes); maxHoles = std::max(maxHoles, ps.holes);
             maxDisc  = std::max(maxDisc, ps.discardedChains); totalDisc += ps.discardedChains;
             minNet = std::min(minNet, ps.netArea); maxNet = std::max(maxNet, ps.netArea);
             totalOuter += ps.outerArea; totalHole += ps.holeArea;
+            minNetMM2 = std::min(minNetMM2, ps.netAreaMM2); maxNetMM2 = std::max(maxNetMM2, ps.netAreaMM2);
+            totalOuterMM2 += ps.outerAreaMM2; totalHoleMM2 += ps.holeAreaMM2;
         }
-        if (nP == 0) { minLoops = maxLoops = minHoles = maxHoles = 0; minNet = maxNet = 0.0; }
+        if (nP == 0) { minLoops = maxLoops = minHoles = maxHoles = 0; minNet = maxNet = 0.0;
+                       minNetMM2 = maxNetMM2 = 0.0; }
 
         Value sum = Value::makeObject();
         sum.set("nPlanes", Value(nP));
@@ -665,6 +681,11 @@ private:
         sum.set("holeAreaFraction", Value(holeFrac));
         sum.set("netAreaFraction", Value((totalOuter > 1e-12)
                                          ? (totalOuter - totalHole) / totalOuter : 0.0));
+        // new_TODO_04C: physically-readable area aggregates (mm^2).
+        sum.set("minNetAreaMM2", Value(minNetMM2));
+        sum.set("maxNetAreaMM2", Value(maxNetMM2));
+        sum.set("totalOuterAreaMM2", Value(totalOuterMM2));
+        sum.set("totalHoleAreaMM2", Value(totalHoleMM2));
         s.set("summary", sum);
 
         // planes[] = {z, loops, holes, area, discardedChains} (informational;
@@ -673,11 +694,15 @@ private:
         for (const auto& ps : stats) {
             Value pv = Value::makeObject();
             pv.set("z", Value(static_cast<double>(ps.z)));
+            pv.set("zMM", Value(static_cast<double>(ps.zMM)));
             pv.set("loops", Value(ps.loops));
             pv.set("holes", Value(ps.holes));
             pv.set("area", Value(ps.netArea));
             pv.set("outerArea", Value(ps.outerArea));
             pv.set("holeArea", Value(ps.holeArea));
+            pv.set("netAreaMM2", Value(ps.netAreaMM2));
+            pv.set("outerAreaMM2", Value(ps.outerAreaMM2));
+            pv.set("holeAreaMM2", Value(ps.holeAreaMM2));
             pv.set("discardedChains", Value(ps.discardedChains));
             planes.push(pv);
         }

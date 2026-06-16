@@ -47,6 +47,19 @@ public:
     // Converts print-unit layerThickness -> model units for the slicer.
     float importScale = 1.0f;
 
+    // new_TODO_04C: real-world physical size in MILLIMETRES (the canonical internal
+    // length unit), preserved across the 3-unit render normalisation. The renderer
+    // uses model-space coords; the slicer and the FEA solver use physical mm.
+    //   modelToMM : multiply a model-space length to get millimetres
+    //               (= fileUnitToMM / importScale).
+    glm::vec3 physicalMinMM = glm::vec3(-0.5f);
+    glm::vec3 physicalMaxMM = glm::vec3( 0.5f);
+    float     modelToMM     = 1.0f;
+    glm::vec3 physicalSizeMM() const { return physicalMaxMM - physicalMinMM; }
+    // new_TODO_04C: max nodal displacement of the last solve in PHYSICAL mm
+    // (real-world, un-exaggerated). 0 until a solve runs.
+    float     physicalMaxDispMM = 0.0f;
+
     std::string loadedFileName = "";
     std::string lastLoadedFormat = "";  // "STL" | "3MF" | "STEP" | ""
     int         lastLoadedObjectCount = 0; // number of objects found in last load

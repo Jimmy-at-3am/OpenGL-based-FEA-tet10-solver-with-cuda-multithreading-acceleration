@@ -6,6 +6,8 @@
 #include <unordered_map>
 #include <tuple>
 #include <cmath>
+#include <cctype>
+#include <string>
 
 namespace fs = std::filesystem;
 
@@ -180,11 +182,24 @@ static bool loadSTEP_impl(const std::string& path,
     }
 
     // --- Detect cascade unit (after TransferRoots) ---
+    // new_TODO_04C: keep the unit as a mm conversion factor (was previously logged
+    // then discarded). FEAModel records the real physical size from it before the
+    // 3-unit render normalisation.
+    float stepUnitToMM = 1.0f;
     {
         const char* cu = Interface_Static::CVal("xstep.cascade.unit");
         impl.fileUnits_ = (cu && *cu) ? cu : "MM";
+        std::string u = impl.fileUnits_;
+        for (auto& c : u) c = (char)std::toupper((unsigned char)c);
+        if      (u == "MM" || u == "MILLIMETER" || u == "MILLIMETRE") stepUnitToMM = 1.0f;
+        else if (u == "CM" || u == "CENTIMETER" || u == "CENTIMETRE") stepUnitToMM = 10.0f;
+        else if (u == "M"  || u == "METER"      || u == "METRE")      stepUnitToMM = 1000.0f;
+        else if (u == "IN" || u == "INCH")                            stepUnitToMM = 25.4f;
+        else if (u == "FT" || u == "FOOT")                            stepUnitToMM = 304.8f;
+        else if (u == "UM" || u == "MICRON" || u == "MICROMETER")     stepUnitToMM = 0.001f;
+        else stepUnitToMM = 1.0f; // unknown -> assume mm
         std::cout << "[STEP] cascade unit: " << impl.fileUnits_
-                  << " (processRawGeometry will normalise to 3-unit diagonal)\n";
+                  << " (= " << stepUnitToMM << " mm/unit; real size preserved)\n";
     }
 
     // --- Count solids ---
@@ -232,6 +247,7 @@ static bool loadSTEP_impl(const std::string& path,
     // --- Harvest ---
     std::vector<int> triangleFaceId;
     harvestTriangles(shape, impl.faceMap, out, triangleFaceId);
+    out.fileUnitToMM = stepUnitToMM; // new_TODO_04C: real-size preservation
 
     if (out.positions.empty() || out.indices.empty()) {
         std::cout << "[STEP] Tessellation produced no triangles for '"
