@@ -21,6 +21,9 @@
 #include "FEASolver.h"
 #include "MeshQuality.h"
 #include "LayerSlicer.h"   // new_TODO_04: SLICE stage (same free fns as the UI)
+#include "SlabMesher.h"    // new_TODO_05: per-slab prism extrusion -> Tet4
+#include "ToolpathModel.h" // new_TODO_19A: gcode ingest report block
+#include "ToolpathSections.h" // new_TODO_19B: bead rects -> per-layer cookies
 #include "tetgen.h"
 #include "../ext/json/json.hpp"
 
@@ -184,6 +187,7 @@ ShotStats captureScreenshot(GLFWwindow* window, FEAModel& model,
     shader.setMat4("view", view);
     model.draw(shader, eye); // [same-path: render loop model.draw]
     model.drawSlicePreview(shader); // [same-path: render loop drawSlicePreview]
+    model.drawForceArrows(shader);  // [same-path: render loop drawForceArrows]
 
     glFinish();
 
@@ -306,7 +310,13 @@ bool evalAssert(double actual, const std::string& op, double expect, double rel)
     if (op == "<=") return actual <= expect;
     if (op == "==") return actual == expect;
     if (op == "~=") {
-        double tol = std::fabs(rel) * std::max(1.0, std::fabs(expect));
+        // Relative band around the expectation. The previous guard
+        // max(1.0, |expect|) turned every sub-1.0 pin into an ABSOLUTE ±rel
+        // band (a 0.064 mm oracle with rel 0.15 accepted anything within
+        // ±0.15 mm — i.e. up to ±230%): a Class-B bug in the CHECKER itself,
+        // caught 2026-07-02 when the PL/AE pull oracle "passed" at +45%.
+        // Only guard against an exactly-zero expectation now.
+        double tol = std::fabs(rel) * std::max(1e-12, std::fabs(expect));
         return std::fabs(actual - expect) <= tol;
     }
     throw RunError("unknown assert op '" + op + "'");
@@ -360,7 +370,7 @@ public:
         if (!vv->isNumber() || static_cast<int>(vv->num) != 1)
             throw RunError("unsupported scenario schema version (need v=1)");
 
-        checkKeys(sc, {"v", "geometry", "material", "fdm", "mesh", "loads",
+        checkKeys(sc, {"v", "geometry", "material", "fdm", "mesh", "gcodeSections", "loads",
                        "constraints", "solve", "slice", "probes", "screenshots",
                        "asserts"}, "scenario");
 
@@ -369,8 +379,34 @@ public:
 
         // ---- geometry -------------------------------------------------
         const Value& geom = *req(sc, "geometry", "scenario");
-        checkKeys(geom, {"preset", "size", "stl", "step", "unitMM"}, "geometry");
+        checkKeys(geom, {"preset", "size", "stl", "step", "unitMM",
+                         "gcode3mf", "partOnly"}, "geometry");
         applyGeometry(geom);
+
+        // new_TODO_19A: toolpath ingest report block (present iff the geometry
+        // was a .gcode.3mf) — every ingest number a scenario can assert on.
+        if (m_model.hasToolpath())
+            report.set("gcode", gcodeStats(*m_model.toolpath));
+
+        // new_TODO_19B: bead rectangles -> per-layer cookie sections.
+        if (const Value* ts = sc.find("gcodeSections")) {
+            if (!m_model.hasToolpath())
+                throw RunError("gcodeSections requires geometry.gcode3mf");
+            checkKeys(*ts, {"closeGapMM", "simplifyMM", "minAreaMM2"},
+                      "gcodeSections");
+            ToolpathSections::Options opt;
+            if (const Value* v = ts->find("closeGapMM"))
+                opt.closeGapMM = static_cast<float>(num(*v, "gcodeSections.closeGapMM"));
+            if (const Value* v = ts->find("simplifyMM"))
+                opt.simplifyMM = static_cast<float>(num(*v, "gcodeSections.simplifyMM"));
+            if (const Value* v = ts->find("minAreaMM2"))
+                opt.minAreaMM2 = static_cast<float>(num(*v, "gcodeSections.minAreaMM2"));
+            std::string terr;
+            if (!ToolpathSections::build(*m_model.toolpath, opt,
+                                         m_toolpathSections, terr))
+                throw RunError("gcodeSections: " + terr);
+            report.set("gcodeSections", toolpathSectionStats(m_toolpathSections));
+        }
 
         // ---- material -------------------------------------------------
         MaterialProps mat;
@@ -381,34 +417,130 @@ public:
         }
 
         // ---- mesh + solve (skipped for slice-only runs) ---------------
-        // new_TODO_04: "solve" is now optional. A scenario may carry only a
-        // "slice" block (contour extraction needs just the surface mesh), so
-        // meshing + solving run only when "solve" is present.
+        // new_TODO_04: "solve" is now optional.  A scenario with only a "slice"
+        // block runs contour extraction on the surface mesh without any FEA.
+        // new_TODO_05: mesh.method="slice" triggers SlabMesher instead of TetGen.
+
+        // Determine mesh method first so validation can branch correctly.
+        std::string meshMethod = "tetgen";
+        if (const Value* mev = sc.find("mesh")) {
+            checkKeys(*mev, {"maxVolume", "quality", "method",
+                             "maxSlabs", "targetEdgeMM", "tieAlpha"}, "mesh");
+            if (const Value* mm = mev->find("method")) meshMethod = mm->asString();
+        }
+
         if (const Value* solveV = sc.find("solve")) {
-            if (const Value* mev = sc.find("mesh")) {
-                checkKeys(*mev, {"maxVolume", "quality"}, "mesh");
-                if (const Value* q = mev->find("quality"))
-                    m_model.params.tetRadiusEdge = static_cast<float>(num(*q, "mesh.quality"));
-                if (const Value* mv = mev->find("maxVolume")) {
-                    double absV = num(*mv, "mesh.maxVolume");
-                    double bbox = std::max(1e-9, double(m_model.bboxVolume));
-                    m_model.params.maxVolPercent = static_cast<float>(100.0 * absV / bbox);
+            if (meshMethod == "toolpath") {
+                // new_TODO_19C-b: cookie sections -> per-slab strip mesh + ties.
+                if (m_toolpathSections.sections.empty())
+                    throw RunError("mesh.method=toolpath requires a 'gcodeSections' block");
+                if (!m_model.hasLayerStack())
+                    m_model.layers = std::make_unique<LayerStack>();
+                SlabMesher::ToolpathMeshOptions topt;
+                const Value* mev = sc.find("mesh");
+                if (const Value* v = mev->find("maxSlabs"))
+                    topt.maxSlabs = static_cast<int>(num(*v, "mesh.maxSlabs"));
+                if (const Value* v = mev->find("targetEdgeMM"))
+                    topt.targetEdgeMM = static_cast<float>(num(*v, "mesh.targetEdgeMM"));
+                if (const Value* v = mev->find("tieAlpha"))
+                    topt.tieAlpha = static_cast<float>(num(*v, "mesh.tieAlpha"));
+                SlabMesher::ToolpathMeshStats ms =
+                    SlabMesher::meshToolpathSlabs(m_toolpathSections, topt, m_model);
+                if (!m_model.hasVolumetricMesh || ms.nTets == 0)
+                    throw RunError("toolpath meshing produced no volumetric mesh");
+                report.set("mesh", meshStats(m_model));
+                Value tm = Value::makeObject();
+                tm.set("nSlabs",        Value(ms.nSlabs));
+                tm.set("layersPerSlab", Value(ms.layersPerSlab));
+                tm.set("nTets",         Value(ms.nTets));
+                tm.set("nNodes",        Value(ms.nNodes));
+                tm.set("nInterfaces",   Value(ms.nInterfaces));
+                tm.set("nTies",         Value(ms.nTies));
+                tm.set("areaErrMaxPct", Value(ms.areaErrMaxPct));
+                tm.set("sumThickOverAreaPerMM", Value(ms.sumThickOverAreaPerMM));
+                report.set("toolpathMesh", tm);
+                checkKeys(*solveV,
+                          {"kind", "maxIter", "gpu", "fdmAnisotropy",
+                           "buildAxis", "quadratic"},
+                          "solve");
+                runSolve(sc, *solveV, mat, report);
+            } else if (meshMethod == "slice") {
+                // new_TODO_05: slab-mesh path — slice FIRST, extrude to Tet4, then solve.
+                const Value* sliceV = sc.find("slice");
+                if (!sliceV)
+                    throw RunError("mesh.method=slice requires a top-level 'slice' block");
+
+                // Run slice (fills m_slice + sets model.layers).
+                Value sliceRpt = runSlice(*sliceV);
+
+                if (!m_model.hasLayerStack())
+                    throw RunError("slabMesh: layer stack not built by runSlice");
+
+                // Extrude slabs -> Tet4 volumetric mesh.
+                SlabMesher::MeshStats ms =
+                    SlabMesher::meshSlabs(m_slice, m_model.params, m_model);
+
+                if (!m_model.hasVolumetricMesh)
+                    throw RunError("slabMesh: meshSlabs produced no volumetric mesh");
+
+                // Mesh stats on the clean Tet4 mesh, before any Tet10 promotion.
+                report.set("mesh", meshStats(m_model));
+
+                // Append slab-mesh sub-block to the slice report. The three
+                // boolean flags surface the mesher's v1 blind spots (holes,
+                // varying sections, conformity) so scenarios can assert on
+                // them instead of the harness being blind to them.
+                Value mblk = Value::makeObject();
+                mblk.set("nSlabs",   Value(ms.nSlabs));
+                mblk.set("nRing",    Value(ms.nRing));
+                mblk.set("nVerts2D", Value(ms.nVerts2D));
+                mblk.set("nTets",    Value(ms.nTets));
+                mblk.set("refineLevel",    Value(ms.refineLevel));
+                mblk.set("refineCapped",   Value(ms.refineCapped));
+                mblk.set("ringConformal",  Value(ms.ringConformal));
+                mblk.set("holesIgnored",   Value(ms.holesIgnored));
+                mblk.set("sectionUniform", Value(ms.sectionUniform));
+                mblk.set("wallPct", Value(static_cast<double>(ms.wallPct)));
+                sliceRpt.set("mesh", mblk);
+                report.set("slice", sliceRpt);
+
+                checkKeys(*solveV,
+                          {"kind", "maxIter", "gpu", "fdmAnisotropy",
+                           "buildAxis", "quadratic"},
+                          "solve");
+                runSolve(sc, *solveV, mat, report);
+
+            } else {
+                // Original TetGen path. [same-path: GENERATE 3D MESH]
+                if (const Value* mev = sc.find("mesh")) {
+                    if (const Value* q = mev->find("quality"))
+                        m_model.params.tetRadiusEdge = static_cast<float>(num(*q, "mesh.quality"));
+                    if (const Value* mv = mev->find("maxVolume")) {
+                        double absV = num(*mv, "mesh.maxVolume");
+                        double bbox = std::max(1e-9, double(m_model.bboxVolume));
+                        m_model.params.maxVolPercent = static_cast<float>(100.0 * absV / bbox);
+                    }
                 }
+                if (!m_model.generateVolumetricMesh())
+                    throw RunError("volumetric meshing failed (see console)");
+
+                // Mesh stats captured on the clean Tet4 mesh, before Tet10 promotion.
+                report.set("mesh", meshStats(m_model));
+
+                checkKeys(*solveV,
+                          {"kind", "maxIter", "gpu", "fdmAnisotropy",
+                           "buildAxis", "quadratic"},
+                          "solve");
+                runSolve(sc, *solveV, mat, report);
             }
-            if (!m_model.generateVolumetricMesh()) // [same-path: GENERATE 3D MESH]
-                throw RunError("volumetric meshing failed (see console)");
-
-            // mesh stats captured on the clean Tet4 mesh, before any Tet10 promotion.
-            report.set("mesh", meshStats(m_model));
-
-            checkKeys(*solveV, {"kind", "maxIter", "gpu", "fdmAnisotropy", "buildAxis"},
-                      "solve");
-            runSolve(sc, *solveV, mat, report);
         }
 
         // ---- slice (new_TODO_04; runs on the surface mesh) ------------
-        if (const Value* sliceV = sc.find("slice"))
-            report.set("slice", runSlice(*sliceV));
+        // Skipped when already executed as the slab-mesh path above.
+        if (meshMethod != "slice") {
+            if (const Value* sliceV = sc.find("slice"))
+                report.set("slice", runSlice(*sliceV));
+        }
 
         // ---- probes ---------------------------------------------------
         report.set("probes", evalProbes(sc));
@@ -426,6 +558,68 @@ private:
     FEAModel    m_model;            // ctor needs a live GL context (provided by caller)
     BuiltInShader m_shader{modelVS, modelFS};
     LayerSlicer::SliceResult m_slice; // new_TODO_04: cached for the screenshot preview
+    ToolpathSections::LayerSections m_toolpathSections; // new_TODO_19B (19C meshes it)
+
+    // new_TODO_19A: toolpath ingest stats. camelCase keys so assert dotted
+    // paths can reference every number; `countsMatch` is the internal
+    // invariant (each emitted segment carries exactly one feature tag).
+    Value gcodeStats(const Toolpath::ToolpathModel& tp) {
+        using namespace Toolpath;
+        Value g = Value::makeObject();
+        g.set("layerCount",   Value(tp.layerCount));
+        g.set("nSegments",    Value(static_cast<long long>(tp.segments.size())));
+        g.set("nArcSegments", Value(static_cast<long long>(tp.arcSegments)));
+        const glm::vec3 size = tp.bbMax - tp.bbMin;
+        g.set("bboxSizeXMM", Value(static_cast<double>(size.x)));
+        g.set("bboxSizeYMM", Value(static_cast<double>(size.y)));
+        g.set("bboxSizeZMM", Value(static_cast<double>(size.z)));
+        g.set("avgLayerHeightMM",
+              Value(tp.layerCount > 0
+                        ? static_cast<double>(size.z) / tp.layerCount : 0.0));
+        static const char* keys[FT_COUNT] = {
+            "other", "outerWall", "innerWall", "overhangWall", "solidInfill",
+            "sparseInfill", "topSurface", "bottomSurface", "bridge",
+            "gapInfill", "support", "supportInterface", "brim",
+            "floatingShell", "custom"};
+        Value fc = Value::makeObject();
+        long long sum = 0;
+        for (int i = 0; i < FT_COUNT; ++i) {
+            fc.set(keys[i], Value(static_cast<long long>(tp.featureCounts[i])));
+            sum += tp.featureCounts[i];
+        }
+        g.set("featureCounts", fc);
+        g.set("countsMatch",
+              Value(sum == static_cast<long long>(tp.segments.size())));
+        return g;
+    }
+
+    // new_TODO_19B: per-layer cookie stats. Aggregates only — per-layer detail
+    // stays in memory for 19C; every assertable number is a scalar here.
+    Value toolpathSectionStats(const ToolpathSections::LayerSections& ls) {
+        Value g = Value::makeObject();
+        const int n = static_cast<int>(ls.sections.size());
+        g.set("nLayers", Value(n));
+        double mn = 0.0, mx = 0.0, mean = 0.0;
+        if (n > 0) {
+            mn = mx = ls.netAreaMM2[0];
+            for (int i = 0; i < n; ++i) {
+                mn = std::min(mn, ls.netAreaMM2[i]);
+                mx = std::max(mx, ls.netAreaMM2[i]);
+                mean += ls.netAreaMM2[i];
+            }
+            mean /= n;
+        }
+        g.set("minNetAreaMM2",   Value(mn));
+        g.set("maxNetAreaMM2",   Value(mx));
+        g.set("meanNetAreaMM2",  Value(mean));
+        g.set("firstNetAreaMM2", Value(n > 0 ? ls.netAreaMM2[0]     : 0.0));
+        g.set("lastNetAreaMM2",  Value(n > 0 ? ls.netAreaMM2[n - 1] : 0.0));
+        g.set("totalLoops",  Value(ls.totalLoops));
+        g.set("totalHoles",  Value(ls.totalHoles));
+        g.set("medianWidthMM",  Value(static_cast<double>(ls.medianWidthMM)));
+        g.set("closeGapUsedMM", Value(static_cast<double>(ls.closeGapUsedMM)));
+        return g;
+    }
 
     void applyGeometry(const Value& geom) {
         // new_TODO_04C: optional STL unit override (mm per file unit); must be set
@@ -443,6 +637,13 @@ private:
                 m_model.params.sizeZ = static_cast<float>(sz->arr[2].asNumber(1));
             }
             m_model.generateCube(); // [same-path: CUBE MODE + slider regen]
+        } else if (const Value* gc = geom.find("gcode3mf")) {
+            // new_TODO_19A: sliced-gcode ingest (same function the UI file
+            // list calls through loadFile's .gcode.3mf dispatch).
+            bool partOnly = false;
+            if (const Value* po = geom.find("partOnly")) partOnly = po->asBool();
+            if (!m_model.loadGcode3mf(gc->asString(), partOnly))
+                throw RunError("cannot load gcode 3mf '" + gc->asString() + "'");
         } else if (const Value* stl = geom.find("stl")) {
             if (!m_model.loadFile(stl->asString())) // [same-path: IMPORT FILE]
                 throw RunError("cannot load STL '" + stl->asString() + "'");
@@ -450,17 +651,50 @@ private:
             if (!m_model.loadFile(step->asString()))
                 throw RunError("cannot load STEP '" + step->asString() + "'");
         } else {
-            throw RunError("geometry needs one of: preset, stl, step");
+            throw RunError("geometry needs one of: preset, stl, step, gcode3mf");
         }
     }
 
-    FEASolver::LoadType mapLoad(const std::string& name) {
+    // Maps the scenario preset name; FacePull/FaceBend also set the solver's
+    // faceAxis/bendDir (new_TODO_19C): "pullX|pullY|pullZ" and "bend<A><D>"
+    // where A = clamped/loaded face axis and D = force direction (e.g.
+    // "bendZX" = clamp Z-min face, load Z-max face along +X).
+    FEASolver::LoadType mapLoad(const std::string& name, FEASolver& solver) {
         if (name == "topFaceDown" || name == "surfaceCompY") return FEASolver::LoadType::SurfaceCompressionY;
         if (name == "pointZ")        return FEASolver::LoadType::PointForceZ;
         if (name == "cantileverZ")   return FEASolver::LoadType::CantileverBendingZ;
         if (name == "tensionX")      return FEASolver::LoadType::TensionX;
         if (name == "tensionY")      return FEASolver::LoadType::TensionY;
         if (name == "tensionZ")      return FEASolver::LoadType::TensionZ;
+        auto axisOf = [&](char c) -> int {
+            if (c == 'X' || c == 'x') return 0;
+            if (c == 'Y' || c == 'y') return 1;
+            if (c == 'Z' || c == 'z') return 2;
+            throw RunError("load preset '" + name + "': bad axis '" +
+                           std::string(1, c) + "'");
+        };
+        if (name.size() == 5 && name.rfind("pull", 0) == 0) {
+            solver.faceAxis = axisOf(name[4]);
+            return FEASolver::LoadType::FacePull;
+        }
+        // "bend3p<A><D>": classic three-point bend, beam axis A, load -D
+        // (span from loads[0].spanMM). E.g. bend3pZX = standing shaft.
+        if (name.size() == 8 && name.rfind("bend3p", 0) == 0) {
+            solver.faceAxis = axisOf(name[6]);
+            solver.bendDir  = axisOf(name[7]);
+            if (solver.bendDir == solver.faceAxis)
+                throw RunError("load preset '" + name +
+                               "': bend direction must differ from the beam axis");
+            return FEASolver::LoadType::ThreePointBend;
+        }
+        if (name.size() == 6 && name.rfind("bend", 0) == 0) {
+            solver.faceAxis = axisOf(name[4]);
+            solver.bendDir  = axisOf(name[5]);
+            if (solver.bendDir == solver.faceAxis)
+                throw RunError("load preset '" + name +
+                               "': bend direction must differ from the face axis");
+            return FEASolver::LoadType::FaceBend;
+        }
         throw RunError("unknown load preset '" + name + "'");
     }
 
@@ -478,11 +712,13 @@ private:
             if (!loads->isArray() || loads->arr.empty())
                 throw RunError("loads must be a non-empty array");
             const Value& l0 = loads->arr[0];
-            checkKeys(l0, {"type", "name", "mag", "dir", "pos"}, "loads[0]");
+            checkKeys(l0, {"type", "name", "mag", "dir", "pos", "spanMM"}, "loads[0]");
             if (const Value* nm = l0.find("name")) loadName = nm->asString();
             if (const Value* mg = l0.find("mag"))  mag = num(*mg, "loads[0].mag");
+            if (const Value* sp = l0.find("spanMM"))
+                solver.bendSpanMM = num(*sp, "loads[0].spanMM");
         }
-        solver.loadType = mapLoad(loadName);
+        solver.loadType = mapLoad(loadName, solver);
         solver.forceMagnitude = mag;
 
         if (const Value* cons = sc.find("constraints")) {
@@ -514,10 +750,15 @@ private:
         int maxIter = 50;
         if (const Value* mi = solve.find("maxIter")) maxIter = static_cast<int>(num(*mi, "solve.maxIter"));
 
+        // new_TODO_19C-b: interlayer ties couple CORNER nodes only, so the
+        // toolpath lane runs Tet4 (quadratic:false) until mid-edge ties land.
+        bool quadratic = true;
+        if (const Value* q = solve.find("quadratic")) quadratic = q->asBool();
+
         auto t0 = std::chrono::steady_clock::now();
         bool ok = false;
         if (kind == "linear") {
-            solver.useQuadraticElements = true;          // [same-path: LINEAR STATIC FEA]
+            solver.useQuadraticElements = quadratic;     // [same-path: LINEAR STATIC FEA]
             ok = solver.solveLinearStatic(m_model, 10.0f);
         } else if (kind == "nonlinear") {
             solver.useQuadraticElements = true;          // [same-path: NONLINEAR FEA (NR)]
@@ -545,6 +786,18 @@ private:
         // scenario can assert the physical result against a closed-form oracle.
         sblk.set("maxDispMM", Value(static_cast<double>(m_model.physicalMaxDispMM)));
         sblk.set("partSizeMM_x", Value(static_cast<double>(m_model.physicalSizeMM().x)));
+        // new_TODO_19D: equilibrium telemetry (nonzero for pull/bend presets).
+        sblk.set("appliedForceN", Value(solver.lastAppliedForceN));
+        sblk.set("reactionSumN",  Value(solver.lastReactionSumN));
+        sblk.set("effectiveSpanMM", Value(solver.lastEffectiveSpanMM));
+        // Sign convention: reactionSumN = penalty*u summed over clamped DOFs
+        // along the load axis = the force the clamp RESISTS (same sign as the
+        // applied pull). Balance means applied == reaction.
+        sblk.set("equilibriumResidualRel",
+                 Value(std::abs(solver.lastAppliedForceN) > 1e-12
+                           ? std::abs(solver.lastAppliedForceN - solver.lastReactionSumN) /
+                                 std::abs(solver.lastAppliedForceN)
+                           : 0.0));
         report.set("solver", sblk);
 
         if (!ok) throw RunError("solver '" + kind + "' returned failure");
@@ -718,16 +971,39 @@ private:
         const auto& orig = m_model.originalVolumetricPositions;
         const auto& def  = m_model.deformedPositions;
         const bool haveDef = (def.size() == orig.size()) && !def.empty();
+        // new_TODO_19C: prefer the TRUE physical displacement (mm, no display
+        // exaggeration). The legacy fallback reads the render overlay, whose
+        // magnitudes are visualScale-exaggerated model units — kept only for
+        // solve paths that don't fill nodalDispMM (NR).
+        const auto& dmm = m_model.nodalDispMM;
+        const bool haveMM = (dmm.size() == orig.size()) && !dmm.empty();
 
         for (const auto& p : probes->arr) {
-            checkKeys(p, {"id", "pos", "quantity"}, "probes[]");
+            checkKeys(p, {"id", "pos", "posMM", "quantity"}, "probes[]");
             std::string id = p.find("id") ? p.find("id")->asString() : "probe";
-            const Value* pos = p.find("pos");
-            if (!pos || !pos->isArray() || pos->arr.size() != 3)
-                throw RunError("probe '" + id + "' needs pos [x,y,z]");
-            glm::vec3 target(float(pos->arr[0].asNumber()),
-                             float(pos->arr[1].asNumber()),
-                             float(pos->arr[2].asNumber()));
+            // Two position conventions (new_TODO_19C):
+            //  - "pos"   raw model units. TRAP: preset boxes keep their size as
+            //    model coordinates, file-loaded models are 3-unit normalized —
+            //    the same numbers mean different places.
+            //  - "posMM" physical part-centered millimetres, converted via
+            //    modelToMM — identical meaning for every geometry source.
+            //    Prefer this in new scenarios.
+            const Value* pos   = p.find("pos");
+            const Value* posMM = p.find("posMM");
+            if ((!pos && !posMM) || (pos && posMM))
+                throw RunError("probe '" + id + "' needs exactly one of pos / posMM");
+            const Value* use = pos ? pos : posMM;
+            if (!use->isArray() || use->arr.size() != 3)
+                throw RunError("probe '" + id + "' position must be [x,y,z]");
+            glm::vec3 target(float(use->arr[0].asNumber()),
+                             float(use->arr[1].asNumber()),
+                             float(use->arr[2].asNumber()));
+            if (posMM) {
+                const float m2mm = std::max(1e-9f, m_model.modelToMM);
+                // Model space is centred on the part bbox; posMM is
+                // part-centred mm, so the conversion is a pure scale.
+                target /= m2mm;
+            }
             // nearest-node snap
             int best = -1; float bestD2 = 1e30f;
             for (size_t i = 0; i < orig.size(); ++i) {
@@ -737,7 +1013,9 @@ private:
             Value pr = Value::makeObject();
             if (best < 0) { pr.set("error", Value(std::string("no nodes"))); out.set(id, pr); continue; }
             glm::vec3 disp(0.0f);
-            if (haveDef) disp = def[best] - orig[best];
+            if (haveMM)       disp = dmm[best];              // physical mm
+            else if (haveDef) disp = def[best] - orig[best]; // legacy (exaggerated)
+            pr.set("unit", Value(std::string(haveMM ? "mm" : "model*visualScale")));
             Value vec = Value::makeArray();
             vec.push(Value(double(disp.x)));
             vec.push(Value(double(disp.y)));
@@ -763,7 +1041,7 @@ private:
         showWireframe = true;
 
         for (const auto& s : shots->arr) {
-            checkKeys(s, {"name", "camera", "scalarMode", "deformScale", "deadView", "sliceLayer"}, "screenshots[]");
+            checkKeys(s, {"name", "camera", "scalarMode", "deformScale", "deadView", "sliceLayer", "showLoadArrows"}, "screenshots[]");
             std::string name = s.find("name") ? s.find("name")->asString() : "shot";
             std::string cam  = s.find("camera") ? s.find("camera")->asString() : "iso";
             int scalarMode = 1;
@@ -774,11 +1052,16 @@ private:
             std::string deadView = "hidden";
             if (const Value* dv = s.find("deadView")) deadView = dv->asString();
 
+            // new_TODO_19E: overlay the 3-D load arrows on this shot (same flag
+            // the UI FORCE MAP button drives; drawn by drawForceArrows).
+            bool showArrows = false;
+            if (const Value* la = s.find("showLoadArrows")) showArrows = la->asBool();
+
             // Drive the existing scalar/deformation toggles, then rebuild buffers
             // exactly as the UI does after toggling SHOWING/FORCE MAP/FRACTURE VIEW.
             m_model.showVolumetricMesh    = m_model.hasVolumetricMesh;
             m_model.showDeformedMesh      = (deformScale != 0.0);
-            m_model.showAppliedForceField = (scalarMode == 2);
+            m_model.showAppliedForceField = (scalarMode == 2) || showArrows;
             // new_TODO_03: scalarMode 1/3/4/5 select the fracture view (same-path
             // as the UI "FRACTURE VIEW" button); deadView mirrors "DEAD ELEMS".
             if (scalarMode == 1 || scalarMode == 3 || scalarMode == 4 || scalarMode == 5)

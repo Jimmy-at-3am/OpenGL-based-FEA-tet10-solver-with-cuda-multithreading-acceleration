@@ -1,0 +1,72 @@
+{
+  "v": 1,
+  "geometry": {
+    "gcode3mf": "gcode_models/boxStanding.gcode.3mf"
+  },
+  "material": "materials/pla.mat",
+  "probes": [],
+  "screenshots": [
+    {
+      "name": "iso_shell",
+      "camera": "iso",
+      "scalarMode": 0,
+      "deformScale": 0.0
+    }
+  ],
+  "asserts": [
+    {
+      "path": "gcode.layerCount",
+      "op": "==",
+      "value": 250
+    },
+    {
+      "path": "gcode.nSegments",
+      "op": "==",
+      "value": 5846
+    },
+    {
+      "path": "gcode.countsMatch",
+      "op": "==",
+      "value": 1
+    },
+    {
+      "path": "gcode.bboxSizeXMM",
+      "op": "~=",
+      "value": 19.58,
+      "rel": 0.01
+    },
+    {
+      "path": "gcode.bboxSizeYMM",
+      "op": "~=",
+      "value": 9.58,
+      "rel": 0.01
+    },
+    {
+      "path": "gcode.bboxSizeZMM",
+      "op": "~=",
+      "value": 49.8,
+      "rel": 0.01
+    },
+    {
+      "path": "gcode.avgLayerHeightMM",
+      "op": "~=",
+      "value": 0.1992,
+      "rel": 0.02
+    },
+    {
+      "path": "gcode.featureCounts.outerWall",
+      "op": "==",
+      "value": 1000
+    },
+    {
+      "path": "gcode.featureCounts.sparseInfill",
+      "op": ">",
+      "value": 0
+    },
+    {
+      "path": "screenshots.iso_shell.stdRGBmax",
+      "op": ">",
+      "value": 0.0
+    }
+  ]
+}

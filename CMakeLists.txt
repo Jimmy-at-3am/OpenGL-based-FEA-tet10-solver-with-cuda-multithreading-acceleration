@@ -176,6 +176,32 @@ if(USE_CLIPPER2)
   endif()
 endif()
 
+# --- CDT (new_TODO_19C-b, sanctioned by the new_TODO_05 spec + AGENT_DEV_GUIDE
+# third-party index): artem-ogre/CDT constrained Delaunay triangulation for
+# the toolpath cookie sections (polygons with many holes — the hand-rolled
+# hole-bridging failed on Bambu's 46-hole diagonal-grid infill). Header-only;
+# populated like Clipper2. ---
+option(USE_CDT "Enable CDT triangulation for toolpath sections" ON)
+set(HAS_CDT FALSE)
+if(USE_CDT)
+  FetchContent_Declare(
+    cdt
+    GIT_REPOSITORY https://github.com/artem-ogre/CDT.git
+    GIT_TAG        1.4.1
+  )
+  FetchContent_GetProperties(cdt)
+  if(NOT cdt_POPULATED)
+    FetchContent_Populate(cdt)
+  endif()
+  if(EXISTS "${cdt_SOURCE_DIR}/CDT/include/CDT.h")
+    set(HAS_CDT TRUE)
+    set(CDT_INCLUDE_DIR "${cdt_SOURCE_DIR}/CDT/include")
+    message(STATUS "CDT enabled: ${cdt_SOURCE_DIR}")
+  else()
+    message(WARNING "CDT sources not found after fetch; toolpath meshing will error at runtime.")
+  endif()
+endif()
+
 # --- Include directories ---
 include_directories(
     ${CMAKE_SOURCE_DIR}/include        # glad, GLFW, KHR, stb_image headers
@@ -205,6 +231,12 @@ set(SOURCES
     # new_TODO_04: layered-FDM slice data model + contour extraction
     src/LayerSlicer.cpp
     src/StepSlicer.cpp        # B-rep section seam (OCC body deferred to 04B)
+    # new_TODO_05: per-slab 2D triangulation + prism extrusion -> Tet4 slabs
+    src/SlabMesher.cpp
+    # new_TODO_19A: Bambu .gcode.3mf toolpath ingest (authoritative FDM source)
+    src/GcodeToolpathLoader.cpp
+    # new_TODO_19B: bead rectangles -> per-layer cookie sections (Clipper2)
+    src/ToolpathSections.cpp
     # new_TODO_02: headless agent self-test harness
     src/ScenarioRunner.cpp
     src/glad.c
@@ -253,6 +285,11 @@ add_executable(${PROJECT_NAME} ${SOURCES})
 if(HAS_CLIPPER2)
     target_include_directories(${PROJECT_NAME} PRIVATE ${CLIPPER2_INCLUDE_DIR})
     target_compile_definitions(${PROJECT_NAME} PRIVATE HAS_CLIPPER2=1)
+endif()
+# --- CDT (new_TODO_19C-b): include path + HAS_CDT only when populated ---
+if(HAS_CDT)
+    target_include_directories(${PROJECT_NAME} PRIVATE ${CDT_INCLUDE_DIR})
+    target_compile_definitions(${PROJECT_NAME} PRIVATE HAS_CDT=1)
 endif()
 
 # --- Link libraries ---
@@ -376,18 +413,27 @@ endforeach()
 # --- Copy scenarios/ and regression/ next to the executable (new_TODO_02) ---
 # The headless harness reads scenarios/*.json and regression/*.txt relative to
 # the working directory, so mirror both folders into the build output.
-add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+# ALL-target (not POST_BUILD): a scenario-only edit produces "ninja: no work to
+# do" for the exe, so a POST_BUILD copy never fires and `--regress all` runs
+# STALE asserts from the previous staging — a harness that silently checks old
+# checks. Caught 2026-07-02 (slab_mesh_box passed standalone, failed in
+# regress). copy_directory of a few JSON files is cheap; run it every build.
+add_custom_target(stage_harness_data ALL
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         "${CMAKE_SOURCE_DIR}/scenarios"
         "$<TARGET_FILE_DIR:${PROJECT_NAME}>/scenarios"
-    COMMENT "Copying scenarios/ to build output"
-)
-add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         "${CMAKE_SOURCE_DIR}/regression"
         "$<TARGET_FILE_DIR:${PROJECT_NAME}>/regression"
-    COMMENT "Copying regression/ to build output"
+    # new_TODO_19E: sliced-gcode fixtures + showcase defaults live in their OWN
+    # staged subfolder (the UI file panel reads "." and "gcode_models/" as two
+    # sections; scenarios reference "gcode_models/<file>").
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_SOURCE_DIR}/assets/gcode_models"
+        "$<TARGET_FILE_DIR:${PROJECT_NAME}>/gcode_models"
+    COMMENT "Staging scenarios/ + regression/ + gcode_models/ next to the executable"
 )
+add_dependencies(stage_harness_data ${PROJECT_NAME})
 
 # --- Diagnostic tool ---
 # MeshQuality.cpp is linked into mesh_diag as well so both binaries share the

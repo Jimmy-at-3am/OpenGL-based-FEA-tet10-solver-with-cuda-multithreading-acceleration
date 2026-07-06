@@ -1,0 +1,50 @@
+{
+  "v": 1,
+  "geometry": {
+    "gcode3mf": "gcode_models/boxLying.gcode.3mf"
+  },
+  "material": "materials/pla.mat",
+  "probes": [],
+  "screenshots": [],
+  "asserts": [
+    {
+      "path": "gcode.layerCount",
+      "op": "==",
+      "value": 50
+    },
+    {
+      "path": "gcode.nSegments",
+      "op": "==",
+      "value": 3765
+    },
+    {
+      "path": "gcode.countsMatch",
+      "op": "==",
+      "value": 1
+    },
+    {
+      "path": "gcode.bboxSizeXMM",
+      "op": "~=",
+      "value": 19.58,
+      "rel": 0.01
+    },
+    {
+      "path": "gcode.bboxSizeYMM",
+      "op": "~=",
+      "value": 49.58,
+      "rel": 0.01
+    },
+    {
+      "path": "gcode.bboxSizeZMM",
+      "op": "~=",
+      "value": 9.8,
+      "rel": 0.01
+    },
+    {
+      "path": "gcode.avgLayerHeightMM",
+      "op": "~=",
+      "value": 0.196,
+      "rel": 0.02
+    }
+  ]
+}

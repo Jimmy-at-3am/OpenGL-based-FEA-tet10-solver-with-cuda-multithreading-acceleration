@@ -1,0 +1,30 @@
+{
+  "v": 1,
+  "geometry": {
+    "gcode3mf": "gcode_models/boxStanding.gcode.3mf"
+  },
+  "material": "materials/pla.mat",
+  "gcodeSections": {
+    "closeGapMM": 0.0
+  },
+  "probes": [],
+  "screenshots": [],
+  "asserts": [
+    {
+      "path": "gcodeSections.nLayers",
+      "op": "==",
+      "value": 250
+    },
+    {
+      "path": "gcodeSections.closeGapUsedMM",
+      "op": "==",
+      "value": 0.0
+    },
+    {
+      "path": "gcodeSections.meanNetAreaMM2",
+      "op": "~=",
+      "value": 76.39,
+      "rel": 0.03
+    }
+  ]
+}

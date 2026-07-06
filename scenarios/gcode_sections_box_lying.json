@@ -1,0 +1,35 @@
+{
+  "v": 1,
+  "geometry": {
+    "gcode3mf": "gcode_models/boxLying.gcode.3mf"
+  },
+  "material": "materials/pla.mat",
+  "gcodeSections": {},
+  "probes": [],
+  "screenshots": [],
+  "asserts": [
+    {
+      "path": "gcodeSections.nLayers",
+      "op": "==",
+      "value": 50
+    },
+    {
+      "path": "gcodeSections.maxNetAreaMM2",
+      "op": "~=",
+      "value": 1000.0,
+      "rel": 0.01
+    },
+    {
+      "path": "gcodeSections.minNetAreaMM2",
+      "op": "~=",
+      "value": 278.66,
+      "rel": 0.05
+    },
+    {
+      "path": "gcodeSections.meanNetAreaMM2",
+      "op": "~=",
+      "value": 394.28,
+      "rel": 0.03
+    }
+  ]
+}

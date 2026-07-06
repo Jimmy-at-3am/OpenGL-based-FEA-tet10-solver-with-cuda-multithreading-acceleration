@@ -13,6 +13,7 @@
 #include "FEAModel.h"
 #include "FEASolver.h"
 #include "LayerSlicer.h"   // new_TODO_04: SLICE controls call the same free fns
+#include "SlabMesher.h"    // new_TODO_19E: MESH button routes gcode models here
 #include "ScenarioRunner.h"
 
 #include <iostream>
@@ -42,19 +43,70 @@ static constexpr int kModelsPerPage = 6;
 
 namespace fs = std::filesystem;
 
+// new_TODO_19E: the file panel reads TWO folders — "." (classic design models,
+// staged flat) and "gcode_models/" (Bambu sliced exports + showcase defaults).
+// Entries keep their relative path (loadFile uses it); the UI displays the
+// bare filename with a GCODE badge for *.gcode.3mf.
 void scanForModels() {
     modelFiles.clear();
-    for (const auto& entry : fs::directory_iterator(".")) {
-        auto ext = entry.path().extension().string();
-        // Normalise extension to lower-case for comparison
-        std::string extLow = ext;
-        std::transform(extLow.begin(), extLow.end(), extLow.begin(),
-                       [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
-        if (extLow == ".stl" || extLow == ".3mf" || extLow == ".step" || extLow == ".stp") {
-            modelFiles.push_back(entry.path().filename().string());
+    auto scanDir = [&](const std::string& dir, bool prefixed) {
+        std::error_code ec;
+        for (const auto& entry : fs::directory_iterator(dir, ec)) {
+            std::string extLow = entry.path().extension().string();
+            std::transform(extLow.begin(), extLow.end(), extLow.begin(),
+                           [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
+            if (extLow == ".stl" || extLow == ".3mf" || extLow == ".step" || extLow == ".stp") {
+                std::string name = entry.path().filename().string();
+                modelFiles.push_back(prefixed ? dir + "/" + name : name);
+            }
         }
-    }
+    };
+    scanDir(".", false);
+    scanDir("gcode_models", true);
     std::sort(modelFiles.begin(), modelFiles.end());
+}
+
+// new_TODO_19E: showcase defaults (per-gcode-model calibrated load magnitude
+// from the 19D acceptance runs; 0 for uncalibrated models). Loaded once from
+// gcode_models/showcase_defaults.json (tiny hand parser — same key=value
+// robustness philosophy as the .mat loader; the file is machine-written).
+struct ShowcaseDefaults {
+    std::string load = "pullZ";     // pull axis preset name
+    double magN = 0.0;              // calibrated force (N); 0 = none stored
+    int    maxSlabs = 12;
+    float  targetEdgeMM = -1.0f;
+    bool   found = false;
+};
+static ShowcaseDefaults showcaseDefaultsFor(const std::string& fileName) {
+    ShowcaseDefaults d;
+    std::ifstream f("gcode_models/showcase_defaults.json");
+    if (!f.is_open()) return d;
+    std::string all((std::istreambuf_iterator<char>(f)),
+                    std::istreambuf_iterator<char>());
+    std::string base = fs::path(fileName).filename().string();
+    size_t k = all.find("\"" + base + "\"");
+    if (k == std::string::npos) return d;
+    size_t end = all.find('}', k);
+    std::string blk = all.substr(k, end == std::string::npos ? std::string::npos
+                                                             : end - k);
+    auto grabNum = [&](const char* key, double fallback) -> double {
+        size_t p = blk.find(std::string("\"") + key + "\"");
+        if (p == std::string::npos) return fallback;
+        p = blk.find(':', p);
+        if (p == std::string::npos) return fallback;
+        try { return std::stod(blk.substr(p + 1)); } catch (...) { return fallback; }
+    };
+    size_t lp = blk.find("\"load\"");
+    if (lp != std::string::npos) {
+        size_t q1 = blk.find('"', blk.find(':', lp));
+        size_t q2 = (q1 == std::string::npos) ? q1 : blk.find('"', q1 + 1);
+        if (q2 != std::string::npos) d.load = blk.substr(q1 + 1, q2 - q1 - 1);
+    }
+    d.magN         = grabNum("magN", 0.0);
+    d.maxSlabs     = static_cast<int>(grabNum("maxSlabs", 12.0));
+    d.targetEdgeMM = static_cast<float>(grabNum("targetEdgeMM", -1.0));
+    d.found = true;
+    return d;
 }
 
 struct MaterialProps {
@@ -113,6 +165,15 @@ std::vector<std::string> matFiles;
 std::string activeMaterialFile;
 MaterialProps currentMaterial;
 
+// new_TODO_19E: showcase state — magnitude typed by the user (N / N*m), the
+// defaults record for the loaded gcode model, and the keyboard input queue
+// (filled by the GLFW char/key callbacks below main()).
+static ShowcaseDefaults showcaseCfg;
+static std::string showcaseMagText   = "0";
+static bool        showcaseMagFocused = false;
+static std::string g_charInput;
+static bool        g_backspace = false, g_enter = false;
+
 void scanForMaterials() {
     matFiles.clear();
     std::string matDir = "materials";
@@ -129,6 +190,8 @@ void framebuffer_size_callback(GLFWwindow* window, int width, int height);
 void mouse_callback(GLFWwindow* window, double xpos, double ypos);
 void scroll_callback(GLFWwindow* window, double xoffset, double yoffset);
 void mouse_button_callback(GLFWwindow* window, int button, int action, int mods);
+void char_callback(GLFWwindow* window, unsigned int codepoint);  // new_TODO_19E
+void key_callback(GLFWwindow* window, int key, int scancode, int action, int mods);
 void processInput(GLFWwindow* window);
 
 glm::vec3 contourColor(float t) {
@@ -163,6 +226,8 @@ int runInteractive() {
     glfwSetCursorPosCallback(window, mouse_callback);
     glfwSetScrollCallback(window, scroll_callback);
     glfwSetMouseButtonCallback(window, mouse_button_callback);
+    glfwSetCharCallback(window, char_callback);   // new_TODO_19E magnitude field
+    glfwSetKeyCallback(window, key_callback);
     glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
 
     if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) { return -1; }
@@ -242,6 +307,7 @@ int runInteractive() {
         schematicShader.setMat4("view", view);
         model.draw(schematicShader, camera.Position);
         model.drawSlicePreview(schematicShader); // new_TODO_04: section overlay
+        model.drawForceArrows(schematicShader);  // new_TODO_19E: load arrows
 
         glDisable(GL_DEPTH_TEST);
         float panelW = panelWidth; float panelX = scrWidth - panelW;
@@ -306,20 +372,46 @@ int runInteractive() {
 
                 for (int i = firstIdx; i < lastIdx; ++i) {
                     const std::string& file = modelFiles[i];
-                    bool isActive = (file == model.loadedFileName);
+                    std::string display = fs::path(file).filename().string();
+                    bool isActive = !model.loadedFileName.empty() &&
+                                    (file == model.loadedFileName ||
+                                     display == fs::path(model.loadedFileName).filename().string());
 
-                    std::string extLow = fs::path(file).extension().string();
+                    std::string nameLow = display;
+                    std::transform(nameLow.begin(), nameLow.end(), nameLow.begin(),
+                                   [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
+                    std::string extLow = fs::path(display).extension().string();
                     std::transform(extLow.begin(), extLow.end(), extLow.begin(),
                                    [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
-                    bool is3MF  = (extLow == ".3mf");
+                    bool isGcode = nameLow.size() > 10 &&
+                                   nameLow.compare(nameLow.size() - 10, 10, ".gcode.3mf") == 0;
+                    bool is3MF  = !isGcode && (extLow == ".3mf");
                     bool isSTEP = (extLow == ".step" || extLow == ".stp");
-                    bool hasBadge = is3MF || isSTEP;
+                    bool hasBadge = is3MF || isSTEP || isGcode;
 
-                    if (ui.button(file, lX, lY, lW - (hasBadge ? 46.0f : 0.0f), 22.0f, isActive)) {
+                    if (ui.button(display, lX, lY, lW - (hasBadge ? 46.0f : 0.0f), 22.0f, isActive)) {
                         if (model.loadFile(file)) {
                             camera.OrbitTarget = glm::vec3(0.0f);
                             camera.OrbitRadius = 5.0f;
+                            if (isGcode) {
+                                // new_TODO_19E: pull the stored showcase default
+                                // (calibrated magnitude etc.) and auto-select the
+                                // PLA card — the gcode showcase is FDM physics.
+                                showcaseCfg = showcaseDefaultsFor(display);
+                                char b[32];
+                                snprintf(b, sizeof(b), "%.0f", showcaseCfg.magN);
+                                showcaseMagText = b;
+                                showcaseMagFocused = false;
+                                if (loadMaterialFile("materials/pla.mat", currentMaterial))
+                                    activeMaterialFile = "materials/pla.mat";
+                            }
                         }
+                    }
+                    if (isGcode) {
+                        ui.drawRect(lX + lW - 44.0f, lY + 2.0f, 42.0f, 18.0f,
+                                    glm::vec3(0.35f, 0.15f, 0.45f));
+                        ui.drawText("GCODE", lX + lW - 42.0f, lY + 6.0f, 6.5f,
+                                    glm::vec3(0.95f, 0.6f, 1.0f));
                     }
                     if (is3MF) {
                         ui.drawRect(lX + lW - 44.0f, lY + 2.0f, 42.0f, 18.0f,
@@ -550,10 +642,111 @@ int runInteractive() {
             rY += 30.0f;
 
             if (ui.button("GENERATE 3D MESH", rX, rY, rW, 35.0f)) {
-                std::cout << "Button Clicked: Launching TetGen..." << std::endl;
-                model.generateVolumetricMesh();
+                if (model.hasToolpath()) {
+                    // new_TODO_19E: gcode models mesh through the toolpath lane
+                    // — the EXACT functions the harness calls.
+                    // [same-path: mesh.method="toolpath" in ScenarioRunner]
+                    std::cout << "Button Clicked: toolpath sections + slab mesh..." << std::endl;
+                    ToolpathSections::Options topts;
+                    ToolpathSections::LayerSections secs;
+                    std::string terr;
+                    if (ToolpathSections::build(*model.toolpath, topts, secs, terr)) {
+                        if (!model.hasLayerStack())
+                            model.layers = std::make_unique<LayerStack>();
+                        SlabMesher::ToolpathMeshOptions mo;
+                        mo.maxSlabs     = showcaseCfg.found ? showcaseCfg.maxSlabs : 12;
+                        mo.targetEdgeMM = showcaseCfg.found ? showcaseCfg.targetEdgeMM : -1.0f;
+                        SlabMesher::meshToolpathSlabs(secs, mo, model);
+                    } else {
+                        std::cout << "[GCODE] section build failed: " << terr << std::endl;
+                    }
+                } else {
+                    std::cout << "Button Clicked: Launching TetGen..." << std::endl;
+                    model.generateVolumetricMesh();
+                }
             }
             rY += 40.0f;
+
+            // ===== new_TODO_19E: GCODE SHOWCASE panel =====
+            // Workflow: pick gcode model -> GENERATE 3D MESH -> type/accept the
+            // magnitude -> RUN -> color-spectrum result + 3-D load arrows.
+            if (model.hasToolpath()) {
+                ui.drawRect(rX, rY, rW, 1.5f, glm::vec3(0.35f, 0.2f, 0.4f)); rY += 8.0f;
+                ui.drawText("GCODE SHOWCASE", rX, rY, 9.5f, glm::vec3(0.95f, 0.6f, 1.0f)); rY += 16.0f;
+                char lbuf[96];
+                snprintf(lbuf, sizeof(lbuf), "LOAD: %s  (force in N)",
+                         showcaseCfg.load.c_str());
+                ui.drawText(lbuf, rX, rY, 8.0f, glm::vec3(0.8f)); rY += 14.0f;
+                if (!showcaseCfg.found || showcaseCfg.magN <= 0.0)
+                    { ui.drawText("no stored default for this model (enter a value)",
+                                  rX, rY, 7.0f, glm::vec3(0.6f)); rY += 12.0f; }
+
+                // Typed magnitude field: click to focus, digits/'.'/'-' typed,
+                // BACKSPACE deletes, ENTER commits.
+                std::string fieldLabel = "MAG: " + showcaseMagText +
+                                         (showcaseMagFocused ? "_" : "") + " N";
+                if (ui.button(fieldLabel, rX, rY, rW * 0.62f, 24.0f, showcaseMagFocused)) {
+                    showcaseMagFocused = !showcaseMagFocused;
+                    g_charInput.clear(); g_backspace = false; g_enter = false;
+                }
+                if (ui.button("DEFAULT", rX + rW * 0.65f, rY, rW * 0.35f, 24.0f)) {
+                    char b[32]; snprintf(b, sizeof(b), "%.0f", showcaseCfg.magN);
+                    showcaseMagText = b;
+                }
+                rY += 30.0f;
+                if (showcaseMagFocused) {
+                    for (char c : g_charInput)
+                        if (std::isdigit(static_cast<unsigned char>(c)) || c == '.' || c == '-')
+                            if (showcaseMagText.size() < 12) showcaseMagText.push_back(c);
+                    g_charInput.clear();
+                    if (g_backspace) {
+                        if (!showcaseMagText.empty()) showcaseMagText.pop_back();
+                        g_backspace = false;
+                    }
+                    if (g_enter) { showcaseMagFocused = false; g_enter = false; }
+                } else {
+                    g_charInput.clear(); g_backspace = false; g_enter = false;
+                }
+
+                if (ui.button("RUN SHOWCASE FEA (FRACTURE)", rX, rY, rW, 30.0f,
+                              false, !model.hasVolumetricMesh)) {
+                    double mag = 0.0;
+                    try { mag = std::stod(showcaseMagText); } catch (...) {}
+                    if (mag > 0.0 && model.hasVolumetricMesh) {
+                        FEASolver solver;
+                        // Map "pullX|pullY|pullZ" -> FacePull + axis (the same
+                        // preset the frozen 19D scenarios use).
+                        char ax = showcaseCfg.load.empty() ? 'Z' : showcaseCfg.load.back();
+                        solver.loadType = FEASolver::LoadType::FacePull;
+                        solver.faceAxis = (ax=='X'||ax=='x') ? 0 : (ax=='Y'||ax=='y') ? 1 : 2;
+                        solver.buildAxis = 2;                 // gcode layers are always +Z
+                        solver.useQuadraticElements = false;  // fracture path = Tet4
+                        solver.useMultithreading = useMultithreading;
+                        solver.forceMagnitude = mag;
+                        solver.youngsModulus  = currentMaterial.E;
+                        solver.poissonRatio   = currentMaterial.nu;
+                        solver.fractureStress = currentMaterial.fractureStress;
+                        if (currentMaterial.E_z > 0.0) {
+                            solver.useFdmAnisotropy = true;
+                            solver.E_z   = currentMaterial.E_z;
+                            solver.nu_pz = currentMaterial.nu_pz;
+                            solver.G_pz  = currentMaterial.G_pz;
+                            solver.fractureStress_intralayer = currentMaterial.fractureStress_intralayer;
+                            solver.fractureStress_interlayer = currentMaterial.fractureStress_interlayer;
+                            solver.fractureShear_interlayer  = currentMaterial.fractureShear_interlayer;
+                        }
+                        model.elementAlive.clear();
+                        model.elementFailureIter.clear();
+                        model.elementFailureMode.clear();
+                        solver.solveBrittleFracture(model, 10.0f, 14); // [same-path: BRITTLE FRACTURE]
+                        model.showAppliedForceField = true;  // 3-D load arrows on
+                    } else {
+                        std::cout << "[SHOWCASE] enter a positive magnitude (N) first"
+                                  << std::endl;
+                    }
+                }
+                rY += 36.0f;
+            }
 
             if (model.hasVolumetricMesh) {
                 std::string mtLabel = useMultithreading ? "MULTITHREADING: ON" : "MULTITHREADING: OFF";
@@ -983,6 +1176,19 @@ void scroll_callback(GLFWwindow* window, double xoffset, double yoffset) {
     camera.ProcessMouseScroll(static_cast<float>(yoffset));
 }
 
+// new_TODO_19E: keyboard input for the showcase magnitude field. Characters
+// queue up in g_charInput; the field consumes them only while focused, so
+// typing never leaks into camera controls.
+void char_callback(GLFWwindow*, unsigned int codepoint) {
+    if (codepoint < 128) g_charInput.push_back(static_cast<char>(codepoint));
+}
+void key_callback(GLFWwindow*, int key, int, int action, int) {
+    if (action == GLFW_PRESS || action == GLFW_REPEAT) {
+        if (key == GLFW_KEY_BACKSPACE) g_backspace = true;
+        if (key == GLFW_KEY_ENTER || key == GLFW_KEY_KP_ENTER) g_enter = true;
+    }
+}
+
 // =============================================================================
 //  CLI dispatch (new_TODO_02). No args -> interactive UI. Otherwise headless
 //  scenario harness. Same pipeline functions as the UI buttons (TOP RULE).
@@ -990,6 +1196,38 @@ void scroll_callback(GLFWwindow* window, double xoffset, double yoffset) {
 //    FEAPreProcessor --regress all
 //    FEAPreProcessor --dump-ui            (stub: prints "{}" until new_TODO_16)
 // =============================================================================
+// -----------------------------------------------------------------------------
+// The harness resolves scenarios/, materials/, assets and STL fixtures relative
+// to the working directory, and the build stages all of them next to the exe.
+// Launched from anywhere else (e.g. the repo root) the run died with exit 2 on
+// missing files, which made "is this TODO actually green?" fail for the wrong
+// reason. If the CWD lacks the harness data but the exe's directory has it,
+// switch there. Caller-supplied paths are pinned to the original CWD first so
+// reports/screenshots still land where the caller expects.
+// Self-check oracle (2026-07-01): `--regress all` from the repo root must print
+// the same PASS table and exit code as a run started inside build/.
+// -----------------------------------------------------------------------------
+static void ensureHarnessCwd(const char* argv0,
+                             const std::vector<std::string*>& callerPaths) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    if (fs::exists("scenarios", ec) && fs::exists("materials", ec)) return;
+    fs::path exe = fs::absolute(fs::path(argv0), ec);
+    if (ec) return;
+    fs::path dir = exe.parent_path();
+    if (!(fs::exists(dir / "scenarios", ec) && fs::exists(dir / "materials", ec)))
+        return;  // exe dir is no better -- leave CWD alone, let errors surface
+    for (std::string* p : callerPaths) {
+        if (!p || p->empty()) continue;
+        fs::path abs = fs::absolute(*p, ec);
+        if (!ec) *p = abs.string();
+    }
+    fs::current_path(dir, ec);
+    if (!ec)
+        std::cout << "[harness] data not in CWD; running from exe dir: "
+                  << dir.string() << "\n";
+}
+
 static void printUsage() {
     std::cout <<
         "Usage:\n"
@@ -1016,6 +1254,7 @@ int main(int argc, char** argv) {
             std::cerr << "--regress expects 'all'\n";
             return 2;
         }
+        ensureHarnessCwd(argv[0], {});
         return ScenarioRunner::runRegress();
     }
 
@@ -1044,6 +1283,14 @@ int main(int argc, char** argv) {
             std::cerr << "--run requires a scenario path\n";
             return 2;
         }
+        // Pin outputs (and the scenario, when it resolves from here) to the
+        // caller's CWD before any fallback chdir.
+        std::vector<std::string*> pin = { &out, &shots };
+        {
+            std::error_code ec;
+            if (std::filesystem::exists(scenario, ec)) pin.push_back(&scenario);
+        }
+        ensureHarnessCwd(argv[0], pin);
         return ScenarioRunner::runScenario(scenario, out, shots);
     }
 

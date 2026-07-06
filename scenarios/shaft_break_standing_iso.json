@@ -1,0 +1,42 @@
+{
+  "v": 1,
+  "geometry": {
+    "gcode3mf": "gcode_models/shaftStanding.gcode.3mf"
+  },
+  "material": "materials/pla.mat",
+  "gcodeSections": {},
+  "mesh": {
+    "method": "toolpath",
+    "maxSlabs": 12,
+    "targetEdgeMM": 2.25,
+    "tieAlpha": 100.0
+  },
+  "loads": [
+    {
+      "type": "preset",
+      "name": "pullZ",
+      "mag": 800.0
+    }
+  ],
+  "constraints": [
+    {
+      "preset": "fixedMinZ"
+    }
+  ],
+  "solve": {
+    "kind": "fracture",
+    "maxIter": 14,
+    "gpu": false,
+    "fdmAnisotropy": false,
+    "buildAxis": 2
+  },
+  "probes": [],
+  "screenshots": [],
+  "asserts": [
+    {
+      "path": "fracture.totalFailed",
+      "op": "<=",
+      "value": 200
+    }
+  ]
+}

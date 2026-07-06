@@ -1,0 +1,103 @@
+{
+  "build": {
+    "date": "2026-07-01T14:49:39",
+    "compiler": "MSVC 1950",
+    "cuda": true
+  },
+  "paramsEcho": {
+    "v": 1,
+    "geometry": {
+      "stl": "holed_box.stl"
+    },
+    "slice": {
+      "layerThickness": 0.20000000000000001,
+      "buildAxis": 2,
+      "maxSlabs": 40
+    },
+    "screenshots": [
+      {
+        "name": "annulus_mid_z",
+        "camera": "top",
+        "sliceLayer": 10
+      }
+    ],
+    "asserts": [
+      {
+        "path": "slice.grouping.nPhysical",
+        "op": "==",
+        "value": 20
+      },
+      {
+        "path": "slice.grouping.k",
+        "op": "==",
+        "value": 1
+      },
+      {
+        "path": "slice.grouping.nSlabs",
+        "op": "==",
+        "value": 20
+      },
+      {
+        "path": "slice.summary.nPlanes",
+        "op": "==",
+        "value": 20
+      },
+      {
+        "path": "slice.summary.minLoops",
+        "op": "==",
+        "value": 2
+      },
+      {
+        "path": "slice.summary.maxLoops",
+        "op": "==",
+        "value": 2
+      },
+      {
+        "path": "slice.summary.minHoles",
+        "op": "==",
+        "value": 1
+      },
+      {
+        "path": "slice.summary.maxHoles",
+        "op": "==",
+        "value": 1
+      },
+      {
+        "path": "slice.summary.maxDiscardedChains",
+        "op": "==",
+        "value": 0
+      },
+      {
+        "path": "slice.summary.holeAreaFraction",
+        "op": "~=",
+        "value": 0.0625,
+        "rel": 0.050000000000000003
+      },
+      {
+        "path": "slice.summary.netAreaFraction",
+        "op": "~=",
+        "value": 0.9375,
+        "rel": 0.02
+      },
+      {
+        "path": "slice.grouping.physThickMM",
+        "op": "~=",
+        "value": 0.20000000000000001,
+        "rel": 0.02
+      },
+      {
+        "path": "slice.summary.minNetAreaMM2",
+        "op": "~=",
+        "value": 15,
+        "rel": 0.02
+      },
+      {
+        "path": "screenshots.annulus_mid_z.stdRGBmax",
+        "op": ">",
+        "value": 0
+      }
+    ]
+  },
+  "error": "cannot load STL 'holed_box.stl'",
+  "pass": false
+}

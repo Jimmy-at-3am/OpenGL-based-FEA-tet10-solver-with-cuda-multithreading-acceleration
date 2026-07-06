@@ -1,0 +1,131 @@
+{
+  "build": {
+    "date": "2026-07-01T14:49:38",
+    "compiler": "MSVC 1950",
+    "cuda": true
+  },
+  "paramsEcho": {
+    "v": 1,
+    "geometry": {
+      "preset": "box",
+      "size": [
+        20,
+        10,
+        10
+      ]
+    },
+    "material": "materials/pla.mat",
+    "mesh": {
+      "maxVolume": 8.3300000000000001,
+      "quality": 1.6000000000000001
+    },
+    "loads": [
+      {
+        "type": "preset",
+        "name": "tensionZ",
+        "mag": 4500
+      }
+    ],
+    "constraints": [
+      {
+        "preset": "fixedMinX"
+      }
+    ],
+    "solve": {
+      "kind": "fracture",
+      "maxIter": 50,
+      "gpu": false,
+      "fdmAnisotropy": true,
+      "buildAxis": 2
+    },
+    "probes": [
+      {
+        "id": "freeEndTop",
+        "pos": [
+          10,
+          5,
+          0
+        ],
+        "quantity": "displacement"
+      }
+    ],
+    "screenshots": [
+      {
+        "name": "deform",
+        "camera": "iso",
+        "scalarMode": 1,
+        "deformScale": 0,
+        "deadView": "hidden"
+      },
+      {
+        "name": "mode",
+        "camera": "iso",
+        "scalarMode": 3,
+        "deformScale": 0,
+        "deadView": "colored"
+      },
+      {
+        "name": "crack_order",
+        "camera": "iso",
+        "scalarMode": 4,
+        "deformScale": 0,
+        "deadView": "colored"
+      },
+      {
+        "name": "stress",
+        "camera": "iso",
+        "scalarMode": 5,
+        "deformScale": 0,
+        "deadView": "colored"
+      },
+      {
+        "name": "mode_ghost",
+        "camera": "iso",
+        "scalarMode": 3,
+        "deformScale": 0,
+        "deadView": "ghost"
+      },
+      {
+        "name": "mode_colored",
+        "camera": "iso",
+        "scalarMode": 3,
+        "deformScale": 0,
+        "deadView": "colored"
+      }
+    ],
+    "asserts": [
+      {
+        "path": "mesh.nTets",
+        "op": ">",
+        "value": 0
+      },
+      {
+        "path": "solver.ok",
+        "op": "==",
+        "value": 1
+      },
+      {
+        "path": "fracture.totalFailed",
+        "op": ">",
+        "value": 0
+      },
+      {
+        "path": "fracture.byMode.interlayerTension",
+        "op": ">",
+        "value": 0
+      },
+      {
+        "path": "screenshots.deform.stdRGBmax",
+        "op": ">",
+        "value": 12
+      },
+      {
+        "path": "screenshots.mode_colored.uniqueColors",
+        "op": ">=",
+        "value": 4
+      }
+    ]
+  },
+  "error": "cannot open material file 'materials/pla.mat'",
+  "pass": false
+}

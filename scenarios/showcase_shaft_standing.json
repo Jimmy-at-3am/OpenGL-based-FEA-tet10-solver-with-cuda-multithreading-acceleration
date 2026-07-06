@@ -1,0 +1,21 @@
+{
+  "v": 1,
+  "geometry": { "gcode3mf": "gcode_models/shaftStanding.gcode.3mf" },
+  "material": "materials/pla.mat",
+  "gcodeSections": {},
+  "mesh": { "method": "toolpath", "maxSlabs": 12, "targetEdgeMM": 2.25, "tieAlpha": 100.0 },
+  "loads": [ { "type": "preset", "name": "pullZ", "mag": 600.0 } ],
+  "constraints": [ { "preset": "fixedMinZ" } ],
+  "solve": { "kind": "fracture", "maxIter": 14, "gpu": false, "fdmAnisotropy": true, "buildAxis": 2 },
+  "probes": [],
+  "screenshots": [
+    { "name": "showcase", "camera": "iso", "scalarMode": 3, "deformScale": 0.0,
+      "deadView": "colored", "showLoadArrows": true }
+  ],
+  "asserts": [
+    { "path": "solver.appliedForceN", "op": "~=", "value": 600.0, "rel": 0.0001 },
+    { "path": "fracture.totalFailed", "op": ">=", "value": 1300 },
+    { "path": "screenshots.showcase.stdRGBmax", "op": ">", "value": 0.0 },
+    { "path": "screenshots.showcase.uniqueColors", "op": ">=", "value": 4 }
+  ]
+}

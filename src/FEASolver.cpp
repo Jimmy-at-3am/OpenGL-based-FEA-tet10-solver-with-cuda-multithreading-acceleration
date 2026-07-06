@@ -379,6 +379,17 @@ void FEASolver::restoreGeometryToModel(FEAModel& model) {
     model.originalVolumetricPositions = m_savedModelPositions; // exact model-space restore
     m_savedModelPositions.clear();
     m_geomInMeters = false;
+    // new_TODO_19E: appliedForces were recorded while the geometry was in
+    // METRES; convert the arrow endpoints to model space here — the single
+    // owner of the scale for both the linear and (outer) fracture solves.
+    // (A conversion at the inner linear writeback missed the fracture path,
+    // whose inner solves don't own the scaling — the arrow drew 30x too
+    // small; caught by reading the showcase screenshot.)
+    if (m_geomScale > 1e-30) {
+        const float sInv = static_cast<float>(1.0 / m_geomScale);
+        for (auto& fa : model.appliedForces) { fa.start *= sInv; fa.end *= sInv; }
+        model.arrowSourceCount = SIZE_MAX;   // force overlay rebuild
+    }
 }
 
 // -----------------------------------------------------------------------------
@@ -780,6 +791,105 @@ bool FEASolver::solveLinearStatic(FEAModel& model, float visualScale,
         std::cout << "BC [Tension" << "XYZ"[ta] << "]: anchor=" << nodeA
                   << "  rot-nodes=" << nodeB << "," << nodeC
                   << "  faces: -=" << faceMin.size() << " +=" << faceMax.size() << " nodes." << std::endl;
+    } else if (loadType == LoadType::FacePull ||
+               loadType == LoadType::FaceBend) {
+        // new_TODO_19C: clamp ALL DOF on the min-face of faceAxis (statically
+        // well-posed — no rigid-body modes, deliberately avoiding the Tension*
+        // single-node-anchor blowup documented 2026-07-02), load the max-face.
+        const int ta = (faceAxis >= 0 && faceAxis <= 2) ? faceAxis : 2;
+        const double bmin = (ta==0)?minX:(ta==1)?minY:minZ;
+        const double bmax = (ta==0)?maxX:(ta==1)?maxY:maxZ;
+        // Tight tolerance: face nodes sit exactly on the bounding planes for
+        // both slab meshes and TetGen box facets; 0.5% must stay below the
+        // slab-boundary spacing so the clamp grabs ONE plane of nodes.
+        const double tolA = (bmax - bmin) * 0.005;
+        for (int i = 0; i < nNodes; ++i) {
+            const glm::vec3& p = model.originalVolumetricPositions[i];
+            const double coord = (ta==0)?(double)p.x:(ta==1)?(double)p.y:(double)p.z;
+            if (coord <= bmin + tolA) fixedNodes.push_back(i);
+            else if (coord >= bmax - tolA) loadedNodes.push_back(i);
+        }
+        std::cout << "BC [Face" << (loadType == LoadType::FacePull ? "Pull" : "Bend")
+                  << ' ' << "XYZ"[ta] << "]: clamped " << fixedNodes.size()
+                  << " nodes at min-face, loading " << loadedNodes.size()
+                  << " nodes at max-face." << std::endl;
+    } else if (loadType == LoadType::ThreePointBend) {
+        // new_TODO_19D bending: geometry is in METRES here (scale-solve path).
+        const int a = (faceAxis >= 0 && faceAxis <= 2) ? faceAxis : 2;
+        const int d = bendDir;
+        const int e = 3 - a - d;
+        if (d < 0 || d > 2 || d == a) {
+            std::cout << "ThreePointBend: invalid bendDir/axis" << std::endl;
+            return false;
+        }
+        auto coordOf = [&](int ni, int ax) -> double {
+            const glm::vec3& p = model.originalVolumetricPositions[ni];
+            return (ax == 0) ? (double)p.x : (ax == 1) ? (double)p.y : (double)p.z;
+        };
+        double aMin = 1e300, aMax = -1e300, dMin = 1e300, dMax = -1e300;
+        for (int i = 0; i < nNodes; ++i) {
+            aMin = std::min(aMin, coordOf(i, a)); aMax = std::max(aMax, coordOf(i, a));
+            dMin = std::min(dMin, coordOf(i, d)); dMax = std::max(dMax, coordOf(i, d));
+        }
+        const double aC = 0.5 * (aMin + aMax);
+        const double halfSpan = 0.5 * bendSpanMM * 1e-3;
+        // Surface bands: bottom/top 15% of the section depth (covers the curved
+        // shaft surface without grabbing core nodes).
+        const double surfTol = 0.15 * (dMax - dMin);
+        auto band = [&](double target, bool bottom) -> std::vector<int> {
+            // Snap to the nearest surface NODE LINE, then take a narrow
+            // ±0.6 mm strip around it (a roller/nose line). The earlier
+            // width-doubling search widened to several mm on sparse-ring
+            // meshes and produced 90+ node shelf supports — partial clamps
+            // that choked the mid-span moment (standing shaft silent at 2x
+            // its F x L anchor; caught 2026-07-03 by exactly that oracle).
+            auto onSurf = [&](int i) {
+                const double dc = coordOf(i, d);
+                return bottom ? (dc <= dMin + surfTol) : (dc >= dMax - surfTol);
+            };
+            double bestDa = 1e300, lineA = target;
+            for (int i = 0; i < nNodes; ++i) {
+                if (!onSurf(i)) continue;
+                const double da = std::abs(coordOf(i, a) - target);
+                if (da < bestDa) { bestDa = da; lineA = coordOf(i, a); }
+            }
+            std::vector<int> out;
+            for (int i = 0; i < nNodes; ++i)
+                if (onSurf(i) && std::abs(coordOf(i, a) - lineA) <= 0.6e-3)
+                    out.push_back(i);
+            return out;
+        };
+        std::vector<int> supA = band(aC - halfSpan, true);
+        std::vector<int> supB = band(aC + halfSpan, true);
+        loadedNodes           = band(aC, false);
+        if (supA.empty() || supB.empty() || loadedNodes.empty()) {
+            std::cout << "ThreePointBend: empty support/load band (span too "
+                         "large for the mesh?)" << std::endl;
+            return false;
+        }
+        // Rollers: support nodes pinned in d and e; support A also pins the
+        // beam axis (removes the last rigid mode). Slightly stiffer than ideal
+        // rollers, identical for both test articles -> ordering-invariant.
+        for (int n : supA) {
+            singleDofFixed.push_back({n, d});
+            singleDofFixed.push_back({n, e});
+            singleDofFixed.push_back({n, a});
+        }
+        for (int n : supB) {
+            singleDofFixed.push_back({n, d});
+            singleDofFixed.push_back({n, e});
+        }
+        double mA = 0.0, mB = 0.0;
+        for (int n : supA) mA += coordOf(n, a);
+        for (int n : supB) mB += coordOf(n, a);
+        mA /= supA.size(); mB /= supB.size();
+        lastEffectiveSpanMM = (mB - mA) * 1000.0;
+        std::cout << "BC [3PointBend axis=" << "XYZ"[a] << " load=-" << "XYZ"[d]
+                  << "]: supports " << supA.size() << "+" << supB.size()
+                  << " nodes at " << mA * 1000.0 << "/" << mB * 1000.0
+                  << " mm (span req " << bendSpanMM << " -> eff "
+                  << lastEffectiveSpanMM << " mm), load band "
+                  << loadedNodes.size() << " nodes at mid-span top." << std::endl;
     } else {
         const double tolY = (maxY - minY) * 0.05;
         for (int i = 0; i < nNodes; ++i) {
@@ -875,6 +985,96 @@ bool FEASolver::solveLinearStatic(FEAModel& model, float visualScale,
         }
         std::cout << "Tension" << "XYZ"[ta] << ": distributed " << forceMagnitude
                   << " N over " << faceMaxT.size() << "(+)/" << faceMinT.size() << "(-) nodes" << std::endl;
+    } else if (loadType == LoadType::FacePull ||
+               loadType == LoadType::FaceBend) {
+        // new_TODO_19C: equal nodal split of the total force over the loaded
+        // face. Equal split on Tet10 corner+midside nodes is not a consistent
+        // load vector, but the SAME scheme is used for every mesh, so the
+        // standing-vs-lying ORDERING comparison is scheme-invariant; the
+        // resultant is exact by construction (asserted via appliedForceN).
+        const int ta = (faceAxis >= 0 && faceAxis <= 2) ? faceAxis : 2;
+        int fd = (loadType == LoadType::FacePull) ? ta : bendDir;
+        if (fd < 0 || fd > 2 || (loadType == LoadType::FaceBend && fd == ta)) {
+            std::cout << "FaceBend: invalid bendDir " << bendDir
+                      << " (must be 0..2 and != faceAxis)" << std::endl;
+            return false;
+        }
+        // Distribution set: on quadratic meshes load ONLY the mid-edge nodes
+        // of the face — the consistent load vector for uniform traction on a
+        // quadratic triangle is corner 0 / midside 1/3, and equal shares on
+        // corners produce a local bulge that inflates maxDispMM ~60% (caught
+        // by the PL/AE oracle scenario 2026-07-02). Tet4 meshes use all face
+        // nodes (equal split IS the consistent rule there).
+        std::vector<int> distNodes;
+        if (useQuadraticElements) {
+            for (int n : loadedNodes)
+                if (n >= model.nLinearNodes) distNodes.push_back(n);
+        }
+        if (distNodes.empty()) distNodes = loadedNodes;
+        const double share = forceMagnitude / static_cast<double>(distNodes.size());
+        double appliedSum = 0.0;
+        for (int n : distNodes) {
+            F(n * 3 + fd) += share;
+            appliedSum += share;
+            model.nodalForceMagnitudes[n] = static_cast<float>(std::abs(share));
+        }
+        lastAppliedForceN = appliedSum;   // exact resultant along the load axis
+        model.appliedForcePerNode = static_cast<float>(std::abs(share));
+
+        // One resultant arrow at the loaded-face centroid (tail offset against
+        // the force direction so the arrow points the way the force acts) —
+        // 19E renders these; anchor/direction come from the SAME node set the
+        // solver loads, never a separate guess.
+        glm::vec3 cent(0.0f);
+        for (int n : loadedNodes) cent += model.originalVolumetricPositions[n];
+        cent /= static_cast<float>(loadedNodes.size());
+        const double bminA = (ta==0)?minX:(ta==1)?minY:minZ;
+        const double bmaxA = (ta==0)?maxX:(ta==1)?maxY:maxZ;
+        const float arrowLen = static_cast<float>(bmaxA - bminA) * 0.25f;
+        glm::vec3 dirv(0.0f);
+        ((float*)(&dirv))[fd] = (forceMagnitude >= 0.0 ? 1.0f : -1.0f);
+        if (loadType == LoadType::FacePull)   // tension: arrow points OUTWARD
+            model.appliedForces.push_back({ cent, cent + dirv * arrowLen });
+        else                                   // transverse push: tip at the face
+            model.appliedForces.push_back({ cent - dirv * arrowLen, cent });
+
+        std::cout << "Face" << (loadType == LoadType::FacePull ? "Pull" : "Bend")
+                  << ": distributed " << forceMagnitude << " N along "
+                  << (forceMagnitude >= 0.0 ? '+' : '-') << "XYZ"[fd]
+                  << " over " << loadedNodes.size() << " max-face nodes"
+                  << std::endl;
+    } else if (loadType == LoadType::ThreePointBend) {
+        const int d = bendDir;
+        // Same consistent-load rule as FacePull: quadratic meshes load only
+        // mid-edge nodes (equal corner shares create local artifacts).
+        std::vector<int> distNodes;
+        if (useQuadraticElements) {
+            for (int n : loadedNodes)
+                if (n >= model.nLinearNodes) distNodes.push_back(n);
+        }
+        if (distNodes.empty()) distNodes = loadedNodes;
+        const double share = forceMagnitude / static_cast<double>(distNodes.size());
+        double appliedSum = 0.0;
+        for (int n : distNodes) {
+            F(n * 3 + d) -= share;                      // push toward -d
+            appliedSum += share;
+            model.nodalForceMagnitudes[n] = static_cast<float>(std::abs(share));
+        }
+        lastAppliedForceN = appliedSum;                  // magnitude convention
+        model.appliedForcePerNode = static_cast<float>(std::abs(share));
+
+        glm::vec3 cent(0.0f);
+        for (int n : loadedNodes) cent += model.originalVolumetricPositions[n];
+        cent /= static_cast<float>(loadedNodes.size());
+        glm::vec3 dirv(0.0f);
+        ((float*)(&dirv))[d] = -1.0f;
+        const float arrowLen = 0.25f * static_cast<float>(
+            (d == 0 ? maxX - minX : d == 1 ? maxY - minY : maxZ - minZ));
+        model.appliedForces.push_back({ cent - dirv * arrowLen, cent });
+
+        std::cout << "3PointBend: " << forceMagnitude << " N toward -"
+                  << "XYZ"[d] << " over " << distNodes.size()
+                  << " mid-span nodes" << std::endl;
     } else {
         // Legacy surface compression: consistent nodal loads from surface-
         // triangle integration. Correctly distributes force by tributary area.
@@ -922,6 +1122,52 @@ bool FEASolver::solveLinearStatic(FEAModel& model, float visualScale,
 
         std::cout << "Applied consistent nodal loads over " << triCount
                   << " boundary triangles (total area " << patchArea << ")." << std::endl;
+    }
+
+    // ---- new_TODO_19C-b: interlayer weld ties (new_TODO_06 registry) ----
+    // Toolpath slabs have independent node rings per slab; each tie couples a
+    // slab-s top node to its containing triangle on slab s+1's bottom ring via
+    // penalty springs on the constraint u_top - sum(bary_i * u_bot_i) per DOF:
+    //   K(top,top)+=kt, K(top,bi)-=kt*w_i, K(bi,bj)+=kt*w_i*w_j.
+    // kt = alpha * E_z * A_tie / t (06 spec, alpha~100 => ~1% added stack
+    // compliance, folded into the analytic pull oracle). Geometry is in SI
+    // metres here (scaled solve path), so areas/thickness convert from mm.
+    if (model.hasLayerStack() && !model.layers->interfaces.empty()) {
+        const double Etie = (useFdmAnisotropy && E_z > 0.0) ? E_z : youngsModulus;
+        std::vector<Eigen::Triplet<double>> tieTrip;
+        long nTies = 0;
+        for (const auto& wi : model.layers->interfaces) {
+            if (wi.ties.empty()) continue;
+            const double A_m2 = (double)wi.areaMM2 * 1e-6 /
+                                std::max<size_t>(1, wi.ties.size());
+            const double t_m  = std::max(1e-9, (double)wi.thicknessMM * 1e-3);
+            const double kt   = (double)model.layers->tieAlpha * Etie * A_m2 / t_m;
+            for (const auto& tie : wi.ties) {
+                if (tie.released) continue;   // new_TODO_06 delamination hook
+                ++nTies;
+                const int top = static_cast<int>(tie.nodeTop);
+                for (int d = 0; d < 3; ++d) {
+                    tieTrip.emplace_back(top * 3 + d, top * 3 + d, kt);
+                    for (int i = 0; i < 3; ++i) {
+                        const int bi = static_cast<int>(tie.triBottom[i]) * 3 + d;
+                        const double wi_ = tie.bary[i];
+                        tieTrip.emplace_back(top * 3 + d, bi, -kt * wi_);
+                        tieTrip.emplace_back(bi, top * 3 + d, -kt * wi_);
+                        for (int j = 0; j < 3; ++j)
+                            tieTrip.emplace_back(
+                                bi, static_cast<int>(tie.triBottom[j]) * 3 + d,
+                                kt * wi_ * tie.bary[j]);
+                    }
+                }
+            }
+        }
+        if (!tieTrip.empty()) {
+            Eigen::SparseMatrix<double> T(K.rows(), K.cols());
+            T.setFromTriplets(tieTrip.begin(), tieTrip.end());
+            K += T;
+            std::cout << "[TIES] assembled " << nTies << " weld ties over "
+                      << model.layers->interfaces.size() << " interfaces\n";
+        }
     }
 
     // Apply fixed constraints via penalty method.
@@ -1072,6 +1318,26 @@ bool FEASolver::solveLinearStatic(FEAModel& model, float visualScale,
 
     if (U_out) *U_out = U;
 
+    // new_TODO_19D: clamp-reaction recovery for the face presets. With the
+    // penalty BC method the reaction at a clamped DOF is penalty * u (the
+    // spring force that holds the node at ~0). Summed along the load axis it
+    // must balance the applied resultant; the residual also carries the
+    // penalty method's own roundoff, reported rather than hidden.
+    if (loadType == LoadType::FacePull || loadType == LoadType::FaceBend) {
+        const int fd = (loadType == LoadType::FacePull)
+                           ? ((faceAxis >= 0 && faceAxis <= 2) ? faceAxis : 2)
+                           : bendDir;
+        double rsum = 0.0;
+        for (int n : fixedNodes) rsum += penalty * U(n * 3 + fd);
+        lastReactionSumN = rsum;
+    } else if (loadType == LoadType::ThreePointBend) {
+        // Support reactions live on singleDofFixed entries along the load axis.
+        double rsum = 0.0;
+        for (auto& [node, dof] : singleDofFixed)
+            if (dof == bendDir) rsum += penalty * U(node * 3 + dof);
+        lastReactionSumN = std::abs(rsum);   // magnitude convention (load is -d)
+    }
+
     // new_TODO_04C: U is now the PHYSICAL displacement in metres. Record the real
     // max nodal displacement (mm) for the report, then convert the (exaggerated)
     // displacement back to model space so the deformed overlay renders in the
@@ -1079,6 +1345,7 @@ bool FEASolver::solveLinearStatic(FEAModel& model, float visualScale,
     model.physicalMaxDispMM = static_cast<float>(U.cwiseAbs().maxCoeff() * 1000.0);
 
     model.deformedPositions.resize(nNodes);
+    model.nodalDispMM.resize(nNodes);
 
     // Per-node displacement update is embarrassingly parallel: each iteration
     // touches a unique index in deformedPositions and nodalDisplacementMagnitudes.
@@ -1086,6 +1353,12 @@ bool FEASolver::solveLinearStatic(FEAModel& model, float visualScale,
     // the master thread when the flag is off, so serial behaviour is unchanged.
     #pragma omp parallel for schedule(static) if(useMultithreading)
     for (int i = 0; i < nNodes; ++i) {
+        // TRUE physical displacement (mm), no exaggeration — probe truth
+        // source (new_TODO_19C; probes previously read the x10 render overlay).
+        model.nodalDispMM[i] = glm::vec3(
+            static_cast<float>(U(i * 3 + 0) * 1000.0),
+            static_cast<float>(U(i * 3 + 1) * 1000.0),
+            static_cast<float>(U(i * 3 + 2) * 1000.0));
         glm::vec3 dispMeters(
             static_cast<float>(U(i * 3 + 0) * visualScale),
             static_cast<float>(U(i * 3 + 1) * visualScale),
@@ -1104,7 +1377,7 @@ bool FEASolver::solveLinearStatic(FEAModel& model, float visualScale,
     // Restore model-space coordinates BEFORE buildBuffers so the rendered mesh and
     // any later geometry reads see the original 3-unit frame (no-op if an outer
     // fracture solve owns the scaling).
-    if (didScale) restoreGeometryToModel(model);
+    if (didScale) restoreGeometryToModel(model);   // (also converts appliedForces)
     model.buildBuffers();
 
     std::cout << "Updated mesh with deformations (scaled " << visualScale << "x)" << std::endl;
@@ -2203,6 +2476,9 @@ bool FEASolver::solveNonlinearStatic(FEAModel& model, float visualScale, NRParam
 
     // ---- Push displacements back into the model -------------------------------
     model.deformedPositions.resize(nNodes);
+    // NR path is not unit-scaled (documented 04C limitation): clear the
+    // physical-mm probe field rather than fill it with wrong units.
+    model.nodalDispMM.clear();
     // Per-node update is embarrassingly parallel; serial behaviour unchanged
     // when useMultithreading == false (OMP collapses to master thread).
     #pragma omp parallel for schedule(static) if(useMultithreading)
@@ -2472,6 +2748,23 @@ bool FEASolver::solveBrittleFracture(FEAModel& model, float visualScale, int max
         m_fractureAlive.clear();
 
         if (!ok || U.size() == 0) {
+            // new_TODO_19C-b: a singular system AFTER elements have already
+            // failed means the crack SEVERED the part — a freed chunk has
+            // rigid modes. That is the correct terminal state of a break
+            // test (the 19D standing-vs-lying acceptance depends on reaching
+            // it), so stop gracefully with the accumulated fracture state
+            // instead of erroring. Iteration 1 failing = genuine setup
+            // problem, still a hard failure.
+            bool anyFailed = false;
+            for (uint8_t a : model.elementAlive) if (!a) { anyFailed = true; break; }
+            if (iter > 1 && anyFailed) {
+                std::cout << "[FRACTURE] Solver singular at iteration " << iter
+                          << " after prior element failures -> part SEVERED; "
+                             "stopping with accumulated crack state." << std::endl;
+                useMultithreading = savedUseMT;
+                if (didScale) restoreGeometryToModel(model);
+                return true;
+            }
             std::cout << "[FRACTURE] Solver failed at iteration " << iter << "." << std::endl;
             useMultithreading = savedUseMT;
             if (didScale) restoreGeometryToModel(model);

@@ -1,0 +1,37 @@
+{
+  "shaftStanding.gcode.3mf": {
+    "load": "pullZ",
+    "magN": 800.0,
+    "maxSlabs": 12,
+    "targetEdgeMM": 2.25,
+    "note": "19D acceptance: breaks (interlayer) at 800 N"
+  },
+  "shaftLying.gcode.3mf": {
+    "load": "pullY",
+    "magN": 800.0,
+    "maxSlabs": 8,
+    "targetEdgeMM": 4.0,
+    "note": "19D acceptance: survives 800 N (local intralayer crack only)"
+  },
+  "boxStanding.gcode.3mf": {
+    "load": "pullZ",
+    "magN": 2000.0,
+    "maxSlabs": 12,
+    "targetEdgeMM": 2.25,
+    "note": "19D comparison load"
+  },
+  "boxLying.gcode.3mf": {
+    "load": "pullY",
+    "magN": 2000.0,
+    "maxSlabs": 8,
+    "targetEdgeMM": 4.0,
+    "note": "19D comparison load"
+  },
+  "diffyswervebearingPod.gcode.3mf": {
+    "load": "pullZ",
+    "magN": 0.0,
+    "maxSlabs": 12,
+    "targetEdgeMM": 2.25,
+    "note": "no calibrated default"
+  }
+}

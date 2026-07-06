@@ -1,0 +1,20 @@
+{
+  "v": 1,
+  "geometry": { "preset": "box", "size": [20.0, 20.0, 60.0] },
+  "material": "materials/pla.mat",
+  "mesh": { "maxVolume": 25.0, "quality": 1.6 },
+  "loads": [ { "type": "preset", "name": "pullZ", "mag": 4500.0 } ],
+  "constraints": [ { "preset": "fixedMinZ" } ],
+  "solve": { "kind": "linear", "gpu": false },
+  "probes": [
+    { "id": "topCenter", "posMM": [0.0, 0.0, 30.0], "quantity": "displacement" },
+    { "id": "midSide",   "posMM": [10.0, 0.0, 0.0], "quantity": "displacement" }
+  ],
+  "screenshots": [],
+  "asserts": [
+    { "path": "mesh.minJacobian", "op": ">",  "value": 0.0 },
+    { "path": "solver.ok",        "op": "==", "value": 1 },
+    { "path": "probes.topCenter.magnitude", "op": "~=", "value": 0.1929, "rel": 0.08 },
+    { "path": "probes.topCenter.snapDist",  "op": "<",  "value": 2.0 }
+  ]
+}

@@ -1,0 +1,46 @@
+{
+  "v": 1,
+  "geometry": {
+    "gcode3mf": "gcode_models/boxStanding.gcode.3mf"
+  },
+  "material": "materials/pla.mat",
+  "gcodeSections": {},
+  "probes": [],
+  "screenshots": [],
+  "asserts": [
+    {
+      "path": "gcodeSections.nLayers",
+      "op": "==",
+      "value": 250
+    },
+    {
+      "path": "gcodeSections.maxNetAreaMM2",
+      "op": "~=",
+      "value": 200.0,
+      "rel": 0.01
+    },
+    {
+      "path": "gcodeSections.firstNetAreaMM2",
+      "op": "~=",
+      "value": 191.03,
+      "rel": 0.02
+    },
+    {
+      "path": "gcodeSections.minNetAreaMM2",
+      "op": "~=",
+      "value": 74.96,
+      "rel": 0.05
+    },
+    {
+      "path": "gcodeSections.meanNetAreaMM2",
+      "op": "~=",
+      "value": 78.98,
+      "rel": 0.03
+    },
+    {
+      "path": "gcodeSections.totalHoles",
+      "op": ">",
+      "value": 2000
+    }
+  ]
+}

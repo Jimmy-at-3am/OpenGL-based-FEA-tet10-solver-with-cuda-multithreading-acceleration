@@ -1,6 +1,8 @@
 #include "FEAModel.h"
 #include "BRepHandle.h"     // must be included here so unique_ptr<BRepHandle> destructor
 #include "StepLoader.h"     // can see the complete BRepHandle type
+#include "ToolpathModel.h"        // new_TODO_19A: complete type for unique_ptr
+#include "GcodeToolpathLoader.h"  // new_TODO_19A: .gcode.3mf -> ToolpathModel
 #include <meshoptimizer.h>
 #include <glad/glad.h>
 #include <fstream>
@@ -319,10 +321,57 @@ bool FEAModel::loadSTEP(const std::string& filepath) {
 }
 
 // =============================================================================
+// FEAModel::loadGcode3mf  (new_TODO_19A)
+// =============================================================================
+// A Bambu sliced export: the toolpath is the AUTHORITATIVE geometry (real
+// per-layer heights + infill as printed). No triangle mesh exists in a form we
+// mesh from, so synthesize a 12-triangle shell of the part bbox — enough for
+// processRawGeometry to establish units/model space and for the renderer and
+// camera to work until the toolpath slab mesh (new_TODO_19C) replaces it.
+bool FEAModel::loadGcode3mf(const std::string& filepath, bool partOnly) {
+    auto tp = std::make_unique<Toolpath::ToolpathModel>();
+    std::string err;
+    GcodeToolpathLoader::Options opt;
+    opt.partOnly = partOnly;
+    if (!GcodeToolpathLoader::load(filepath, opt, *tp, err)) {
+        std::cout << "[GCODE] load failed: " << err << std::endl;
+        return false;
+    }
+    const glm::vec3 lo = tp->bbMin, hi = tp->bbMax;
+    if (!(hi.x > lo.x && hi.y > lo.y && hi.z > lo.z)) {
+        std::cout << "[GCODE] degenerate part bbox — refusing load" << std::endl;
+        return false;
+    }
+    LoadedGeometry geo;
+    geo.positions = {
+        {lo.x, lo.y, lo.z}, {hi.x, lo.y, lo.z}, {hi.x, hi.y, lo.z}, {lo.x, hi.y, lo.z},
+        {lo.x, lo.y, hi.z}, {hi.x, lo.y, hi.z}, {hi.x, hi.y, hi.z}, {lo.x, hi.y, hi.z}};
+    geo.indices = {                    // outward-facing winding, all 6 faces
+        0, 2, 1,  0, 3, 2,             // -Z
+        4, 5, 6,  4, 6, 7,             // +Z
+        0, 1, 5,  0, 5, 4,             // -Y
+        2, 3, 7,  2, 7, 6,             // +Y
+        1, 2, 6,  1, 6, 5,             // +X
+        3, 0, 4,  3, 4, 7};            // -X
+    geo.sourceLabel  = std::filesystem::path(filepath).filename().string();
+    geo.fileUnitToMM = 1.0f;           // Bambu gcode is always millimetres
+    if (!processRawGeometry(geo, "GCODE")) return false;
+    toolpath = std::move(tp);          // AFTER processRawGeometry (which resets it)
+    return true;
+}
+
+// =============================================================================
 // FEAModel::loadFile
 // =============================================================================
 // Dispatch by extension — call this when you don't know the format ahead of time.
 bool FEAModel::loadFile(const std::string& filepath) {
+    std::string lower = filepath;
+    std::transform(lower.begin(), lower.end(), lower.begin(),
+                   [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
+    // Sliced gcode exports end in ".gcode.3mf" — they must NOT fall through to
+    // the design-3MF XML loader (new_TODO_19A).
+    if (lower.size() > 10 && lower.compare(lower.size() - 10, 10, ".gcode.3mf") == 0)
+        return loadGcode3mf(filepath);
     std::string ext = std::filesystem::path(filepath).extension().string();
     std::transform(ext.begin(), ext.end(), ext.begin(),
                    [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
@@ -541,6 +590,10 @@ bool FEAModel::processRawGeometry(LoadedGeometry& geo, const std::string& format
 
     // Clear stale B-rep; loadSTEP() re-assigns it after this returns.
     brep.reset();
+
+    // Clear stale toolpath; loadGcode3mf() re-assigns it after this returns
+    // (new_TODO_19A) — an STL loaded after a gcode must not keep stale beads.
+    toolpath.reset();
 
     // new_TODO_04: drop any slice/layer state from the previously loaded model so
     // a stale section overlay or LayerStack never carries across a reload.
@@ -1105,6 +1158,63 @@ void FEAModel::buildSlicePreview(const std::vector<glm::vec3>& segmentEndpoints)
     glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, texCoords)); glEnableVertexAttribArray(2);
     glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, elementScalar)); glEnableVertexAttribArray(3);
     glBindVertexArray(0);
+}
+
+// new_TODO_19E: load-arrow overlay. Geometry from `appliedForces` (tail ->
+// tip); each arrow = shaft line + 4 head lines. Same dedicated-VAO pattern as
+// the slice preview so model buffers are untouched.
+void FEAModel::buildForceArrowBuffers() {
+    arrowSourceCount = appliedForces.size();
+    std::vector<Vertex> verts;
+    verts.reserve(appliedForces.size() * 10);
+    for (const ForceArrow& fa : appliedForces) {
+        const glm::vec3 tail = fa.start, tip = fa.end;
+        const glm::vec3 d = tip - tail;
+        const float len = glm::length(d);
+        if (len < 1e-9f) continue;
+        const glm::vec3 dir = d / len;
+        glm::vec3 ref = std::abs(dir.z) < 0.9f ? glm::vec3(0, 0, 1) : glm::vec3(1, 0, 0);
+        const glm::vec3 u = glm::normalize(glm::cross(dir, ref));
+        const glm::vec3 v = glm::normalize(glm::cross(dir, u));
+        const float hl = 0.28f * len, hw = 0.12f * len;
+        auto push = [&](const glm::vec3& p) {
+            verts.push_back({ p, glm::vec3(0, 0, 1), glm::vec2(0.0f), 0.0f });
+        };
+        push(tail); push(tip);
+        push(tip); push(tip - dir * hl + u * hw);
+        push(tip); push(tip - dir * hl - u * hw);
+        push(tip); push(tip - dir * hl + v * hw);
+        push(tip); push(tip - dir * hl - v * hw);
+    }
+    arrowLineVertexCount = static_cast<int>(verts.size());
+    if (verts.empty()) return;
+    if (arrowVAO == 0) { glGenVertexArrays(1, &arrowVAO); glGenBuffers(1, &arrowVBO); }
+    glBindVertexArray(arrowVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, arrowVBO);
+    glBufferData(GL_ARRAY_BUFFER, verts.size() * sizeof(Vertex), &verts[0], GL_DYNAMIC_DRAW);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)0); glEnableVertexAttribArray(0);
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, normal)); glEnableVertexAttribArray(1);
+    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, texCoords)); glEnableVertexAttribArray(2);
+    glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, elementScalar)); glEnableVertexAttribArray(3);
+    glBindVertexArray(0);
+}
+
+void FEAModel::drawForceArrows(BuiltInShader& shader) {
+    if (!showAppliedForceField) return;
+    if (arrowSourceCount != appliedForces.size()) buildForceArrowBuffers();
+    if (arrowVAO == 0 || arrowLineVertexCount <= 0) return;
+    shader.use();
+    shader.setMat4("model", glm::mat4(1.0f));
+    shader.setInt("scalarMode", 0);
+    shader.setFloat("fragAlpha", 1.0f);
+    shader.setVec3("objectColor", 1.0f, 0.15f, 0.9f);  // magenta: reads on any view
+    glDisable(GL_DEPTH_TEST);
+    glLineWidth(4.0f);
+    glBindVertexArray(arrowVAO);
+    glDrawArrays(GL_LINES, 0, arrowLineVertexCount);
+    glBindVertexArray(0);
+    glLineWidth(1.0f);
+    glEnable(GL_DEPTH_TEST);
 }
 
 // Draw the preview overlay. No-op unless showSlicePreview and a buffer exist.

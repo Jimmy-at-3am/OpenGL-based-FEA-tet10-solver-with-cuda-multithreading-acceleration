@@ -98,6 +98,12 @@ std::vector<glm::vec3> sectionToSegments(const Section& section, int axis,
 // Signed area of a 2-D loop (shoelace). >0 CCW, <0 CW.
 double signedArea(const std::vector<glm::vec2>& loop);
 
+// Classify raw closed loops into a Section with the shared convention
+// (even-odd nesting depth: even -> outer CCW, odd -> hole CW). Extracted from
+// the slice-plane cleanup so the toolpath-section builder (new_TODO_19B) emits
+// the exact same contract without duplicating the nesting logic.
+Section classifySection(std::vector<std::vector<glm::vec2>> loops);
+
 // B-rep section seam (defined in StepSlicer.cpp). Returns false when no B-rep
 // path is available (the OCC body lands in new_TODO_04B), so callers fall back to
 // the triangle path. `brep` is only dereferenced inside the OCC-enabled body.

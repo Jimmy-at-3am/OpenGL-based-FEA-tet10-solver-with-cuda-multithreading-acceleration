@@ -1,0 +1,67 @@
+{
+  "v": 1,
+  "geometry": {
+    "gcode3mf": "gcode_models/shaftLying.gcode.3mf"
+  },
+  "material": "materials/pla.mat",
+  "gcodeSections": {},
+  "mesh": {
+    "method": "toolpath",
+    "maxSlabs": 8,
+    "targetEdgeMM": 4.0,
+    "tieAlpha": 100.0
+  },
+  "loads": [
+    {
+      "type": "preset",
+      "name": "pullY",
+      "mag": 800.0
+    }
+  ],
+  "constraints": [
+    {
+      "preset": "fixedMinY"
+    }
+  ],
+  "solve": {
+    "kind": "fracture",
+    "maxIter": 14,
+    "gpu": false,
+    "fdmAnisotropy": true,
+    "buildAxis": 2
+  },
+  "probes": [],
+  "screenshots": [],
+  "asserts": [
+    {
+      "path": "gcode.layerCount",
+      "op": "==",
+      "value": 33
+    },
+    {
+      "path": "toolpathMesh.areaErrMaxPct",
+      "op": "<",
+      "value": 0.01
+    },
+    {
+      "path": "fracture.totalFailed",
+      "op": "<=",
+      "value": 1500
+    },
+    {
+      "path": "fracture.totalFailed",
+      "op": ">=",
+      "value": 100
+    },
+    {
+      "path": "fracture.byMode.intralayer",
+      "op": ">=",
+      "value": 400
+    },
+    {
+      "path": "fracture.byMode.interlayerTension",
+      "op": "<=",
+      "value": 200
+    }
+  ]
+}

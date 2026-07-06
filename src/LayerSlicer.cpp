@@ -304,9 +304,13 @@ static Section cleanupSection(std::vector<std::vector<glm::vec2>> loops,
 #else
     (void)wallWidthAbs; (void)Ldiag;
 #endif
+    return classifySection(std::move(loops));
+}
 
-    // Even-odd containment classification (path-independent). depth = number of
-    // OTHER loops that contain this loop's centroid; even -> outer, odd -> hole.
+// Public (new_TODO_19B shares it): even-odd containment classification.
+// depth = number of OTHER loops containing this loop's probe point; even ->
+// outer (CCW), odd -> hole (CW).
+Section classifySection(std::vector<std::vector<glm::vec2>> loops) {
     Section sec;
     sec.reserve(loops.size());
     // Representative point ON each loop (see loopProbePoint) -- NOT the centroid,

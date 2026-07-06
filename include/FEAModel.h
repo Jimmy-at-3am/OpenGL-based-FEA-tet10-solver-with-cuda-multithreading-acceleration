@@ -13,6 +13,7 @@
 // BRepHandle.h is included in FEAModel.cpp where Impl is complete (required by
 // unique_ptr destructor and move operations).
 class BRepHandle;
+namespace Toolpath { struct ToolpathModel; }  // new_TODO_19A (ToolpathModel.h)
 
 struct ForceArrow {
     glm::vec3 start;
@@ -32,6 +33,27 @@ struct LayerStack {
     int nSlabs() const {
         return planeCoords.empty() ? 0 : static_cast<int>(planeCoords.size()) - 1;
     }
+
+    // new_TODO_19C (the new_TODO_06 registry, general path): weld interface
+    // between slab s (its top ring) and slab s+1 (its bottom triangulation).
+    // The toolpath lane meshes every slab with INDEPENDENT node rings (sections
+    // differ per layer), so the interface is a set of barycentric point ties
+    // that the solver assembles as penalty springs. new_TODO_06's delamination
+    // later releases individual ties; until then `released` stays false.
+    struct WeldInterface {
+        int slabBelow = 0;                 // couples slabBelow(top) <-> slabBelow+1(bottom)
+        struct Tie {
+            unsigned nodeTop;              // node on slab s top ring
+            unsigned triBottom[3];         // containing tri nodes on slab s+1 bottom ring
+            float    bary[3];              // barycentric weights of nodeTop in triBottom
+            bool     released = false;     // new_TODO_06 flips this
+        };
+        std::vector<Tie> ties;
+        float areaMM2      = 0.0f;         // interface section area (for k_pen)
+        float thicknessMM  = 0.0f;         // slab thickness at this interface
+    };
+    std::vector<WeldInterface> interfaces;
+    float tieAlpha = 100.0f;               // k_pen = alpha * E_z * A_tie / t
 };
 
 class FEAModel {
@@ -67,6 +89,13 @@ public:
     // TODO_04: retained analytic B-rep (non-null when last load was STEP).
     std::unique_ptr<BRepHandle> brep;
     bool hasBRep() const { return brep != nullptr; }
+
+    // new_TODO_19A: parsed Bambu .gcode.3mf toolpath (non-null when the last
+    // load was a sliced gcode export). The authoritative FDM geometry source;
+    // until the toolpath slab mesh is built, the render surface is only the
+    // part-bbox shell synthesized by loadGcode3mf().
+    std::unique_ptr<Toolpath::ToolpathModel> toolpath;
+    bool hasToolpath() const { return toolpath != nullptr; }
     bool hasVolumetricMesh = false;
     bool showVolumetricMesh = false;
     
@@ -76,6 +105,11 @@ public:
     bool showAppliedForceField = false;
     std::vector<ForceArrow> appliedForces;
     std::vector<float> nodalDisplacementMagnitudes;
+    // new_TODO_19C: TRUE physical displacement per node (mm), no display
+    // exaggeration — the harness probes read THIS, never deformedPositions
+    // (which bake in visualScale and are render-only). Filled by the scaled
+    // linear/fracture solve path; empty when the last solve didn't compute it.
+    std::vector<glm::vec3> nodalDispMM;
     std::vector<float> nodalForceMagnitudes;
     float displacementMin = 0.0f;
     float displacementMax = 0.0f;
@@ -136,6 +170,16 @@ public:
     unsigned int  sliceVAO = 0, sliceVBO = 0;
     int           sliceLineVertexCount = 0;
 
+    // new_TODO_19E: 3-D load-arrow overlay (same dedicated-GL_LINES pattern as
+    // the slice preview). Geometry comes from `appliedForces`, which the
+    // solver's load presets fill from the SAME node sets and direction the
+    // load actually uses — the arrow is the applied load, never a guess.
+    unsigned int  arrowVAO = 0, arrowVBO = 0;
+    int           arrowLineVertexCount = 0;
+    size_t        arrowSourceCount = SIZE_MAX;  // appliedForces.size() at last build
+    void buildForceArrowBuffers();              // appliedForces -> line VBO
+    void drawForceArrows(BuiltInShader& shader); // gated on showAppliedForceField
+
     int  nLinearNodes = 0;  // number of original Tet4 nodes (before mid-edge insertion)
     // Maps canonical edge (min,max) -> mid-edge node index.
     std::map<std::pair<unsigned int,unsigned int>, unsigned int> edgeToMidNode;
@@ -158,6 +202,8 @@ public:
     bool loadSTL(const std::string& filepath);
     bool load3MF(const std::string& filepath);
     bool loadSTEP(const std::string& filepath); // TODO_04: STEP + B-rep retention
+    // new_TODO_19A: Bambu sliced export -> ToolpathModel + bbox-shell surface.
+    bool loadGcode3mf(const std::string& filepath, bool partOnly = false);
 
     // Load any supported format (dispatches by extension).
     bool loadFile(const std::string& filepath);

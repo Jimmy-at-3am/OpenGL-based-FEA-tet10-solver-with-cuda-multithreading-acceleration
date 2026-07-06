@@ -1,0 +1,33 @@
+{
+  "v": 1,
+  "geometry": { "preset": "box", "size": [20.0, 20.0, 20.0] },
+  "material": "materials/pla.mat",
+  "mesh": { "method": "slice" },
+  "slice": {
+    "layerThickness": 0.2,
+    "buildAxis": 2,
+    "maxSlabs": 12,
+    "wallCount": 2,
+    "wallWidth": 0.4
+  },
+  "loads": [ { "type": "preset", "name": "cantileverZ", "mag": 50.0 } ],
+  "constraints": [ { "preset": "fixedMinX" } ],
+  "solve": { "kind": "linear", "gpu": false },
+  "probes": [
+    { "id": "tip",    "pos": [1.5, 0.0, 0.0],  "quantity": "displacement" },
+    { "id": "corner", "pos": [1.5, 0.0, -1.5], "quantity": "displacement" }
+  ],
+  "screenshots": [
+    { "name": "iso_bend", "camera": "iso", "scalarMode": 1, "deformScale": 0.0 }
+  ],
+  "asserts": [
+    { "path": "slice.mesh.ringConformal",  "op": "==", "value": 1 },
+    { "path": "slice.mesh.holesIgnored",   "op": "==", "value": 0 },
+    { "path": "slice.mesh.sectionUniform", "op": "==", "value": 1 },
+    { "path": "mesh.minJacobian",          "op": ">",  "value": 0.02 },
+    { "path": "solver.ok",                 "op": "==", "value": 1 },
+    { "path": "probes.tip.magnitude",    "op": "~=", "value": 0.0024273, "rel": 0.10 },
+    { "path": "probes.corner.magnitude", "op": "~=", "value": 0.0025084, "rel": 0.10 },
+    { "path": "screenshots.iso_bend.stdRGBmax", "op": ">", "value": 0.0 }
+  ]
+}

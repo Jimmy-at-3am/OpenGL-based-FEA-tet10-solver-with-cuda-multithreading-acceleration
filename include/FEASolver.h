@@ -70,9 +70,35 @@ public:
     //   CantileverBendingZ  : fix nodes at X_min, apply a concentrated
     //                         force in the -Z direction at the centroid of X_max.
     //                         Ideal for validating against Euler-Bernoulli formulas.
+    //   FacePull / FaceBend : new_TODO_19C well-posed face presets — clamp ALL
+    //                         DOF on the min-face of `faceAxis` (no rigid
+    //                         modes, unlike the Tension* single-node anchor),
+    //                         equal-split the total force over the max-face
+    //                         nodes: FacePull along +faceAxis, FaceBend along
+    //                         `bendDir` (transverse, face-shear bending).
+    //   ThreePointBend      : classic 3-point bend (new_TODO_19D bending test).
+    //                         Beam axis = faceAxis; load direction = bendDir.
+    //                         Two support bands on the bendDir-MIN surface at
+    //                         beamCentre ± span/2 (rollers: bendDir + third
+    //                         axis pinned; one support also pins the beam
+    //                         axis), load band on the bendDir-MAX surface at
+    //                         mid-span pushing toward -bendDir. Bands select
+    //                         nodes adaptively (tolerance doubles until >= 6
+    //                         nodes) — the EFFECTIVE span (mean support node
+    //                         positions) is reported for the F x L oracle.
     enum class LoadType { SurfaceCompressionY, PointForceZ, CantileverBendingZ,
-                         TensionX, TensionY, TensionZ };
+                         TensionX, TensionY, TensionZ,
+                         FacePull, FaceBend, ThreePointBend };
     LoadType loadType = LoadType::PointForceZ;
+    int faceAxis = 2;  // FacePull/FaceBend: face axis; ThreePointBend: beam axis
+    int bendDir  = 0;  // FaceBend/ThreePointBend: force direction (!= faceAxis)
+    double bendSpanMM = 50.0;         // ThreePointBend: requested support span
+    double lastEffectiveSpanMM = 0.0; // ThreePointBend: measured node-band span
+    // new_TODO_19D equilibrium telemetry (FacePull/FaceBend only): the exact
+    // force sum applied along the load direction, and the clamp reaction
+    // recovered from the penalty method (R = penalty * u_clamped per DOF).
+    double lastAppliedForceN  = 0.0;
+    double lastReactionSumN   = 0.0;
 
     // When true, both solveLinearStatic and solveNonlinearStatic will:
     //   1. Call model.generateMidEdgeNodes() to create Tet10 connectivity.

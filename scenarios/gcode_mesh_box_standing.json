@@ -1,0 +1,98 @@
+{
+  "v": 1,
+  "geometry": {
+    "gcode3mf": "gcode_models/boxStanding.gcode.3mf"
+  },
+  "material": "materials/pla.mat",
+  "gcodeSections": {},
+  "mesh": {
+    "method": "toolpath",
+    "maxSlabs": 12,
+    "targetEdgeMM": 2.25
+  },
+  "loads": [
+    {
+      "type": "preset",
+      "name": "pullZ",
+      "mag": 100.0
+    }
+  ],
+  "constraints": [
+    {
+      "preset": "fixedMinZ"
+    }
+  ],
+  "solve": {
+    "kind": "linear",
+    "gpu": false,
+    "quadratic": false
+  },
+  "probes": [
+    {
+      "id": "topCenter",
+      "posMM": [
+        0.0,
+        0.0,
+        24.9
+      ],
+      "quantity": "displacement"
+    }
+  ],
+  "screenshots": [
+    {
+      "name": "iso_tpmesh",
+      "camera": "iso",
+      "scalarMode": 1,
+      "deformScale": 0.0
+    }
+  ],
+  "asserts": [
+    {
+      "path": "toolpathMesh.areaErrMaxPct",
+      "op": "<",
+      "value": 0.1
+    },
+    {
+      "path": "toolpathMesh.nInterfaces",
+      "op": "==",
+      "value": 11
+    },
+    {
+      "path": "toolpathMesh.nTies",
+      "op": "==",
+      "value": 1782
+    },
+    {
+      "path": "toolpathMesh.sumThickOverAreaPerMM",
+      "op": "~=",
+      "value": 0.66705,
+      "rel": 0.02
+    },
+    {
+      "path": "mesh.minJacobian",
+      "op": ">",
+      "value": 0.0
+    },
+    {
+      "path": "solver.ok",
+      "op": "==",
+      "value": 1
+    },
+    {
+      "path": "solver.equilibriumResidualRel",
+      "op": "<",
+      "value": 0.001
+    },
+    {
+      "path": "probes.topCenter.magnitude",
+      "op": "~=",
+      "value": 0.019059,
+      "rel": 0.1
+    },
+    {
+      "path": "screenshots.iso_tpmesh.stdRGBmax",
+      "op": ">",
+      "value": 0.0
+    }
+  ]
+}

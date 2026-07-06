@@ -154,10 +154,19 @@ public:
         if (vol6 < 0.0) vol6 = -vol6;
         Eigen::Matrix4d C = P.inverse();
         B.setZero();
+        // Shape functions: with P columns = [1; x_i; y_i; z_i], C = P^{-1}
+        // satisfies sum_k C(i,k)*[1,x_j,y_j,z_j][k] = delta_ij, so
+        // N_i = C(i,0) + C(i,1) x + C(i,2) y + C(i,3) z and the gradient is
+        // ROW i of C. The pre-2026-07-02 code read COLUMN i (the transpose):
+        // K = V B^T D B stays SPD for any B, so nothing crashed — but every
+        // Tet4 stiffness and stress was wrong (rigid translation produced
+        // strain). Caught by the PL/AE pull oracle: Tet4 bar read 20x stiff
+        // at the probe. Tet10Element has its own (independently validated)
+        // shape-function code and was never affected.
         for (int i = 0; i < kNumNodes; ++i) {
-            const double beta  = C(1, i);
-            const double gamma = C(2, i);
-            const double delta = C(3, i);
+            const double beta  = C(i, 1);
+            const double gamma = C(i, 2);
+            const double delta = C(i, 3);
             B(0, i*3+0) = beta;
             B(1, i*3+1) = gamma;
             B(2, i*3+2) = delta;

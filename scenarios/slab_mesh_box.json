@@ -1,0 +1,35 @@
+{
+  "v": 1,
+  "geometry": { "preset": "box", "size": [20.0, 20.0, 20.0] },
+  "material": "materials/pla.mat",
+  "mesh": { "method": "slice" },
+  "slice": {
+    "layerThickness": 0.2,
+    "buildAxis": 2,
+    "maxSlabs": 40,
+    "wallCount": 2,
+    "wallWidth": 0.4
+  },
+  "loads": [ { "type": "preset", "name": "tensionZ", "mag": 4500.0 } ],
+  "constraints": [ { "preset": "fixedMinX" } ],
+  "solve": { "kind": "linear", "gpu": false },
+  "probes": [
+    { "id": "topCenter", "pos": [0.0, 0.0, 1.5], "quantity": "displacement" }
+  ],
+  "screenshots": [
+    { "name": "iso_slab", "camera": "iso", "scalarMode": 1, "deformScale": 0.0 }
+  ],
+  "asserts": [
+    { "path": "slice.grouping.nSlabs",       "op": "==", "value": 34 },
+    { "path": "slice.mesh.nSlabs",           "op": "==", "value": 34 },
+    { "path": "slice.mesh.nVerts2D",         "op": "==", "value": 81 },
+    { "path": "slice.mesh.ringConformal",    "op": "==", "value": 1 },
+    { "path": "slice.mesh.holesIgnored",     "op": "==", "value": 0 },
+    { "path": "slice.mesh.sectionUniform",   "op": "==", "value": 1 },
+    { "path": "mesh.nNodes",                 "op": "==", "value": 2835 },
+    { "path": "mesh.minJacobian",            "op": ">",  "value": 0.02 },
+    { "path": "solver.ok",                   "op": "==", "value": 1 },
+    { "path": "solver.maxDispMM",            "op": "~=", "value": 0.074771, "rel": 0.05 },
+    { "path": "screenshots.iso_slab.stdRGBmax", "op": ">", "value": 0.0 }
+  ]
+}

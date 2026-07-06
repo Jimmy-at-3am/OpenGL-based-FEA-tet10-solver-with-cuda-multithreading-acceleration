@@ -1,0 +1,59 @@
+{
+  "v": 1,
+  "geometry": {
+    "gcode3mf": "gcode_models/shaftLying.gcode.3mf"
+  },
+  "material": "materials/pla.mat",
+  "gcodeSections": {},
+  "mesh": {
+    "method": "toolpath",
+    "maxSlabs": 8,
+    "targetEdgeMM": 4.0,
+    "tieAlpha": 100.0
+  },
+  "loads": [
+    {
+      "type": "preset",
+      "name": "bend3pYX",
+      "mag": 67.0,
+      "spanMM": 70.0
+    }
+  ],
+  "constraints": [
+    {
+      "preset": "supports"
+    }
+  ],
+  "solve": {
+    "kind": "fracture",
+    "maxIter": 8,
+    "gpu": false,
+    "fdmAnisotropy": true,
+    "buildAxis": 2
+  },
+  "probes": [],
+  "screenshots": [],
+  "asserts": [
+    {
+      "path": "solver.effectiveSpanMM",
+      "op": "~=",
+      "value": 71.21,
+      "rel": 0.02
+    },
+    {
+      "path": "fracture.totalFailed",
+      "op": "<=",
+      "value": 100
+    },
+    {
+      "path": "fracture.byMode.interlayerTension",
+      "op": "<=",
+      "value": 10
+    },
+    {
+      "path": "fracture.byMode.intralayer",
+      "op": "<=",
+      "value": 100
+    }
+  ]
+}

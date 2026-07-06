@@ -1,0 +1,47 @@
+{
+  "v": 1,
+  "geometry": {
+    "gcode3mf": "gcode_models/diffyswervebearingPod.gcode.3mf",
+    "partOnly": true
+  },
+  "material": "materials/pla.mat",
+  "probes": [],
+  "screenshots": [],
+  "asserts": [
+    {
+      "path": "gcode.layerCount",
+      "op": "==",
+      "value": 193
+    },
+    {
+      "path": "gcode.countsMatch",
+      "op": "==",
+      "value": 1
+    },
+    {
+      "path": "gcode.featureCounts.support",
+      "op": "==",
+      "value": 0
+    },
+    {
+      "path": "gcode.featureCounts.supportInterface",
+      "op": "==",
+      "value": 0
+    },
+    {
+      "path": "gcode.featureCounts.brim",
+      "op": "==",
+      "value": 0
+    },
+    {
+      "path": "gcode.featureCounts.custom",
+      "op": "==",
+      "value": 0
+    },
+    {
+      "path": "gcode.featureCounts.sparseInfill",
+      "op": "==",
+      "value": 2770
+    }
+  ]
+}

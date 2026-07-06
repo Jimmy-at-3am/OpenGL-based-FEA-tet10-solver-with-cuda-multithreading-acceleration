@@ -1,28 +1,122 @@
 {
   "v": 1,
-  "geometry": { "preset": "box", "size": [20.0, 10.0, 10.0] },
+  "geometry": {
+    "preset": "box",
+    "size": [
+      20.0,
+      10.0,
+      10.0
+    ]
+  },
   "material": "materials/pla.mat",
-  "mesh": { "maxVolume": 8.33, "quality": 1.6 },
-  "loads": [ { "type": "preset", "name": "tensionZ", "mag": 4500.0 } ],
-  "constraints": [ { "preset": "fixedMinX" } ],
-  "solve": { "kind": "fracture", "maxIter": 50, "gpu": false, "fdmAnisotropy": true, "buildAxis": 2 },
+  "mesh": {
+    "maxVolume": 8.33,
+    "quality": 1.6
+  },
+  "loads": [
+    {
+      "type": "preset",
+      "name": "pullZ",
+      "mag": 4500.0
+    }
+  ],
+  "constraints": [
+    {
+      "preset": "fixedMinX"
+    }
+  ],
+  "solve": {
+    "kind": "fracture",
+    "maxIter": 50,
+    "gpu": false,
+    "fdmAnisotropy": true,
+    "buildAxis": 2
+  },
   "probes": [
-    { "id": "freeEndTop", "pos": [10.0, 5.0, 0.0], "quantity": "displacement" }
+    {
+      "id": "freeEndTop",
+      "pos": [
+        10.0,
+        5.0,
+        0.0
+      ],
+      "quantity": "displacement"
+    }
   ],
   "screenshots": [
-    { "name": "deform",       "camera": "iso", "scalarMode": 1, "deformScale": 0.0, "deadView": "hidden"  },
-    { "name": "mode",         "camera": "iso", "scalarMode": 3, "deformScale": 0.0, "deadView": "colored" },
-    { "name": "crack_order",  "camera": "iso", "scalarMode": 4, "deformScale": 0.0, "deadView": "colored" },
-    { "name": "stress",       "camera": "iso", "scalarMode": 5, "deformScale": 0.0, "deadView": "colored" },
-    { "name": "mode_ghost",   "camera": "iso", "scalarMode": 3, "deformScale": 0.0, "deadView": "ghost"   },
-    { "name": "mode_colored", "camera": "iso", "scalarMode": 3, "deformScale": 0.0, "deadView": "colored" }
+    {
+      "name": "deform",
+      "camera": "iso",
+      "scalarMode": 1,
+      "deformScale": 0.0,
+      "deadView": "hidden"
+    },
+    {
+      "name": "mode",
+      "camera": "iso",
+      "scalarMode": 3,
+      "deformScale": 0.0,
+      "deadView": "colored"
+    },
+    {
+      "name": "crack_order",
+      "camera": "iso",
+      "scalarMode": 4,
+      "deformScale": 0.0,
+      "deadView": "colored"
+    },
+    {
+      "name": "stress",
+      "camera": "iso",
+      "scalarMode": 5,
+      "deformScale": 0.0,
+      "deadView": "colored"
+    },
+    {
+      "name": "mode_ghost",
+      "camera": "iso",
+      "scalarMode": 3,
+      "deformScale": 0.0,
+      "deadView": "ghost"
+    },
+    {
+      "name": "mode_colored",
+      "camera": "iso",
+      "scalarMode": 3,
+      "deformScale": 0.0,
+      "deadView": "colored"
+    }
   ],
   "asserts": [
-    { "path": "mesh.nTets", "op": ">", "value": 0 },
-    { "path": "solver.ok", "op": "==", "value": 1 },
-    { "path": "fracture.totalFailed", "op": ">", "value": 0 },
-    { "path": "fracture.byMode.interlayerTension", "op": ">", "value": 0 },
-    { "path": "screenshots.deform.stdRGBmax", "op": ">", "value": 12.0 },
-    { "path": "screenshots.mode_colored.uniqueColors", "op": ">=", "value": 4 }
+    {
+      "path": "mesh.nTets",
+      "op": ">",
+      "value": 0
+    },
+    {
+      "path": "solver.ok",
+      "op": "==",
+      "value": 1
+    },
+    {
+      "path": "fracture.totalFailed",
+      "op": ">",
+      "value": 0
+    },
+    {
+      "path": "fracture.byMode.interlayerTension",
+      "op": ">",
+      "value": 0
+    },
+    {
+      "path": "screenshots.deform.stdRGBmax",
+      "op": ">",
+      "value": 12.0
+    },
+    {
+      "path": "screenshots.mode_colored.uniqueColors",
+      "op": ">=",
+      "value": 4
+    }
   ]
 }

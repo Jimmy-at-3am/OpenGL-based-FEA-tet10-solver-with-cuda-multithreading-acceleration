@@ -1,0 +1,63 @@
+{
+  "v": 1,
+  "geometry": {
+    "gcode3mf": "gcode_models/diffyswervebearingPod.gcode.3mf"
+  },
+  "material": "materials/pla.mat",
+  "probes": [],
+  "screenshots": [
+    {
+      "name": "iso_shell",
+      "camera": "iso",
+      "scalarMode": 0,
+      "deformScale": 0.0
+    }
+  ],
+  "asserts": [
+    {
+      "path": "gcode.layerCount",
+      "op": "==",
+      "value": 193
+    },
+    {
+      "path": "gcode.nSegments",
+      "op": ">",
+      "value": 60000
+    },
+    {
+      "path": "gcode.nArcSegments",
+      "op": ">",
+      "value": 40000
+    },
+    {
+      "path": "gcode.countsMatch",
+      "op": "==",
+      "value": 1
+    },
+    {
+      "path": "gcode.featureCounts.support",
+      "op": ">",
+      "value": 0
+    },
+    {
+      "path": "gcode.featureCounts.sparseInfill",
+      "op": ">",
+      "value": 0
+    },
+    {
+      "path": "gcode.bboxSizeXMM",
+      "op": "<",
+      "value": 256.0
+    },
+    {
+      "path": "gcode.bboxSizeYMM",
+      "op": "<",
+      "value": 256.0
+    },
+    {
+      "path": "screenshots.iso_shell.stdRGBmax",
+      "op": ">",
+      "value": 0.0
+    }
+  ]
+}
