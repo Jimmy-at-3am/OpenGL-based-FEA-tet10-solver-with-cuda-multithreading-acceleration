@@ -39,6 +39,15 @@ bool build(const Toolpath::ToolpathModel& tp, const Options& opt,
 #else
     using namespace Clipper2Lib;
     out = LayerSections{};
+    auto progress = [&](float f) {
+        if (opt.progressOut)
+            opt.progressOut->store(opt.progressLo + (opt.progressHi - opt.progressLo) *
+                                                      std::clamp(f, 0.0f, 1.0f));
+    };
+    auto cancelled = [&]() {
+        return opt.cancelRequested && opt.cancelRequested->load();
+    };
+    progress(0.0f);
     if (tp.segments.empty() || tp.layerCount <= 0) {
         err = "toolpath has no segments/layers";
         return false;
@@ -79,12 +88,18 @@ bool build(const Toolpath::ToolpathModel& tp, const Options& opt,
 
     float lastZ = tp.bbMin.z - centre.z, lastH = 0.2f;
     for (int L = 0; L < tp.layerCount; ++L) {
+        if (cancelled()) {
+            out = LayerSections{};
+            err = "cancelled";
+            return false;
+        }
         const auto& segs = perLayer[L];
         if (segs.empty()) {
             // aid-only or empty layer: keep an empty section, interpolate z.
             out.zTopMM[L]  = lastZ + lastH;
             out.heightMM[L] = lastH;
             lastZ = out.zTopMM[L];
+            progress(static_cast<float>(L + 1) / static_cast<float>(tp.layerCount));
             continue;
         }
 
@@ -165,12 +180,14 @@ bool build(const Toolpath::ToolpathModel& tp, const Options& opt,
         }
         out.netAreaMM2[L] = net;
         out.sections[L]   = std::move(sec);
+        progress(static_cast<float>(L + 1) / static_cast<float>(tp.layerCount));
     }
 
     std::cout << "[TPSEC] layers=" << tp.layerCount
               << " closeGapMM=" << g
               << " loops=" << out.totalLoops
               << " holes=" << out.totalHoles << "\n";
+    progress(1.0f);
     return true;
 #endif
 }

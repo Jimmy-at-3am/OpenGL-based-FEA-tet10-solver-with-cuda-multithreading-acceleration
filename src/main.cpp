@@ -20,7 +20,18 @@
 #include <filesystem>
 #include <fstream>
 #include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <cmath>
 #include <cstdio>
+#include <cstdlib>
+#include <functional>
+#include <memory>
+#include <thread>
+
+#include <omp.h>
+
+#include "ToolpathModel.h"   // toolpath->layerCount for the slab readout
 
 // Define globals
 unsigned int scrWidth = 1600;
@@ -73,7 +84,7 @@ void scanForModels() {
 struct ShowcaseDefaults {
     std::string load = "pullZ";     // pull axis preset name
     double magN = 0.0;              // calibrated force (N); 0 = none stored
-    int    maxSlabs = 12;
+    int    maxSlabs = 128;
     float  targetEdgeMM = -1.0f;
     bool   found = false;
 };
@@ -103,7 +114,7 @@ static ShowcaseDefaults showcaseDefaultsFor(const std::string& fileName) {
         if (q2 != std::string::npos) d.load = blk.substr(q1 + 1, q2 - q1 - 1);
     }
     d.magN         = grabNum("magN", 0.0);
-    d.maxSlabs     = static_cast<int>(grabNum("maxSlabs", 12.0));
+    d.maxSlabs     = static_cast<int>(grabNum("maxSlabs", 128.0));
     d.targetEdgeMM = static_cast<float>(grabNum("targetEdgeMM", -1.0));
     d.found = true;
     return d;
@@ -194,6 +205,113 @@ void char_callback(GLFWwindow* window, unsigned int codepoint);  // new_TODO_19E
 void key_callback(GLFWwindow* window, int key, int scancode, int action, int mods);
 void processInput(GLFWwindow* window);
 
+// =============================================================================
+// Async compute jobs. One background worker at a time runs the heavy stages
+// (TetGen / toolpath meshing, FEA solves) so the UI never freezes. The worker
+// owns no GL context: model.deferGLUpload turns every buildBuffers() inside
+// the job into a no-op, and the finalize callback (main thread) re-uploads.
+// One core is left idle for the render/UI thread.
+// =============================================================================
+struct ComputeJob {
+    std::thread         th;
+    std::atomic<bool>   running{false};
+    std::atomic<bool>   cancel{false};
+    std::atomic<bool>   done{false};
+    std::atomic<float>  progress{-1.0f};   // <0 = indeterminate (animated stripe)
+    std::string         title;
+    bool                cancellable = true;
+    bool                okResult    = false;
+    std::function<bool()> work;                            // worker thread
+    std::function<void(bool ok, bool cancelled)> finalize; // main thread
+    double              startTime = 0.0;
+};
+static ComputeJob g_job;
+static bool computeBusy() { return g_job.running.load(); }
+
+static void startComputeJob(FEAModel& model, const std::string& title, bool cancellable,
+                            std::function<bool()> work,
+                            std::function<void(bool, bool)> finalize) {
+    if (computeBusy()) return;
+    g_job.title       = title;
+    g_job.cancel      = false;
+    g_job.done        = false;
+    g_job.progress    = -1.0f;
+    g_job.cancellable = cancellable;
+    g_job.okResult    = false;
+    g_job.work        = std::move(work);
+    g_job.finalize    = std::move(finalize);
+    g_job.startTime   = glfwGetTime();
+    model.deferGLUpload = true;   // worker owns no GL context
+    model.computeProgressOut = &g_job.progress;
+    model.computeCancelRequested = &g_job.cancel;
+    g_job.running = true;
+    g_job.th = std::thread([] {
+        // Keep a core free so rendering/input stay smooth during the solve.
+        const unsigned hw = std::thread::hardware_concurrency();
+        if (hw > 2) omp_set_num_threads(static_cast<int>(hw - 1));
+        g_job.okResult = g_job.work ? g_job.work() : false;
+        g_job.done = true;
+    });
+}
+
+// Bottom-left sliding progress panel — shared by compute jobs, startup and
+// shutdown. progress < 0 renders an animated indeterminate stripe. Returns
+// true when the cancel X was clicked.
+static bool drawProgressPanel(SimpleUI& ui, const std::string& title, float progress,
+                              bool showCancel, float slideT, double now) {
+    const float w = 360.0f, h = 62.0f, xBase = 12.0f;
+    const float yShown = static_cast<float>(scrHeight) - h - 12.0f;
+    float t = slideT < 0.0f ? 0.0f : (slideT > 1.0f ? 1.0f : slideT);
+    t = 1.0f - (1.0f - t) * (1.0f - t);                       // ease-out slide
+    const float yHidden = static_cast<float>(scrHeight) + 8.0f;
+    const float y = yHidden - (yHidden - yShown) * t;
+
+    ui.drawRectA(xBase, y, w, h, glm::vec3(0.10f, 0.11f, 0.13f), 0.92f);
+    ui.drawRect(xBase, y, w, 2.0f, glm::vec3(0.3f, 0.6f, 0.9f));
+    ui.drawText(title, xBase + 12.0f, y + 9.0f, 8.0f, glm::vec3(0.85f, 0.9f, 1.0f));
+
+    bool cancelClicked = false;
+    if (showCancel &&
+        ui.button("X", xBase + w - 27.0f, y + 6.0f, 20.0f, 20.0f))
+        cancelClicked = true;
+
+    const float barX = xBase + 12.0f, barW = w - 24.0f;
+    const float barY = y + 34.0f,     barH = 16.0f;
+    ui.drawRect(barX, barY, barW, barH, glm::vec3(0.20f, 0.21f, 0.24f));
+    if (progress >= 0.0f) {
+        const float p = progress > 1.0f ? 1.0f : progress;
+        if (p > 0.0f)
+            ui.drawRect(barX, barY, barW * p, barH, glm::vec3(0.30f, 0.70f, 0.90f));
+        char pct[16];
+        snprintf(pct, sizeof(pct), "%d", static_cast<int>(p * 100.0f + 0.5f));
+        ui.drawText(pct, barX + barW - 34.0f, barY + 4.0f, 7.5f, glm::vec3(0.95f));
+    } else {
+        // Indeterminate: a stripe sweeping the bar.
+        const float stripeW = barW * 0.25f;
+        const float phase = static_cast<float>(std::fmod(now * 0.8, 1.0));
+        const float sx = barX + (barW + stripeW) * phase - stripeW;
+        const float s0 = std::max(sx, barX);
+        const float s1 = std::min(sx + stripeW, barX + barW);
+        if (s1 > s0)
+            ui.drawRect(s0, barY, s1 - s0, barH, glm::vec3(0.30f, 0.70f, 0.90f));
+    }
+    return cancelClicked;
+}
+
+// One startup/shutdown frame: clear, draw the progress panel, swap.
+static void drawBootFrame(GLFWwindow* window, SimpleUI& ui, const char* stage, float frac) {
+    glfwPollEvents();
+    int w = 0, h = 0;
+    glfwGetWindowSize(window, &w, &h);
+    if (w > 0 && h > 0) { scrWidth = w; scrHeight = h; ui.resize(w, h); }
+    glClearColor(0.9f, 0.92f, 0.95f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    glDisable(GL_DEPTH_TEST);
+    drawProgressPanel(ui, stage, frac, false, 1.0f, glfwGetTime());
+    glEnable(GL_DEPTH_TEST);
+    glfwSwapBuffers(window);
+}
+
 glm::vec3 contourColor(float t) {
     t = std::max(0.0f, std::min(1.0f, t));
     if (t < 0.25f) return glm::mix(glm::vec3(0.0f, 0.05f, 0.55f), glm::vec3(0.0f, 0.55f, 1.0f), t / 0.25f);
@@ -238,13 +356,20 @@ int runInteractive() {
     glEnable(GL_POLYGON_OFFSET_LINE);
     glPolygonOffset(-1.0f, -1.0f);
 
-    BuiltInShader schematicShader(modelVS, modelFS);
-    BuiltInShader axisShaderObj(axisVS, axisFS);
-
-    FEAModel model;
+    // Boot with a visible progress bar: the UI shader comes up first so every
+    // remaining init stage can render a frame into the bottom-left panel.
     SimpleUI ui;
     ui.init(scrWidth, scrHeight);
+    drawBootFrame(window, ui, "STARTING: COMPILING SHADERS", 0.15f);
+
+    BuiltInShader schematicShader(modelVS, modelFS);
+    BuiltInShader axisShaderObj(axisVS, axisFS);
+    drawBootFrame(window, ui, "STARTING: BUILDING GEOMETRY", 0.40f);
+
+    FEAModel model;
+    drawBootFrame(window, ui, "STARTING: SCANNING MODELS", 0.65f);
     scanForModels();
+    drawBootFrame(window, ui, "STARTING: LOADING MATERIALS", 0.85f);
     scanForMaterials();
     for (const auto& mf : matFiles) {
         if (mf == "steel.mat") { activeMaterialFile = mf; loadMaterialFile("materials/" + mf, currentMaterial); break; }
@@ -253,6 +378,14 @@ int runInteractive() {
         activeMaterialFile = matFiles[0];
         loadMaterialFile("materials/" + activeMaterialFile, currentMaterial);
     }
+
+    // Z-up CAD orbit: FDM parts build along +Z, so the vertical screen axis is
+    // Z (the gcode/printer convention) — a lying shaft now renders lying.
+    camera.SetZUp(135.0f, -25.0f);
+    camera.OrbitTarget = glm::vec3(0.0f);
+    camera.OrbitRadius = 5.0f;
+    camera.UpdatePosition();
+    drawBootFrame(window, ui, "READY", 1.0f);
 
     float axisVertices[] = {
         0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f,
@@ -277,7 +410,25 @@ int runInteractive() {
         scrWidth = w; scrHeight = h; ui.resize(scrWidth, scrHeight);
         processInput(window);
 
-        if (currentMode == MODE_CUBE && model.needsUpdate) { model.generateCube(); }
+        // Async job completion: join the worker here and run the finalize step
+        // on the main thread (that is where GL uploads are legal).
+        if (g_job.running.load() && g_job.done.load()) {
+            if (g_job.th.joinable()) g_job.th.join();
+            model.deferGLUpload = false;
+            model.computeProgressOut = nullptr;
+            model.computeCancelRequested = nullptr;
+            const bool wasCancelled = g_job.cancel.load();
+            auto fin = std::move(g_job.finalize);
+            g_job.work     = nullptr;
+            g_job.finalize = nullptr;
+            g_job.running  = false;
+            if (fin) fin(g_job.okResult, wasCancelled);
+            if (wasCancelled)
+                std::cout << "[JOB] '" << g_job.title << "' cancelled." << std::endl;
+        }
+        const bool busy = computeBusy();
+
+        if (currentMode == MODE_CUBE && model.needsUpdate && !busy) { model.generateCube(); }
 
         glClearColor(0.9f, 0.92f, 0.95f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -306,8 +457,13 @@ int runInteractive() {
         schematicShader.setMat4("projection", projection);
         schematicShader.setMat4("view", view);
         model.draw(schematicShader, camera.Position);
-        model.drawSlicePreview(schematicShader); // new_TODO_04: section overlay
-        model.drawForceArrows(schematicShader);  // new_TODO_19E: load arrows
+        if (!busy) {
+            // Overlays read solver-owned vectors (appliedForces etc.) that a
+            // running job may be mutating — skip them until it finishes.
+            model.drawSlicePreview(schematicShader); // new_TODO_04: section overlay
+            model.drawForceArrows(schematicShader);  // new_TODO_19E: load arrows
+        }
+        model.drawSectionPlane(schematicShader);     // sectional-view cut plane
 
         glDisable(GL_DEPTH_TEST);
         float panelW = panelWidth; float panelX = scrWidth - panelW;
@@ -327,6 +483,10 @@ int runInteractive() {
         drawAxisLabel(glm::vec3(axisLengths.x, 0.0f, 0.0f), "X", axisLengths.x, glm::vec3(1.0f, 0.35f, 0.35f));
         drawAxisLabel(glm::vec3(0.0f, axisLengths.y, 0.0f), "Y", axisLengths.y, glm::vec3(0.35f, 1.0f, 0.35f));
         drawAxisLabel(glm::vec3(0.0f, 0.0f, axisLengths.z), "Z", axisLengths.z, glm::vec3(0.35f, 0.7f, 1.0f));
+
+        // While a compute job runs the whole control panel is render-only:
+        // widgets ignore input and a dim overlay signals "computation running".
+        ui.setInputLocked(busy);
 
         ui.drawRect(panelX, 0, panelW, scrHeight, glm::vec3(0.1f, 0.1f, 0.1f));
         ui.drawRect(panelX, 0, 2, scrHeight, glm::vec3(0.3f, 0.3f, 0.3f));
@@ -514,9 +674,21 @@ int runInteractive() {
         ui.drawRect(rX, rY, rW, 1.5f, glm::vec3(0.3f)); rY += 14.0f;
 
         static bool useMultithreading = false;
+        static bool useGPU = false;
+        static bool useFdmAnisotropy = false;
+        // Build axis defaults to Z: both the gcode lane and the FDM material
+        // model treat +Z as the layer normal (X/Y remain selectable for
+        // legacy STL experiments via the LAYER button).
+        static int buildAxis = 2;
+        static int loadTypeSel = 0;
         static float forceMagnitudeMN = 100.0f; // 100 MN force for benchmark (gives 0.25m deflection on 5x1x1m steel beam)
         static float curvAngleThreshold = 15.0f;
         static float curvFracLimit = 0.25f;
+        // Toolpath meshing honesty readout: print-layer vs slab counts of the
+        // last GENERATE 3D MESH run (written by the worker thread, displayed
+        // after the job completes).
+        static SlabMesher::ToolpathMeshStats lastTpStats;
+        static bool hasTpStats = false;
 
         // --- new_TODO_04: SLICE controls (shared by CUBE + IMPORT, handoff 5.4) ---
         // The SLICE PREVIEW button calls the EXACT free functions the headless
@@ -612,7 +784,9 @@ int runInteractive() {
             ui.slider("MAX VOLUME (%)", model.params.maxVolPercent, 0.00001f, 0.2f, rX, rY, rW, 15.0f, true); rY += 20.0f;
             if (ui.button("GENERATE 3D MESH", rX, rY, rW, 35.0f)) {
                 std::cout << "Button Clicked: Launching TetGen..." << std::endl;
-                model.generateVolumetricMesh();
+                startComputeJob(model, "TETGEN MESHING", true,
+                    [&model]() -> bool { return model.generateVolumetricMesh(); },
+                    [&model](bool, bool) { model.buildBuffers(); });
             }
             rY += 40.0f;
             drawSliceControls(rX, rY, rW); // new_TODO_04: SLICE block (CUBE)
@@ -644,25 +818,52 @@ int runInteractive() {
             if (ui.button("GENERATE 3D MESH", rX, rY, rW, 35.0f)) {
                 if (model.hasToolpath()) {
                     // new_TODO_19E: gcode models mesh through the toolpath lane
-                    // — the EXACT functions the harness calls.
+                    // — the EXACT functions the harness calls, on a worker.
                     // [same-path: mesh.method="toolpath" in ScenarioRunner]
+                    // Slab cap: never below 128. The stored 19D defaults (8-12)
+                    // merged ~20 print layers per slab. Around 200 print layers
+                    // now become ~100 FE slabs (k=2), while small prints keep
+                    // every Z contour; headless scenarios keep their own cap.
                     std::cout << "Button Clicked: toolpath sections + slab mesh..." << std::endl;
-                    ToolpathSections::Options topts;
-                    ToolpathSections::LayerSections secs;
-                    std::string terr;
-                    if (ToolpathSections::build(*model.toolpath, topts, secs, terr)) {
-                        if (!model.hasLayerStack())
-                            model.layers = std::make_unique<LayerStack>();
-                        SlabMesher::ToolpathMeshOptions mo;
-                        mo.maxSlabs     = showcaseCfg.found ? showcaseCfg.maxSlabs : 12;
-                        mo.targetEdgeMM = showcaseCfg.found ? showcaseCfg.targetEdgeMM : -1.0f;
-                        SlabMesher::meshToolpathSlabs(secs, mo, model);
-                    } else {
-                        std::cout << "[GCODE] section build failed: " << terr << std::endl;
-                    }
+                    const int   slabCap = showcaseCfg.found ? std::max(showcaseCfg.maxSlabs, 128) : 128;
+                    const float edgeMM  = showcaseCfg.found ? showcaseCfg.targetEdgeMM : -1.0f;
+                    auto meshStats = std::make_shared<SlabMesher::ToolpathMeshStats>();
+                    startComputeJob(model, "TOOLPATH MESHING", true,
+                        [&model, slabCap, edgeMM, meshStats]() -> bool {
+                            ToolpathSections::Options topts;
+                            topts.progressOut      = &g_job.progress;
+                            topts.cancelRequested = &g_job.cancel;
+                            topts.progressLo       = 0.02f;
+                            topts.progressHi       = 0.30f;
+                            ToolpathSections::LayerSections secs;
+                            std::string terr;
+                            if (!ToolpathSections::build(*model.toolpath, topts, secs, terr)) {
+                                if (!g_job.cancel.load())
+                                    std::cout << "[GCODE] section build failed: " << terr << std::endl;
+                                return false;
+                            }
+                            SlabMesher::ToolpathMeshOptions mo;
+                            mo.maxSlabs     = slabCap;
+                            mo.targetEdgeMM = edgeMM;
+                            mo.progressOut      = &g_job.progress;
+                            mo.cancelRequested = &g_job.cancel;
+                            mo.progressLo       = 0.30f;
+                            mo.progressHi       = 0.98f;
+                            *meshStats = SlabMesher::meshToolpathSlabs(secs, mo, model);
+                            return meshStats->nTets > 0;
+                        },
+                        [&model, meshStats](bool ok, bool cancelled) {
+                            if (ok && !cancelled) {
+                                lastTpStats = *meshStats;
+                                hasTpStats = true;
+                            }
+                            model.buildBuffers();
+                        });
                 } else {
                     std::cout << "Button Clicked: Launching TetGen..." << std::endl;
-                    model.generateVolumetricMesh();
+                    startComputeJob(model, "TETGEN MESHING", true,
+                        [&model]() -> bool { return model.generateVolumetricMesh(); },
+                        [&model](bool, bool) { model.buildBuffers(); });
                 }
             }
             rY += 40.0f;
@@ -713,39 +914,61 @@ int runInteractive() {
                     double mag = 0.0;
                     try { mag = std::stod(showcaseMagText); } catch (...) {}
                     if (mag > 0.0 && model.hasVolumetricMesh) {
-                        FEASolver solver;
+                        auto solver = std::make_shared<FEASolver>();
                         // Map "pullX|pullY|pullZ" -> FacePull + axis (the same
                         // preset the frozen 19D scenarios use).
                         char ax = showcaseCfg.load.empty() ? 'Z' : showcaseCfg.load.back();
-                        solver.loadType = FEASolver::LoadType::FacePull;
-                        solver.faceAxis = (ax=='X'||ax=='x') ? 0 : (ax=='Y'||ax=='y') ? 1 : 2;
-                        solver.buildAxis = 2;                 // gcode layers are always +Z
-                        solver.useQuadraticElements = false;  // fracture path = Tet4
-                        solver.useMultithreading = useMultithreading;
-                        solver.forceMagnitude = mag;
-                        solver.youngsModulus  = currentMaterial.E;
-                        solver.poissonRatio   = currentMaterial.nu;
-                        solver.fractureStress = currentMaterial.fractureStress;
+                        solver->loadType = FEASolver::LoadType::FacePull;
+                        solver->faceAxis = (ax=='X'||ax=='x') ? 0 : (ax=='Y'||ax=='y') ? 1 : 2;
+                        solver->buildAxis = 2;                 // gcode layers are always +Z
+                        solver->useQuadraticElements = false;  // fracture path = Tet4
+                        solver->useMultithreading = useMultithreading;
+                        solver->useGPU        = useGPU;
+                        solver->forceMagnitude = mag;
+                        solver->youngsModulus  = currentMaterial.E;
+                        solver->poissonRatio   = currentMaterial.nu;
+                        solver->fractureStress = currentMaterial.fractureStress;
                         if (currentMaterial.E_z > 0.0) {
-                            solver.useFdmAnisotropy = true;
-                            solver.E_z   = currentMaterial.E_z;
-                            solver.nu_pz = currentMaterial.nu_pz;
-                            solver.G_pz  = currentMaterial.G_pz;
-                            solver.fractureStress_intralayer = currentMaterial.fractureStress_intralayer;
-                            solver.fractureStress_interlayer = currentMaterial.fractureStress_interlayer;
-                            solver.fractureShear_interlayer  = currentMaterial.fractureShear_interlayer;
+                            solver->useFdmAnisotropy = true;
+                            solver->E_z   = currentMaterial.E_z;
+                            solver->nu_pz = currentMaterial.nu_pz;
+                            solver->G_pz  = currentMaterial.G_pz;
+                            solver->fractureStress_intralayer = currentMaterial.fractureStress_intralayer;
+                            solver->fractureStress_interlayer = currentMaterial.fractureStress_interlayer;
+                            solver->fractureShear_interlayer  = currentMaterial.fractureShear_interlayer;
                         }
+                        solver->progressOut     = &g_job.progress;
+                        solver->cancelRequested = &g_job.cancel;
                         model.elementAlive.clear();
                         model.elementFailureIter.clear();
                         model.elementFailureMode.clear();
-                        solver.solveBrittleFracture(model, 10.0f, 14); // [same-path: BRITTLE FRACTURE]
-                        model.showAppliedForceField = true;  // 3-D load arrows on
+                        startComputeJob(model, "SHOWCASE FRACTURE FEA", true,
+                            [solver, &model]() -> bool {
+                                // [same-path: BRITTLE FRACTURE]
+                                return solver->solveBrittleFracture(model, 10.0f, 14);
+                            },
+                            [&model](bool ok, bool cancelled) {
+                                model.buildBuffers();
+                                if (ok && !cancelled)
+                                    model.showAppliedForceField = true;  // 3-D load arrows on
+                            });
                     } else {
                         std::cout << "[SHOWCASE] enter a positive magnitude (N) first"
                                   << std::endl;
                     }
                 }
                 rY += 36.0f;
+
+                // Meshing honesty: the print's true layer count vs the slabs
+                // the FE mesh actually uses (k printed layers merge per slab).
+                if (hasTpStats && model.hasVolumetricMesh && model.toolpath) {
+                    char tb[96];
+                    snprintf(tb, sizeof(tb), "%d PRINT LAYERS - %d SLABS (K=%d)",
+                             model.toolpath->layerCount,
+                             lastTpStats.nSlabs, lastTpStats.layersPerSlab);
+                    ui.drawText(tb, rX, rY, 7.5f, glm::vec3(0.85f, 0.7f, 0.95f));
+                    rY += 16.0f;
+                }
             }
 
             if (model.hasVolumetricMesh) {
@@ -755,12 +978,7 @@ int runInteractive() {
                 }
                 rY += 30.0f;
 
-                static bool useGPU = false;
-                static bool useFdmAnisotropy = false;
-
-                // Build-axis and force-type selections (shared by all solvers).
-                static int buildAxis = 1; // 0=X weak, 1=Y weak (default), 2=Z weak
-                static int loadTypeSel = 0;
+                // Load/axis presets for the generic (non-gcode) solvers.
                 static const FEASolver::LoadType loadTypeMap[] = {
                     FEASolver::LoadType::CantileverBendingZ,
                     FEASolver::LoadType::PointForceZ,
@@ -789,6 +1007,14 @@ int runInteractive() {
                 }
                 rY += 30.0f;
 
+                // Generic load/solver controls apply to STL/STEP/cube meshes
+                // only. A gcode toolpath model runs through the SHOWCASE panel
+                // above (its load preset + calibrated magnitude): the FORCE /
+                // LAYER selectors, point-force slider and the generic solver
+                // buttons are unused there, so they are hidden rather than
+                // shown dead. MULTITHREADING and GPU stay: the showcase run
+                // consumes both.
+                if (!model.hasToolpath()) {
                 if (ui.button(buildAxisNames[buildAxis], rX, rY, rW, 22.0f)) {
                     buildAxis = (buildAxis + 1) % 3;
                 }
@@ -804,33 +1030,43 @@ int runInteractive() {
 
                 if (ui.button("LINEAR STATIC FEA", rX, rY, rW, 25.0f)) {
                     std::cout << "Launching Static Solver..." << std::endl;
-                    FEASolver solver;
-                    solver.loadType             = loadTypeMap[loadTypeSel];
-                    solver.buildAxis            = buildAxis;
-                    solver.useQuadraticElements = true;
-                    solver.useMultithreading    = useMultithreading;
-                    solver.useGPU              = useGPU;
-                    solver.forceMagnitude       = static_cast<double>(forceMagnitudeMN) * 1.0e6;
-                    solver.youngsModulus        = currentMaterial.E;
-                    solver.poissonRatio         = currentMaterial.nu;
-                    solver.solveLinearStatic(model, 10.0f);
+                    auto solver = std::make_shared<FEASolver>();
+                    solver->loadType             = loadTypeMap[loadTypeSel];
+                    solver->buildAxis            = buildAxis;
+                    solver->useQuadraticElements = true;
+                    solver->useMultithreading    = useMultithreading;
+                    solver->useGPU               = useGPU;
+                    solver->forceMagnitude       = static_cast<double>(forceMagnitudeMN) * 1.0e6;
+                    solver->youngsModulus        = currentMaterial.E;
+                    solver->poissonRatio         = currentMaterial.nu;
+                    solver->progressOut          = &g_job.progress;
+                    solver->cancelRequested      = &g_job.cancel;
+                    startComputeJob(model, "LINEAR STATIC FEA", true,
+                        [solver, &model]() -> bool { return solver->solveLinearStatic(model, 10.0f); },
+                        [&model](bool, bool) { model.buildBuffers(); });
                 }
                 rY += 30.0f;
                 if (ui.button("NONLINEAR FEA (NR)", rX, rY, rW, 25.0f)) {
                     std::cout << "Launching Newton-Raphson Solver..." << std::endl;
-                    FEASolver solver;
-                    solver.loadType             = loadTypeMap[loadTypeSel];
-                    solver.buildAxis            = buildAxis;
-                    solver.useQuadraticElements = true;
-                    solver.verboseDiagnostics   = true;
-                    solver.useMultithreading    = useMultithreading;
-                    solver.useGPU              = useGPU;
-                    solver.forceMagnitude       = static_cast<double>(forceMagnitudeMN) * 1.0e6;
-                    solver.youngsModulus        = currentMaterial.E;
-                    solver.poissonRatio         = currentMaterial.nu;
-                    solver.loadSymmetry = FEASolver::LoadSymmetry::None;
-                    NRParams  nrp;
-                    solver.solveNonlinearStatic(model, 10.0f, nrp);
+                    auto solver = std::make_shared<FEASolver>();
+                    solver->loadType             = loadTypeMap[loadTypeSel];
+                    solver->buildAxis            = buildAxis;
+                    solver->useQuadraticElements = true;
+                    solver->verboseDiagnostics   = true;
+                    solver->useMultithreading    = useMultithreading;
+                    solver->useGPU               = useGPU;
+                    solver->forceMagnitude       = static_cast<double>(forceMagnitudeMN) * 1.0e6;
+                    solver->youngsModulus        = currentMaterial.E;
+                    solver->poissonRatio         = currentMaterial.nu;
+                    solver->loadSymmetry = FEASolver::LoadSymmetry::None;
+                    solver->progressOut          = &g_job.progress;
+                    solver->cancelRequested      = &g_job.cancel;
+                    startComputeJob(model, "NONLINEAR FEA (NR)", true,
+                        [solver, &model]() -> bool {
+                            NRParams nrp;
+                            return solver->solveNonlinearStatic(model, 10.0f, nrp);
+                        },
+                        [&model](bool, bool) { model.buildBuffers(); });
                 }
                 rY += 30.0f;
 
@@ -841,17 +1077,21 @@ int runInteractive() {
 
                 if (ui.button("RUN ADAPTIVE FEA", rX, rY, rW, 25.0f)) {
                     std::cout << "Launching Adaptive Solver..." << std::endl;
-                    FEASolver solver;
-                    solver.loadType          = loadTypeMap[loadTypeSel];
-                    solver.buildAxis         = buildAxis;
-                    solver.useMultithreading = useMultithreading;
-                    solver.useGPU           = useGPU;
-                    solver.forceMagnitude    = static_cast<double>(forceMagnitudeMN) * 1.0e6;
-                    solver.youngsModulus     = currentMaterial.E;
-                    solver.poissonRatio      = currentMaterial.nu;
-                    solver.geoParams.curvatureAngleThreshold = curvAngleThreshold;
-                    solver.geoParams.highCurvatureFracLimit  = curvFracLimit;
-                    solver.solveAdaptive(model, 10.0f);
+                    auto solver = std::make_shared<FEASolver>();
+                    solver->loadType          = loadTypeMap[loadTypeSel];
+                    solver->buildAxis         = buildAxis;
+                    solver->useMultithreading = useMultithreading;
+                    solver->useGPU            = useGPU;
+                    solver->forceMagnitude    = static_cast<double>(forceMagnitudeMN) * 1.0e6;
+                    solver->youngsModulus     = currentMaterial.E;
+                    solver->poissonRatio      = currentMaterial.nu;
+                    solver->geoParams.curvatureAngleThreshold = curvAngleThreshold;
+                    solver->geoParams.highCurvatureFracLimit  = curvFracLimit;
+                    solver->progressOut       = &g_job.progress;
+                    solver->cancelRequested   = &g_job.cancel;
+                    startComputeJob(model, "ADAPTIVE FEA", true,
+                        [solver, &model]() -> bool { return solver->solveAdaptive(model, 10.0f); },
+                        [&model](bool, bool) { model.buildBuffers(); });
                 }
                 rY += 30.0f;
 
@@ -887,27 +1127,32 @@ int runInteractive() {
                                   << currentMaterial.fractureStress * 1e-6 << " MPa)..." << std::endl;
                     }
 
-                    FEASolver solver;
-                    solver.useMultithreading    = useMultithreading;
-                    solver.useGPU               = useGPU;
-                    solver.useQuadraticElements = model.hasQuadraticMesh;
-                    solver.loadType             = loadTypeMap[loadTypeSel];
-                    solver.buildAxis            = buildAxis;
-                    solver.forceMagnitude       = static_cast<double>(forceMagnitudeMN) * 1.0e6;
-                    solver.youngsModulus        = currentMaterial.E;
-                    solver.poissonRatio         = currentMaterial.nu;
-                    solver.fractureStress       = currentMaterial.fractureStress;
+                    auto solver = std::make_shared<FEASolver>();
+                    solver->useMultithreading    = useMultithreading;
+                    solver->useGPU               = useGPU;
+                    solver->useQuadraticElements = model.hasQuadraticMesh;
+                    solver->loadType             = loadTypeMap[loadTypeSel];
+                    solver->buildAxis            = buildAxis;
+                    solver->forceMagnitude       = static_cast<double>(forceMagnitudeMN) * 1.0e6;
+                    solver->youngsModulus        = currentMaterial.E;
+                    solver->poissonRatio         = currentMaterial.nu;
+                    solver->fractureStress       = currentMaterial.fractureStress;
                     // FDM anisotropic parameters (no-ops when useFdmAnisotropy=false).
-                    solver.useFdmAnisotropy             = fdmOn;
-                    solver.E_z                           = currentMaterial.E_z;
-                    solver.nu_pz                         = currentMaterial.nu_pz;
-                    solver.G_pz                          = currentMaterial.G_pz;
-                    solver.fractureStress_intralayer     = currentMaterial.fractureStress_intralayer;
-                    solver.fractureStress_interlayer     = currentMaterial.fractureStress_interlayer;
-                    solver.fractureShear_interlayer      = currentMaterial.fractureShear_interlayer;
-                    solver.solveBrittleFracture(model, 10.0f, 50);
+                    solver->useFdmAnisotropy             = fdmOn;
+                    solver->E_z                           = currentMaterial.E_z;
+                    solver->nu_pz                         = currentMaterial.nu_pz;
+                    solver->G_pz                          = currentMaterial.G_pz;
+                    solver->fractureStress_intralayer     = currentMaterial.fractureStress_intralayer;
+                    solver->fractureStress_interlayer     = currentMaterial.fractureStress_interlayer;
+                    solver->fractureShear_interlayer      = currentMaterial.fractureShear_interlayer;
+                    solver->progressOut          = &g_job.progress;
+                    solver->cancelRequested      = &g_job.cancel;
+                    startComputeJob(model, "BRITTLE FRACTURE FEA", true,
+                        [solver, &model]() -> bool { return solver->solveBrittleFracture(model, 10.0f, 50); },
+                        [&model](bool, bool) { model.buildBuffers(); });
                 }
                 rY += 30.0f;
+                } // end !hasToolpath (generic load/solver controls)
             }
 
             if (model.hasDeformation) {
@@ -1064,6 +1309,12 @@ int runInteractive() {
             drawSliceControls(rX, rY, rW); // new_TODO_04: SLICE block (IMPORT)
         }
 
+        // End of the control panel: re-enable input for the left-side widgets
+        // (README, section slider, progress panel) and dim the locked panel.
+        ui.setInputLocked(false);
+        if (busy)
+            ui.drawRectA(panelX, 0, panelW, scrHeight, glm::vec3(0.06f, 0.06f, 0.07f), 0.55f);
+
         static bool showReadme = false;
         if (ui.button("README", 10.0f, 10.0f, 80.0f, 30.0f, showReadme)) {
             showReadme = !showReadme;
@@ -1123,6 +1374,72 @@ int runInteractive() {
             drawHelp("ADAPTIVE FEA", "Uses quadratic elements in high-curvature regions for accuracy.");
             drawHelp("SHOWING: DEFORMED", "Toggles visualization of the post-simulation deformed structure.");
             drawHelp("FORCE MAP / REF CUBE", "Visualizes applied external force vectors and value contours.");
+            drawHelp("SECTION SLIDER (LEFT)", "Drag up to cut the model with a horizontal XY plane; everything below the grey plane is hidden. Zero disables the cut.");
+        }
+
+        // ===== Sectional view slider (left edge, README down to mid-screen) =====
+        // Bottom = 0 (no cut), top = the part's real Z height in mm (from the
+        // loaded file's physical bbox). Dragging up raises a translucent grey
+        // XY plane; the volume below it is clipped in the shader, so it works
+        // on the surface preview, the volume mesh and post-solve deformed views.
+        {
+            static std::string sectionModelKey;
+            static float sectionHeightMM = 0.0f;
+            std::string curKey = (currentMode == MODE_CUBE)
+                                     ? "#cube" : model.loadedFileName;
+            if (curKey != sectionModelKey) { sectionModelKey = curKey; sectionHeightMM = 0.0f; }
+
+            const float zSpanMM = std::max(1e-6f, model.physicalSizeMM().z);
+            if (sectionHeightMM > zSpanMM) sectionHeightMM = zSpanMM;
+
+            const float sx    = 26.0f;
+            const float syTop = 96.0f;
+            const float syBot = static_cast<float>(scrHeight) * 0.5f;
+            // The open README overlay occupies this exact strip; drawing the
+            // slider then would paint it over the help text AND steal its
+            // clicks (immediate-mode widgets hit-test regardless of draw
+            // order). Keep the current cut state, just hide the control.
+            if (showReadme) {
+                // no slider this frame; the active cut (if any) stays as-is
+            } else if (syBot - syTop > 60.0f) {
+                char zb[64];
+                snprintf(zb, sizeof(zb), "%.1f MM", zSpanMM);
+                ui.drawText("SECTION", sx - 12.0f, syTop - 28.0f, 7.0f, glm::vec3(0.35f, 0.40f, 0.45f));
+                ui.drawText(zb, sx - 12.0f, syTop - 15.0f, 6.5f, glm::vec3(0.45f, 0.50f, 0.55f));
+                ui.vslider("SECTION_Z", sectionHeightMM, 0.0f, zSpanMM,
+                           sx, syTop, 14.0f, syBot - syTop);
+                ui.drawText("0", sx + 3.0f, syBot + 8.0f, 7.5f, glm::vec3(0.45f, 0.50f, 0.55f));
+
+                const bool cut = sectionHeightMM > 0.002f * zSpanMM;
+                model.sectionEnabled = cut;
+                if (cut) {
+                    // Physical mm -> centered model space (same mapping the
+                    // loader applied to the geometry).
+                    const float centerZ = 0.5f * (model.physicalMinMM.z + model.physicalMaxMM.z);
+                    const float cutMM   = model.physicalMinMM.z + sectionHeightMM;
+                    model.sectionZModel = (cutMM - centerZ) / std::max(1e-9f, model.modelToMM);
+                    char vb[64];
+                    snprintf(vb, sizeof(vb), "Z %.1f", sectionHeightMM);
+                    const float tFill = sectionHeightMM / zSpanMM;
+                    ui.drawText(vb, sx + 24.0f,
+                                syTop + (syBot - syTop) * (1.0f - tFill) - 5.0f,
+                                7.5f, glm::vec3(0.20f, 0.45f, 0.70f));
+                }
+            } else {
+                model.sectionEnabled = false;
+            }
+        }
+
+        // ===== Compute-progress panel (bottom-left, slides in) =====
+        if (busy) {
+            const float slideT = static_cast<float>((glfwGetTime() - g_job.startTime) / 0.25);
+            const std::string title = g_job.cancel.load()
+                                          ? g_job.title + "  - CANCELLING..."
+                                          : g_job.title;
+            if (drawProgressPanel(ui, title, g_job.progress.load(),
+                                  g_job.cancellable && !g_job.cancel.load(),
+                                  slideT, glfwGetTime()))
+                g_job.cancel = true;
         }
 
         prevMousePressed = mousePressed;
@@ -1130,7 +1447,29 @@ int runInteractive() {
         glfwSwapBuffers(window);
         glfwPollEvents();
     }
-    glfwTerminate(); return 0;
+
+    // ---- Staged shutdown with progress (same bottom-left panel) ----
+    drawBootFrame(window, ui, "CLOSING: STOPPING BACKGROUND WORK", 0.15f);
+    if (g_job.running.load()) {
+        g_job.cancel = true;                    // solvers exit at the next checkpoint
+        while (!g_job.done.load()) {
+            drawBootFrame(window, ui, "CLOSING: WAITING FOR SOLVER", -1.0f);
+            std::this_thread::sleep_for(std::chrono::milliseconds(16));
+        }
+        if (g_job.th.joinable()) g_job.th.join();
+        g_job.running = false;
+    }
+    drawBootFrame(window, ui, "CLOSING: FLUSHING LOGS", 0.55f);
+    std::cout.flush();
+    fflush(nullptr);
+    drawBootFrame(window, ui, "CLOSING: RELEASING WINDOW", 0.85f);
+    glfwDestroyWindow(window);
+    glfwTerminate();
+    // The seconds-long exit was static-destructor + DLL-unload teardown
+    // (OCCT/CUDA/TetGen statics). Nothing needs saving at this point, so skip
+    // process teardown entirely — the OS reclaims everything instantly.
+    std::_Exit(0);
+    return 0;
 }
 
 void processInput(GLFWwindow* window) {

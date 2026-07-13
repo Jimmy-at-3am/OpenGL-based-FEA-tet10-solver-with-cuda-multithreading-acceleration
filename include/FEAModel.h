@@ -3,6 +3,7 @@
 #include <string>
 #include <map>
 #include <memory>
+#include <atomic>
 #include <glm/glm.hpp>
 #include "FEAData.h"
 #include "BuiltInShader.h"
@@ -179,6 +180,38 @@ public:
     size_t        arrowSourceCount = SIZE_MAX;  // appliedForces.size() at last build
     void buildForceArrowBuffers();              // appliedForces -> line VBO
     void drawForceArrows(BuiltInShader& shader); // gated on showAppliedForceField
+
+    // Toolpath preview: renders the ACTUAL extrusion moves of a loaded
+    // .gcode.3mf as feature-coloured GL_LINES (the slicer-frontend look),
+    // replacing the placeholder bbox shell until a volume mesh is generated.
+    // One VBO holds all segments grouped by feature; tpRanges records the
+    // (first, count, colour) draw ranges.
+    struct TpDrawRange { int first = 0; int count = 0; glm::vec3 color{0.7f}; };
+    unsigned int  tpVAO = 0, tpVBO = 0;
+    int           tpLineVertexCount = 0;
+    std::vector<TpDrawRange> tpRanges;
+    bool          showToolpathPreview = false;
+    void buildToolpathPreview();                 // toolpath segments -> line VBO
+    void drawToolpathPreview(BuiltInShader& shader);
+
+    // Sectional view: fragments with world Z below sectionZModel are discarded
+    // (shader uniform) and a translucent grey XY plane is drawn at the cut.
+    bool          sectionEnabled = false;
+    float         sectionZModel  = 0.0f;         // model-space cut height
+    unsigned int  secVAO = 0, secVBO = 0;
+    void drawSectionPlane(BuiltInShader& shader); // no-op unless sectionEnabled
+
+    // Async compute support: while a worker thread runs a solver/mesher on this
+    // model, GL uploads are deferred — buildBuffers() becomes a no-op (worker
+    // threads own no GL context, and the render thread keeps drawing the last
+    // uploaded state untouched). The main thread clears the flag and calls
+    // buildBuffers() once when the job completes.
+    bool deferGLUpload = false;
+    // TetGen itself is a blocking third-party call, but these hooks provide
+    // honest stage progress and allow a cancellation requested during TetGen
+    // to discard its output before any live model state is replaced.
+    std::atomic<float>* computeProgressOut = nullptr;
+    std::atomic<bool>*  computeCancelRequested = nullptr;
 
     int  nLinearNodes = 0;  // number of original Tet4 nodes (before mid-edge insertion)
     // Maps canonical edge (min,max) -> mid-edge node index.

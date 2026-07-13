@@ -2,6 +2,7 @@
 
 #include "FEAModel.h"
 #include <Eigen/Core>
+#include <atomic>
 
 // Control parameters for the Newton-Raphson nonlinear static solver.
 // Defaults are chosen so that a linear showcase runs in a single load step
@@ -120,10 +121,19 @@ public:
     bool useMultithreading = false;
 
     // When true, the linear system K*U = F is solved on the GPU using
-    // NVIDIA cuSOLVER's sparse Cholesky factorization instead of Eigen's
-    // CPU-based SimplicialLDLT or ConjugateGradient. Requires a CUDA-capable
+    // Jacobi-preconditioned CG with NVIDIA cuSPARSE and cuBLAS instead of
+    // Eigen's CPU solvers. Requires a CUDA-capable
     // GPU. Falls back to CPU if GPU solve fails.
     bool useGPU = false;
+
+    // --- Async job hooks (UI progress panel) ---------------------------------
+    // When non-null, the solver writes a monotonically increasing 0..1 fraction
+    // to *progressOut at stage boundaries, and polls *cancelRequested at safe
+    // checkpoints (assembly chunks, fracture/NR iterations). A cancelled solve
+    // restores the model geometry and returns false. Both default to null so
+    // the headless harness and existing call sites are unaffected.
+    std::atomic<float>* progressOut     = nullptr;
+    std::atomic<bool>*  cancelRequested = nullptr;
 
     // When true AND the loaded material provides E_z / nu_pz / G_pz, the
     // solver instantiates a TransverseIsotropicMaterial (XY = strong plane,
@@ -153,7 +163,7 @@ public:
     //      nodal loads from tributary-area integration).
     //   3. Enforces Dirichlet BCs: K_ii += α, F_i = 0 for each fixed DOF i,
     //      where α = 1e7 · max(diag(K)).
-    //   4. Solves via GPU cuSOLVER Cholesky → CPU PCG+Jacobi → CPU LDL^T.
+    //   4. Solves via GPU PCG+Jacobi → CPU PCG+Jacobi → CPU LDL^T.
     //   5. For CantileverBendingZ, prints analytical Euler-Bernoulli δ_max
     //      and FEA percentage error.
     // On success writes u to *U_out (if non-null) and updates model positions.
@@ -209,6 +219,31 @@ private:
     // When non-empty, the assembly loop in solveLinearStatic skips elements
     // where m_fractureAlive[el] == 0.  Set by solveBrittleFracture.
     std::vector<uint8_t> m_fractureAlive;
+
+    // Progress sub-range mapping: reportProgress(f) writes lo + (hi-lo)*f, so
+    // an outer loop (fracture iterations) can hand each nested linear solve a
+    // slice of the overall bar. Defaults cover the whole bar.
+    double m_progLo = 0.0, m_progHi = 1.0;
+    void reportProgress(double f) const;
+    bool isCancelled() const { return cancelRequested && cancelRequested->load(); }
+
+    // Generic applied-load visualization: rebuilds model.appliedForces from the
+    // ACTUAL assembled external force vector F — every arrow sits at a loaded
+    // node and points along that node's true force direction, with length
+    // scaled by |F_node|. Replaces the per-preset hand-drawn arrows (which
+    // could disagree with the load actually applied). Arrows are anchored
+    // outside the body: pulls point away from the surface, pushes end at it.
+    void recordAppliedForceArrows(FEAModel& model, const Eigen::VectorXd& F,
+                                  int nNodes) const;
+    // Adds restraint reactions (-penalty*u at constrained DOFs) to the applied
+    // load vector before generating arrows. This visualizes the complete
+    // external force system: load nose/traction plus clamps or roller supports.
+    void recordExternalForceArrows(
+        FEAModel& model, const Eigen::VectorXd& appliedF,
+        const Eigen::VectorXd& displacement, double penalty,
+        const std::vector<int>& fixedNodes,
+        const std::vector<std::pair<int,int>>& singleDofFixed,
+        int nNodes) const;
 
     // new_TODO_04C: physical-units bridge. The renderer keeps geometry in the
     // 3-unit model space, but the FE math must run in real SI (metres, N, Pa) so

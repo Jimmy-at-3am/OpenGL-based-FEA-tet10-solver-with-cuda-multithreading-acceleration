@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cfloat>
 #include <chrono>
 #include <iostream>
 #include <map>
@@ -393,6 +394,102 @@ void FEASolver::restoreGeometryToModel(FEAModel& model) {
 }
 
 // -----------------------------------------------------------------------------
+// Async job hooks
+// -----------------------------------------------------------------------------
+void FEASolver::reportProgress(double f) const {
+    if (!progressOut) return;
+    if (f < 0.0) f = 0.0;
+    if (f > 1.0) f = 1.0;
+    progressOut->store(static_cast<float>(m_progLo + (m_progHi - m_progLo) * f));
+}
+
+// -----------------------------------------------------------------------------
+// Generic applied-load arrows from the assembled force vector F.
+// Called AFTER the load-type branch fills F and BEFORE penalty BCs zero the
+// fixed-node entries, so every arrow reflects a real external load component.
+// Geometry may be in metres here (scaled solve path); restoreGeometryToModel
+// converts the endpoints back to model space, same as before.
+// -----------------------------------------------------------------------------
+void FEASolver::recordAppliedForceArrows(FEAModel& model, const Eigen::VectorXd& F,
+                                         int nNodes) const {
+    model.appliedForces.clear();
+
+    double maxF = 0.0;
+    std::vector<std::pair<int, double>> loaded;   // node -> |F_node|
+    for (int i = 0; i < nNodes; ++i) {
+        const double fx = F(i * 3 + 0), fy = F(i * 3 + 1), fz = F(i * 3 + 2);
+        const double m = std::sqrt(fx * fx + fy * fy + fz * fz);
+        if (m > 0.0) { loaded.emplace_back(i, m); if (m > maxF) maxF = m; }
+    }
+    if (loaded.empty() || maxF <= 0.0) return;
+
+    // Penalty restraints can leave machine-scale transverse reaction noise.
+    // Do not turn those into visually large arrows (the renderer deliberately
+    // gives every retained vector a readable minimum length).
+    loaded.erase(std::remove_if(loaded.begin(), loaded.end(),
+                                [maxF](const auto& q) {
+                                    return q.second < maxF * 1.0e-4;
+                                }),
+                 loaded.end());
+    if (loaded.empty()) return;
+
+    glm::vec3 lo(FLT_MAX), hi(-FLT_MAX);
+    for (int i = 0; i < nNodes; ++i) {
+        lo = glm::min(lo, model.originalVolumetricPositions[i]);
+        hi = glm::max(hi, model.originalVolumetricPositions[i]);
+    }
+    const glm::vec3 centre = 0.5f * (lo + hi);
+    float diag = glm::length(hi - lo);
+    if (!(diag > 0.0f)) diag = 1.0f;
+    const float baseLen = 0.16f * diag;
+
+    // Dense face loads would bury the model in arrows; subsample beyond ~300.
+    const size_t stride = 1 + loaded.size() / 300;
+    for (size_t k = 0; k < loaded.size(); k += stride) {
+        const int i = loaded[k].first;
+        const glm::vec3 pos = model.originalVolumetricPositions[i];
+        const glm::vec3 dir = glm::normalize(glm::vec3(
+            static_cast<float>(F(i * 3 + 0)),
+            static_cast<float>(F(i * 3 + 1)),
+            static_cast<float>(F(i * 3 + 2))));
+        const float len = baseLen *
+            (0.35f + 0.65f * static_cast<float>(loaded[k].second / maxF));
+        // Anchor outside the body: a pull (force away from the centre) draws
+        // node -> outward tip; a push draws an outside tail -> node tip. The
+        // direction is the true force direction either way.
+        if (glm::dot(dir, pos - centre) > 0.0f)
+            model.appliedForces.push_back({ pos, pos + dir * len });
+        else
+            model.appliedForces.push_back({ pos - dir * len, pos });
+    }
+    model.arrowSourceCount = SIZE_MAX;   // force overlay rebuild
+}
+
+void FEASolver::recordExternalForceArrows(
+    FEAModel& model, const Eigen::VectorXd& appliedF,
+    const Eigen::VectorXd& displacement, double penalty,
+    const std::vector<int>& fixedNodes,
+    const std::vector<std::pair<int,int>>& singleDofFixed,
+    int nNodes) const {
+    Eigen::VectorXd external = appliedF;
+
+    // The penalty term is a support spring: K*u + p*C*u = F. Therefore the
+    // force exerted by the restraint on the part is -p*C*u. Adding it to the
+    // applied vector produces the complete external free-body force system.
+    for (int n : fixedNodes) {
+        if (n < 0 || n >= nNodes) continue;
+        for (int d = 0; d < 3; ++d)
+            external(n * 3 + d) += -penalty * displacement(n * 3 + d);
+    }
+    for (const auto& bc : singleDofFixed) {
+        const int n = bc.first, d = bc.second;
+        if (n < 0 || n >= nNodes || d < 0 || d > 2) continue;
+        external(n * 3 + d) += -penalty * displacement(n * 3 + d);
+    }
+    recordAppliedForceArrows(model, external, nNodes);
+}
+
+// -----------------------------------------------------------------------------
 // FEASolver::solveLinearStatic
 // -----------------------------------------------------------------------------
 // Post-refactor architecture:
@@ -434,6 +531,14 @@ bool FEASolver::solveLinearStatic(FEAModel& model, float visualScale,
     // already scaled the geometry, so we neither re-scale nor restore here.
     const bool didScale = scaleGeometryToMeters(model);
     const double invLm  = (m_geomScale != 0.0) ? (1.0 / m_geomScale) : 1.0; // model-unit / metre
+
+    reportProgress(0.02);
+    // Shared cancel cleanup: undo the metre scaling and bail.
+    auto cancelBail = [&]() -> bool {
+        std::cout << "[SOLVE] cancelled by user." << std::endl;
+        if (didScale) restoreGeometryToModel(model);
+        return false;
+    };
 
     const int nElems = static_cast<int>(model.tetrahedra.size() / 4);
     const int nNodes = static_cast<int>(model.originalVolumetricPositions.size());
@@ -542,6 +647,9 @@ bool FEASolver::solveLinearStatic(FEAModel& model, float visualScale,
         }
     }
 
+    reportProgress(0.12);
+    if (isCancelled()) return cancelBail();
+
     // -------------------------------------------------------------------------
     // Global assembly via IElement only. Deterministic, single-threaded.
     //
@@ -565,12 +673,24 @@ bool FEASolver::solveLinearStatic(FEAModel& model, float visualScale,
         std::cout << "[MT] Linear stiffness assembly using "
                   << omp_get_max_threads() << " OpenMP thread(s)." << std::endl;
 
+        // Progress/cancel plumbing: OpenMP loops cannot break, so a shared
+        // abort flag short-circuits the remaining iterations after a cancel.
+        std::atomic<int>  asmDone{0};
+        std::atomic<bool> asmAbort{false};
+
         #pragma omp parallel
         {
             Eigen::MatrixXd  Ke_thr;
             std::vector<int> gdofs_thr;
             #pragma omp for schedule(dynamic)
             for (int el = 0; el < nElems; ++el) {
+                if (asmAbort.load(std::memory_order_relaxed)) continue;
+                const int doneNow = asmDone.fetch_add(1, std::memory_order_relaxed);
+                if ((doneNow & 1023) == 0) {
+                    reportProgress(0.12 + 0.30 * static_cast<double>(doneNow)
+                                            / std::max(1, nElems));
+                    if (isCancelled()) asmAbort.store(true, std::memory_order_relaxed);
+                }
                 // Respect fracture element mask: skip dead elements.
                 if (!m_fractureAlive.empty() && !m_fractureAlive[el]) continue;
 
@@ -590,6 +710,7 @@ bool FEASolver::solveLinearStatic(FEAModel& model, float visualScale,
                 }
             }
         }
+        if (asmAbort.load()) return cancelBail();
     } else {
         // --- ORIGINAL SERIAL PATH (preserved line-by-line) ----------------
         const int dofsPerElem = elements.empty() ? 12 : elements[0]->NumDOFs();
@@ -600,6 +721,10 @@ bool FEASolver::solveLinearStatic(FEAModel& model, float visualScale,
         std::vector<int> gdofs;  // reused global-DOF buffer
 
         for (int el = 0; el < nElems; ++el) {
+            if ((el & 4095) == 0) {
+                reportProgress(0.12 + 0.30 * static_cast<double>(el) / std::max(1, nElems));
+                if (isCancelled()) return cancelBail();
+            }
             // Respect fracture element mask: skip dead elements.
             if (!m_fractureAlive.empty() && !m_fractureAlive[el]) continue;
 
@@ -626,9 +751,12 @@ bool FEASolver::solveLinearStatic(FEAModel& model, float visualScale,
     std::vector<Triplet<double>>().swap(tripletList);
     std::vector<std::unique_ptr<IElement>>().swap(elements);
 
+    reportProgress(0.48);
+    if (isCancelled()) return cancelBail();
+
     // Regularize island DOFs when running inside the fracture loop.
     // Killed elements leave their nodes with zero-diagonal rows in K, making K
-    // singular and causing GPU Cholesky (and CPU LDLT) to fail. Setting K[i,i]=1.0
+    // singular and causing GPU PCG (and CPU LDLT) to fail. Setting K[i,i]=1.0
     // for these DOFs gives them U=0 (physically correct: no stiffness → no movement)
     // and keeps K positive definite throughout all fracture iterations.
     if (!m_fractureAlive.empty()) {
@@ -921,10 +1049,6 @@ bool FEASolver::solveLinearStatic(FEAModel& model, float visualScale,
         model.nodalForceMagnitudes[pointLoadNode] = static_cast<float>(std::abs(forceMagnitude));
         model.appliedForcePerNode = static_cast<float>(std::abs(forceMagnitude));
 
-        const glm::vec3 pos = model.originalVolumetricPositions[pointLoadNode];
-        const float arrowLen = static_cast<float>(maxX - minX) * 0.25f;
-        model.appliedForces.push_back({ pos + glm::vec3(0, 0, arrowLen), pos });
-
         std::cout << "Applied transverse point force " << -forceMagnitude
                   << " N (-Z) at node " << pointLoadNode << "." << std::endl;
     } else if (loadType == LoadType::PointForceZ) {
@@ -934,13 +1058,6 @@ bool FEASolver::solveLinearStatic(FEAModel& model, float visualScale,
         model.nodalForceMagnitudes[pointLoadNode]
             = static_cast<float>(std::abs(forceMagnitude));
         model.appliedForcePerNode = static_cast<float>(std::abs(forceMagnitude));
-
-        const glm::vec3 pos = model.originalVolumetricPositions[pointLoadNode];
-        const float arrowLen = static_cast<float>(maxZ - minZ) * 0.25f;
-        // Arrow shows force origin (external source) -> application point:
-        // tail is offset in +Z, tip is at the node, so the visual direction
-        // matches the physical -Z push.
-        model.appliedForces.push_back({ pos + glm::vec3(0, 0, arrowLen), pos });
 
         std::cout << "Applied point force " << -forceMagnitude
                   << " N (-Z) at node " << pointLoadNode << "." << std::endl;
@@ -973,16 +1090,6 @@ bool FEASolver::solveLinearStatic(FEAModel& model, float visualScale,
         }
         model.appliedForcePerNode = static_cast<float>(fMax);
 
-        const float arrowLen = static_cast<float>(bmax - bmin) * 0.2f;
-        glm::vec3 arrowDir(0,0,0); ((float*)(&arrowDir))[ta] = arrowLen;
-        for (int n : faceMaxT) {
-            glm::vec3 pos = model.originalVolumetricPositions[n];
-            model.appliedForces.push_back({ pos, pos + arrowDir });
-        }
-        for (int n : faceMinT) {
-            glm::vec3 pos = model.originalVolumetricPositions[n];
-            model.appliedForces.push_back({ pos, pos - arrowDir });
-        }
         std::cout << "Tension" << "XYZ"[ta] << ": distributed " << forceMagnitude
                   << " N over " << faceMaxT.size() << "(+)/" << faceMinT.size() << "(-) nodes" << std::endl;
     } else if (loadType == LoadType::FacePull ||
@@ -1021,23 +1128,6 @@ bool FEASolver::solveLinearStatic(FEAModel& model, float visualScale,
         lastAppliedForceN = appliedSum;   // exact resultant along the load axis
         model.appliedForcePerNode = static_cast<float>(std::abs(share));
 
-        // One resultant arrow at the loaded-face centroid (tail offset against
-        // the force direction so the arrow points the way the force acts) —
-        // 19E renders these; anchor/direction come from the SAME node set the
-        // solver loads, never a separate guess.
-        glm::vec3 cent(0.0f);
-        for (int n : loadedNodes) cent += model.originalVolumetricPositions[n];
-        cent /= static_cast<float>(loadedNodes.size());
-        const double bminA = (ta==0)?minX:(ta==1)?minY:minZ;
-        const double bmaxA = (ta==0)?maxX:(ta==1)?maxY:maxZ;
-        const float arrowLen = static_cast<float>(bmaxA - bminA) * 0.25f;
-        glm::vec3 dirv(0.0f);
-        ((float*)(&dirv))[fd] = (forceMagnitude >= 0.0 ? 1.0f : -1.0f);
-        if (loadType == LoadType::FacePull)   // tension: arrow points OUTWARD
-            model.appliedForces.push_back({ cent, cent + dirv * arrowLen });
-        else                                   // transverse push: tip at the face
-            model.appliedForces.push_back({ cent - dirv * arrowLen, cent });
-
         std::cout << "Face" << (loadType == LoadType::FacePull ? "Pull" : "Bend")
                   << ": distributed " << forceMagnitude << " N along "
                   << (forceMagnitude >= 0.0 ? '+' : '-') << "XYZ"[fd]
@@ -1063,15 +1153,6 @@ bool FEASolver::solveLinearStatic(FEAModel& model, float visualScale,
         lastAppliedForceN = appliedSum;                  // magnitude convention
         model.appliedForcePerNode = static_cast<float>(std::abs(share));
 
-        glm::vec3 cent(0.0f);
-        for (int n : loadedNodes) cent += model.originalVolumetricPositions[n];
-        cent /= static_cast<float>(loadedNodes.size());
-        glm::vec3 dirv(0.0f);
-        ((float*)(&dirv))[d] = -1.0f;
-        const float arrowLen = 0.25f * static_cast<float>(
-            (d == 0 ? maxX - minX : d == 1 ? maxY - minY : maxZ - minZ));
-        model.appliedForces.push_back({ cent - dirv * arrowLen, cent });
-
         std::cout << "3PointBend: " << forceMagnitude << " N toward -"
                   << "XYZ"[d] << " over " << distNodes.size()
                   << " mid-span nodes" << std::endl;
@@ -1096,33 +1177,27 @@ bool FEASolver::solveLinearStatic(FEAModel& model, float visualScale,
                 break;
         }
 
-        const float arrowLength = static_cast<float>(maxY - minY) * 0.15f;
-        double maxNodalF  = 0.0;
         double sumNodalF  = 0.0;
         int    countNodalF = 0;
         for (int node : loadedNodes) {
             const double fy = std::abs(F(node * 3 + 1));
-            if (fy > maxNodalF) maxNodalF = fy;
             sumNodalF += fy;
             ++countNodalF;
+            model.nodalForceMagnitudes[node] = static_cast<float>(fy);
         }
         model.appliedForcePerNode = countNodalF > 0
             ? static_cast<float>(sumNodalF / countNodalF)
             : 0.0f;
 
-        for (int node : loadedNodes) {
-            const double fy = std::abs(F(node * 3 + 1));
-            glm::vec3 pos = model.originalVolumetricPositions[node];
-            const float scaled = maxNodalF > 0.0
-                ? arrowLength * static_cast<float>(fy / maxNodalF)
-                : arrowLength;
-            model.appliedForces.push_back({ pos + glm::vec3(0, scaled, 0), pos });
-            model.nodalForceMagnitudes[node] = static_cast<float>(fy);
-        }
-
         std::cout << "Applied consistent nodal loads over " << triCount
                   << " boundary triangles (total area " << patchArea << ")." << std::endl;
     }
+
+    // Arrows come from the ACTUAL assembled load vector — direction, position
+    // and relative magnitude all reflect what the solve applies (a bending
+    // load renders transverse, a pull renders axial), never a preset guess.
+    // Must run BEFORE penalty BCs zero the fixed-node F entries.
+    recordAppliedForceArrows(model, F, nNodes);
 
     // ---- new_TODO_19C-b: interlayer weld ties (new_TODO_06 registry) ----
     // Toolpath slabs have independent node rings per slab; each tie couples a
@@ -1187,21 +1262,24 @@ bool FEASolver::solveLinearStatic(FEAModel& model, float visualScale,
         F(node*3+dof) = 0.0;
     }
 
+    // The factorization/CG below is the long uninterruptible stage; the bar
+    // sits at 0.55 until it returns (cancel takes effect right after).
+    reportProgress(0.55);
+    if (isCancelled()) return cancelBail();
+
     VectorXd U;
 
     // ---------------------------------------------------------------
-    // GPU path: cuSOLVER sparse Cholesky on GPU
+    // GPU path: Jacobi-preconditioned conjugate gradient via cuSPARSE/cuBLAS
     // ---------------------------------------------------------------
 #ifdef HAS_CUDA
     if (useGPU) {
-        std::cout << "[GPU] Attempting GPU solve via cuSOLVER..." << std::endl;
+        std::cout << "[GPU] Attempting GPU PCG solve via cuSPARSE/cuBLAS..." << std::endl;
         std::cout << "[GPU] Device: " << cuda_solver::getGpuInfo() << std::endl;
 
-        // cuSOLVER needs CSR. Eigen SparseMatrix is CSC by default.
-        // For a symmetric matrix K, CSC(K) == CSR(K^T) == CSR(K).
-        // So we can pass the raw arrays directly. But we must ensure
-        // K is compressed first.
-        Eigen::SparseMatrix<double> Kcsr = K;  // copy (or makeCompressed)
+        // cuSPARSE consumes CSR. Make row-major storage explicit instead of
+        // relying on CSC(K) matching CSR(K) only when K is exactly symmetric.
+        cuda_solver::CsrMatrix Kcsr = K;
         Kcsr.makeCompressed();
 
         auto tGpu0 = std::chrono::high_resolution_clock::now();
@@ -1292,6 +1370,15 @@ bool FEASolver::solveLinearStatic(FEAModel& model, float visualScale,
         }
     }
 
+    reportProgress(0.92);
+    if (isCancelled()) return cancelBail();
+
+    // Visualize the solved free-body diagram, not just the user-entered load:
+    // clamps and three-point-bend rollers now contribute their actual reaction
+    // directions alongside the applied load nose/traction.
+    recordExternalForceArrows(model, F, U, penalty, fixedNodes,
+                              singleDofFixed, nNodes);
+
     std::cout << "\n================ BENCHMARK RESULTS ================\n";
     if (loadType == LoadType::CantileverBendingZ) {
         double L = maxX - minX;
@@ -1380,6 +1467,7 @@ bool FEASolver::solveLinearStatic(FEAModel& model, float visualScale,
     if (didScale) restoreGeometryToModel(model);   // (also converts appliedForces)
     model.buildBuffers();
 
+    reportProgress(1.0);
     std::cout << "Updated mesh with deformations (scaled " << visualScale << "x)" << std::endl;
     return true;
 }
@@ -2006,9 +2094,6 @@ bool FEASolver::solveNonlinearStatic(FEAModel& model, float visualScale, NRParam
     model.totalAppliedForce     = static_cast<float>(std::abs(forceMagnitude));
 
     if (loadType == LoadType::PointForceZ) {
-        const float arrowLen = static_cast<float>(maxZ - minZ) * 0.25f;
-        const glm::vec3 pos = model.originalVolumetricPositions[pointLoadNode];
-        model.appliedForces.push_back({ pos + glm::vec3(0, 0, arrowLen), pos });
         model.nodalForceMagnitudes[pointLoadNode]
             = static_cast<float>(std::abs(forceMagnitude));
         model.appliedForcePerNode = static_cast<float>(std::abs(forceMagnitude));
@@ -2033,48 +2118,32 @@ bool FEASolver::solveNonlinearStatic(FEAModel& model, float visualScale, NRParam
         model.appliedForcePerNode = static_cast<float>(fPerNodeV);
         for (int n : faceMaxV) model.nodalForceMagnitudes[n] = static_cast<float>(fPerNodeV);
         for (int n : faceMinV) model.nodalForceMagnitudes[n] = static_cast<float>(fPerNodeV);
-        const float arrowLen = static_cast<float>(bmax - bmin) * 0.2f;
-        glm::vec3 arrowDir(0,0,0); ((float*)(&arrowDir))[ta] = arrowLen;
-        for (int n : faceMaxV) {
-            glm::vec3 pos = model.originalVolumetricPositions[n];
-            model.appliedForces.push_back({ pos, pos + arrowDir });
-        }
-        for (int n : faceMinV) {
-            glm::vec3 pos = model.originalVolumetricPositions[n];
-            model.appliedForces.push_back({ pos, pos - arrowDir });
-        }
         std::cout << "[NR] Tension" << "XYZ"[ta] << ": distributed " << forceMagnitude
                   << " N over " << faceMaxV.size() << "(+)/" << faceMinV.size() << "(-) nodes" << std::endl;
     } else {
-        const float arrowLength = static_cast<float>(maxY - minY) * 0.15f;
-        double maxNodalF = 0.0, sumNodalF = 0.0;
+        double sumNodalF = 0.0;
         for (int n : loadedNodes) {
             const double fy = std::abs(F_ext_full(n * 3 + 1));
-            if (fy > maxNodalF) maxNodalF = fy;
             sumNodalF += fy;
+            model.nodalForceMagnitudes[n] = static_cast<float>(fy);
         }
         model.appliedForcePerNode = loadedNodes.empty()
             ? 0.0f
             : static_cast<float>(sumNodalF / static_cast<double>(loadedNodes.size()));
-        for (int node : loadedNodes) {
-            const double fy = std::abs(F_ext_full(node * 3 + 1));
-            glm::vec3 pos = model.originalVolumetricPositions[node];
-            const float scaled = maxNodalF > 0.0
-                ? arrowLength * static_cast<float>(fy / maxNodalF)
-                : arrowLength;
-            model.appliedForces.push_back({ pos + glm::vec3(0, scaled, 0), pos });
-            model.nodalForceMagnitudes[node] = static_cast<float>(fy);
-        }
 
         std::cout << "[NR] Consistent load applied over " << triCount
                   << " boundary triangles (patch area " << patchArea << ")." << std::endl;
     }
+
+    // Arrows from the ACTUAL external load vector (see recordAppliedForceArrows).
+    recordAppliedForceArrows(model, F_ext_full, nNodes);
 
     // ---- NR state -------------------------------------------------------------
     VectorXd u     = VectorXd::Zero(nDOFs);
     VectorXd F_int = VectorXd::Zero(nDOFs);
     VectorXd R     = VectorXd::Zero(nDOFs);
     VectorXd du    = VectorXd::Zero(nDOFs);
+    double reactionPenalty = 0.0; // last converged tangent's restraint stiffness
 
     // Scratch containers used by both assembly phases below. Declared at the
     // outer scope so per-iteration heap churn is avoided in the serial path;
@@ -2161,6 +2230,16 @@ bool FEASolver::solveNonlinearStatic(FEAModel& model, float visualScale, NRParam
                       << "  iter " << iter
                       << "  ||R||_2 = " << residualNorm << std::endl;
 
+            // Progress across (load step, NR iteration); cancel between iterations.
+            reportProgress((static_cast<double>(step - 1)
+                            + std::min(1.0, (iter + 1)
+                                            / static_cast<double>(params.maxIterations)))
+                           / static_cast<double>(params.numLoadSteps));
+            if (isCancelled()) {
+                std::cout << "[NR] cancelled by user." << std::endl;
+                return false;
+            }
+
             // Convergence check (never on iter 0 so the initial residual is
             // always printed -- this is the validation hook the protocol asks
             // for: step 0 AND step 1 residuals are logged).
@@ -2245,6 +2324,7 @@ bool FEASolver::solveNonlinearStatic(FEAModel& model, float visualScale, NRParam
             // Penalty Dirichlet (same as linear path)
             const double maxDiagonal = K.diagonal().maxCoeff();
             const double penalty     = maxDiagonal * 1e7;
+            reactionPenalty = penalty;
             for (int node : fixedNodes) {
                 K.coeffRef(node * 3 + 0, node * 3 + 0) += penalty;
                 K.coeffRef(node * 3 + 1, node * 3 + 1) += penalty;
@@ -2257,7 +2337,7 @@ bool FEASolver::solveNonlinearStatic(FEAModel& model, float visualScale, NRParam
 
 #ifdef HAS_CUDA
             if (useGPU) {
-                Eigen::SparseMatrix<double> Kcsr = K;
+                cuda_solver::CsrMatrix Kcsr = K;
                 Kcsr.makeCompressed();
                 
                 auto tGpu0 = std::chrono::high_resolution_clock::now();
@@ -2474,6 +2554,11 @@ bool FEASolver::solveNonlinearStatic(FEAModel& model, float visualScale, NRParam
                   << std::endl;
     }
 
+    // Add the converged clamp/roller reactions to the load arrows before
+    // publishing the nonlinear result.
+    recordExternalForceArrows(model, F_ext_full, u, reactionPenalty, fixedNodes,
+                              singleDofFixed, nNodes);
+
     // ---- Push displacements back into the model -------------------------------
     model.deformedPositions.resize(nNodes);
     // NR path is not unit-scaled (documented 04C limitation): clear the
@@ -2497,6 +2582,7 @@ bool FEASolver::solveNonlinearStatic(FEAModel& model, float visualScale, NRParam
     model.needsUpdate      = true;
     model.buildBuffers();
 
+    reportProgress(1.0);
     std::cout << "[NR] Updated mesh with deformations (scaled "
               << visualScale << "x)" << std::endl;
     return true;
@@ -2730,8 +2816,23 @@ bool FEASolver::solveBrittleFracture(FEAModel& model, float visualScale, int max
         }
     }
 
+    // Progress: each fracture iteration hands the nested linear solve its own
+    // slice of the bar (converged runs jump to 1.0 at the end).
+    m_progLo = 0.0; m_progHi = 1.0;
+    reportProgress(0.01);
+
     for (int iter = 0; iter < maxIters; ++iter) {
         useGPU = savedUseGPU; // re-enable GPU for each iteration
+
+        if (isCancelled()) {
+            std::cout << "[FRACTURE] cancelled by user at iteration " << iter << std::endl;
+            useMultithreading = savedUseMT;
+            m_progLo = 0.0; m_progHi = 1.0;
+            if (didScale) restoreGeometryToModel(model);
+            return false;
+        }
+        m_progLo = 0.02 + 0.97 * static_cast<double>(iter)     / maxIters;
+        m_progHi = 0.02 + 0.97 * static_cast<double>(iter + 1) / maxIters;
 
         const int aliveNow = static_cast<int>(
             std::count(model.elementAlive.begin(), model.elementAlive.end(), uint8_t(1)));
@@ -2746,6 +2847,17 @@ bool FEASolver::solveBrittleFracture(FEAModel& model, float visualScale, int max
         bool ok = solveLinearStatic(model, visualScale, &U);
 
         m_fractureAlive.clear();
+
+        // A cancel inside the nested solve must not be misread as "part
+        // severed" below — clean up and report the cancellation.
+        if (isCancelled()) {
+            std::cout << "[FRACTURE] cancelled by user during iteration "
+                      << iter + 1 << std::endl;
+            useMultithreading = savedUseMT;
+            m_progLo = 0.0; m_progHi = 1.0;
+            if (didScale) restoreGeometryToModel(model);
+            return false;
+        }
 
         if (!ok || U.size() == 0) {
             // new_TODO_19C-b: a singular system AFTER elements have already
@@ -2762,11 +2874,14 @@ bool FEASolver::solveBrittleFracture(FEAModel& model, float visualScale, int max
                           << " after prior element failures -> part SEVERED; "
                              "stopping with accumulated crack state." << std::endl;
                 useMultithreading = savedUseMT;
+                m_progLo = 0.0; m_progHi = 1.0;
+                reportProgress(1.0);
                 if (didScale) restoreGeometryToModel(model);
                 return true;
             }
             std::cout << "[FRACTURE] Solver failed at iteration " << iter << "." << std::endl;
             useMultithreading = savedUseMT;
+            m_progLo = 0.0; m_progHi = 1.0;
             if (didScale) restoreGeometryToModel(model);
             return false;
         }
@@ -2910,6 +3025,8 @@ bool FEASolver::solveBrittleFracture(FEAModel& model, float visualScale, int max
     }
 
     useMultithreading = savedUseMT;
+    m_progLo = 0.0; m_progHi = 1.0;
+    reportProgress(1.0);
     if (didScale) restoreGeometryToModel(model);
     return true;
 }

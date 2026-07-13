@@ -35,6 +35,11 @@ uniform int scalarMode;
 uniform float scalarMin;
 uniform float scalarMax;
 uniform float fragAlpha;          // new_TODO_03: 1.0 normally, <1 for GHOST dead pass
+// Sectional view: when sectionOn == 1, fragments below the world-space cut
+// height (Z) are discarded so the interior above the cut plane is exposed.
+// Uniforms default to 0 -> feature off for every path that never sets them.
+uniform int   sectionOn;
+uniform float sectionZ;
 
 vec3 contourColor(float t) {
     t = clamp(t, 0.0, 1.0);
@@ -54,6 +59,7 @@ vec3 categoricalColor(float m) {
 }
 
 void main() {
+    if (sectionOn == 1 && FragPos.z < sectionZ) discard;
     vec3 lightDir = normalize(viewPos - FragPos);
     vec3 norm = normalize(Normal);
     float diff = max(dot(norm, lightDir), dot(-norm, lightDir));
@@ -107,5 +113,6 @@ inline const char* uiFragmentShaderSource = R"(
 #version 330 core
 out vec4 FragColor;
 uniform vec3 color;
-void main() { FragColor = vec4(color, 1.0); }
+uniform float uiAlpha;   // set to 1.0 by every SimpleUI draw call; <1 for overlays
+void main() { FragColor = vec4(color, uiAlpha); }
 )";

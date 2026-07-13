@@ -17,6 +17,7 @@
 #include "LayerSlicer.h"
 #include "ToolpathSections.h"   // new_TODO_19C-b: toolpath-lane input
 #include "FEAData.h"
+#include <atomic>
 
 class FEAModel;
 
@@ -58,9 +59,16 @@ MeshStats meshSlabs(const LayerSlicer::SliceResult& slice,
 // in LayerStack::interfaces (the new_TODO_06 registry).
 // =============================================================================
 struct ToolpathMeshOptions {
-    int   maxSlabs     = 12;    // layer-grouping cap (k = ceil(nLayers/maxSlabs))
+    // Layer-grouping cap (k = ceil(nLayers/maxSlabs)). 128 keeps a typical
+    // 200-250-layer print to two physical layers per FE slab while still
+    // bounding cost; prints with <=128 layers retain every Z contour. Scenario JSONs
+    // that explicitly specify mesh.maxSlabs remain unaffected.
+    int   maxSlabs     = 128;
     float targetEdgeMM = -1.0f; // boundary resample step; <0 -> 5 x median width
     float tieAlpha     = 100.0f;// penalty stiffness factor (06 spec)
+    std::atomic<float>* progressOut = nullptr;     // optional, 0..1
+    std::atomic<bool>*  cancelRequested = nullptr; // checked per slab/interface
+    float progressLo = 0.0f, progressHi = 1.0f;
 };
 
 struct ToolpathMeshStats {

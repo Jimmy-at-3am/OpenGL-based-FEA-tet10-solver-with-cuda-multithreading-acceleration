@@ -24,9 +24,14 @@ void SimpleUI::resize(int width, int height) {
 }
 
 void SimpleUI::drawRect(float x, float y, float w, float h, glm::vec3 color) {
+    drawRectA(x, y, w, h, color, 1.0f);
+}
+
+void SimpleUI::drawRectA(float x, float y, float w, float h, glm::vec3 color, float alpha) {
     glUseProgram(programID);
     glUniformMatrix4fv(glGetUniformLocation(programID, "projection"), 1, GL_FALSE, glm::value_ptr(projection));
     glUniform3fv(glGetUniformLocation(programID, "color"), 1, &color[0]);
+    glUniform1f(glGetUniformLocation(programID, "uiAlpha"), alpha);
     float vertices[] = { x, y, x + w, y, x, y + h, x + w, y, x + w, y + h, x, y + h };
     glBindVertexArray(VAO); glBindBuffer(GL_ARRAY_BUFFER, VBO);
     glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(vertices), vertices);
@@ -37,6 +42,7 @@ void SimpleUI::drawLine(float x1, float y1, float x2, float y2, glm::vec3 color,
     glUseProgram(programID);
     glUniformMatrix4fv(glGetUniformLocation(programID, "projection"), 1, GL_FALSE, glm::value_ptr(projection));
     glUniform3fv(glGetUniformLocation(programID, "color"), 1, &color[0]);
+    glUniform1f(glGetUniformLocation(programID, "uiAlpha"), 1.0f);
     float vertices[] = { x1, y1, x2, y2 };
     glBindVertexArray(VAO); glBindBuffer(GL_ARRAY_BUFFER, VBO);
     glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(vertices), vertices);
@@ -50,6 +56,7 @@ void SimpleUI::drawText(std::string text, float x, float y, float size, glm::vec
     glUseProgram(programID);
     glUniformMatrix4fv(glGetUniformLocation(programID, "projection"), 1, GL_FALSE, glm::value_ptr(projection));
     glUniform3fv(glGetUniformLocation(programID, "color"), 1, &color[0]);
+    glUniform1f(glGetUniformLocation(programID, "uiAlpha"), 1.0f);
 
     std::vector<float> lines; float cursorX = x;
 
@@ -115,6 +122,7 @@ void SimpleUI::drawText(std::string text, float x, float y, float size, glm::vec
 }
 
 bool SimpleUI::button(std::string label, float x, float y, float w, float h, bool active, bool disabled) {
+    if (inputLocked) disabled = true;   // compute in progress: render-only
     bool hovered = (mouseX >= x && mouseX <= x + w && mouseY >= y && mouseY <= y + h);
     bool clicked = false;
     if (hovered && mousePressed && !prevMousePressed && !disabled) { clicked = true; }
@@ -133,7 +141,7 @@ bool SimpleUI::button(std::string label, float x, float y, float w, float h, boo
 bool SimpleUI::slider(std::string label, float& value, float min, float max, float x, float y, float w, float h, bool exponential) {
     bool changed = false;
     if (!mousePressed) activeUIID = "";
-    bool hovered = (mouseX >= x && mouseX <= x + w && mouseY >= y && mouseY <= y + h);
+    bool hovered = !inputLocked && (mouseX >= x && mouseX <= x + w && mouseY >= y && mouseY <= y + h);
     if (hovered && mousePressed && activeUIID == "") activeUIID = label;
     if (activeUIID == label && mousePressed) {
         float t = (mouseX - x) / w;
@@ -157,6 +165,35 @@ bool SimpleUI::slider(std::string label, float& value, float min, float max, flo
     else
         snprintf(buffer, sizeof(buffer), "%s: %.3f", label.c_str(), value);
     drawText(std::string(buffer), x + 8, y + h * 0.25f, 8.5f, glm::vec3(0.9f, 0.9f, 0.9f));
-    
+
+    return changed;
+}
+
+// Vertical slider: track runs from y (top, value = max) down to y+h (bottom,
+// value = min). Fill grows upward from the bottom; a bright thumb bar marks
+// the current level. Same activeUIID capture pattern as the horizontal slider
+// so a drag that leaves the track keeps control until the button is released.
+bool SimpleUI::vslider(std::string id, float& value, float min, float max, float x, float y, float w, float h) {
+    bool changed = false;
+    if (!mousePressed) activeUIID = "";
+    // A few px of horizontal padding makes the thin track easy to grab.
+    bool hovered = !inputLocked &&
+                   (mouseX >= x - 6.0f && mouseX <= x + w + 6.0f &&
+                    mouseY >= y && mouseY <= y + h);
+    if (hovered && mousePressed && activeUIID == "") activeUIID = id;
+    if (activeUIID == id && mousePressed) {
+        float t = (y + h - mouseY) / h;          // 0 at bottom, 1 at top
+        if (t < 0.0f) t = 0.0f; if (t > 1.0f) t = 1.0f;
+        value = min + t * (max - min);
+        changed = true;
+    }
+    drawRect(x, y, w, h, glm::vec3(0.16f, 0.17f, 0.19f));
+    drawRect(x + 1, y + 1, w - 2, h - 2, glm::vec3(0.22f, 0.23f, 0.26f));
+    float t = (max > min) ? (value - min) / (max - min) : 0.0f;
+    if (t < 0.0f) t = 0.0f; if (t > 1.0f) t = 1.0f;
+    glm::vec3 fillColor = (activeUIID == id) ? glm::vec3(0.5f, 0.8f, 1.0f) : glm::vec3(0.3f, 0.7f, 0.9f);
+    if (t > 0.0f) drawRect(x + 2, y + h * (1.0f - t), w - 4, h * t - 2.0f > 0.0f ? h * t - 2.0f : h * t, fillColor);
+    // Thumb bar
+    drawRect(x - 4, y + h * (1.0f - t) - 2.0f, w + 8, 4.0f, glm::vec3(0.9f, 0.95f, 1.0f));
     return changed;
 }

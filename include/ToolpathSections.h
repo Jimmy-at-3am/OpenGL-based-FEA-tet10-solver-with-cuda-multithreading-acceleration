@@ -19,6 +19,7 @@
 // =============================================================================
 #include "LayerSlicer.h"
 #include "ToolpathModel.h"
+#include <atomic>
 #include <string>
 #include <vector>
 
@@ -29,6 +30,12 @@ struct Options {
     float simplifyMM = 0.05f;  // vertex simplification tolerance
     float minAreaMM2 = -1.0f;  // dust filter; <0 -> auto ((width/2)^2)
     bool  includeAids = false; // keep support/brim beads (default: part only)
+    // Optional UI job hooks. Progress spans this stage only (0..1); callers
+    // can map it into a larger multi-stage operation. Cancellation is checked
+    // between printed layers so no partial LayerSections result is committed.
+    std::atomic<float>* progressOut = nullptr;
+    std::atomic<bool>*  cancelRequested = nullptr;
+    float progressLo = 0.0f, progressHi = 1.0f;
 };
 
 struct LayerSections {

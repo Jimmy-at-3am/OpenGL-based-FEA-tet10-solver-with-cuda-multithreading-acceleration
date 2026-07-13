@@ -16,7 +16,7 @@
 //   This is the standard choice for FEA penalty-BC matrices (where fixed-DOF
 //   entries are huge), and mirrors Eigen's DiagonalPreconditioner.
 //
-// cuSOLVER handles: cuSPARSE SpMV + custom CUDA kernels for vector ops.
+// GPU operations: cuSPARSE SpMV + cuBLAS reductions + custom vector kernels.
 // ---------------------------------------------------------------------------
 
 #include "CudaSolver.h"
@@ -29,6 +29,8 @@
 #include <vector>
 #include <cmath>
 #include <chrono>
+#include <algorithm>
+#include <limits>
 
 // ---------------------------------------------------------------------------
 // Error check macros (clean up on failure)
@@ -77,15 +79,43 @@ __global__ void jacobiApply(const double* __restrict__ diag,
 }
 
 // Device kernels to compute alpha and beta on GPU without host sync
-__global__ void computeAlphaDevice(const double* rz, const double* pAp, double* alpha, double* minus_alpha) {
-    double a = (*rz) / (*pAp);
+__global__ void computeAlphaDevice(const double* rz, const double* pAp,
+                                   double* alpha, double* minus_alpha,
+                                   int* breakdown) {
+    const double numerator   = *rz;
+    const double denominator = *pAp;
+    if (!isfinite(numerator) || !isfinite(denominator) || denominator <= 0.0) {
+        *alpha = 0.0;
+        *minus_alpha = 0.0;
+        atomicExch(breakdown, 1);
+        return;
+    }
+    double a = numerator / denominator;
+    if (!isfinite(a)) {
+        a = 0.0;
+        atomicExch(breakdown, 1);
+    }
     *alpha = a;
     *minus_alpha = -a;
 }
 
-__global__ void computeBetaDevice(double* rz, const double* rz_new, double* beta) {
-    *beta = (*rz_new) / (*rz);
-    *rz = *rz_new;
+__global__ void computeBetaDevice(double* rz, const double* rz_new,
+                                  double* beta, int* breakdown) {
+    const double previous = *rz;
+    const double next     = *rz_new;
+    if (!isfinite(previous) || !isfinite(next) || previous <= 0.0 || next < 0.0) {
+        *beta = 0.0;
+        atomicExch(breakdown, 1);
+        return;
+    }
+    const double value = next / previous;
+    if (!isfinite(value)) {
+        *beta = 0.0;
+        atomicExch(breakdown, 1);
+        return;
+    }
+    *beta = value;
+    *rz = next;
 }
 
 // Element-wise vector AXPY: y[i] += alpha * x[i]  (scalar alpha on device pointer)
@@ -106,16 +136,25 @@ __global__ void vecXpBetaYDevicePtr(const double* __restrict__ x, const double* 
 __global__ void extractDiagonal(const int* __restrict__ rowPtr,
                                  const int* __restrict__ colIdx,
                                  const double* __restrict__ vals,
-                                 double* __restrict__ diag, int n) {
+                                 double* __restrict__ diag,
+                                 int* invalidDiagonal, int n) {
     int row = blockIdx.x * blockDim.x + threadIdx.x;
     if (row >= n) return;
-    diag[row] = 1.0; // default: avoid division by zero
+    double value = 0.0;
+    bool found = false;
     for (int j = rowPtr[row]; j < rowPtr[row + 1]; ++j) {
         if (colIdx[j] == row) {
-            diag[row] = vals[j];
+            value = vals[j];
+            found = true;
             break;
         }
     }
+    if (!found || !isfinite(value) || value <= 0.0) {
+        diag[row] = 1.0; // keep later kernels defined while the host aborts
+        atomicExch(invalidDiagonal, 1);
+        return;
+    }
+    diag[row] = value;
 }
 
 namespace cuda_solver {
@@ -149,21 +188,64 @@ std::string getGpuInfo() {
 //   7 working vectors @ 8 bytes * n = ~26 MB
 //   total ≈ 426 MB  <<  4096 MB VRAM.  No fill-in ever allocated.
 // ---------------------------------------------------------------------------
-bool solveOnGpu(const Eigen::SparseMatrix<double>& K,
+bool solveOnGpu(const CsrMatrix& K,
                 const Eigen::VectorXd& F,
                 Eigen::VectorXd& U) {
 
     auto t0 = std::chrono::high_resolution_clock::now();
 
-    const int n   = static_cast<int>(K.rows());
-    const int nnz = static_cast<int>(K.nonZeros());
-    if (n == 0 || nnz == 0) {
+    if (K.rows() == 0 || K.nonZeros() == 0) {
         std::cerr << "[GPU] Empty matrix." << std::endl;
         return false;
     }
+    if (K.rows() != K.cols() || F.size() != K.rows()) {
+        std::cerr << "[GPU] Invalid system dimensions: K=" << K.rows() << "x"
+                  << K.cols() << ", F=" << F.size() << std::endl;
+        return false;
+    }
+    if (!K.isCompressed()) {
+        std::cerr << "[GPU] Matrix must be compressed before passing its CSR arrays."
+                  << std::endl;
+        return false;
+    }
+    if (K.rows() > std::numeric_limits<int>::max() ||
+        K.nonZeros() > std::numeric_limits<int>::max()) {
+        std::cerr << "[GPU] Matrix exceeds the solver's 32-bit CSR index range."
+                  << std::endl;
+        return false;
+    }
+    if (!F.allFinite()) {
+        std::cerr << "[GPU] Right-hand side contains NaN or infinity." << std::endl;
+        return false;
+    }
 
-    const double CG_TOL      = 1e-9;
-    const int    CG_MAX_ITER = std::max(n, 10000); // enough for FEA convergence
+    const int n   = static_cast<int>(K.rows());
+    const int nnz = static_cast<int>(K.nonZeros());
+    for (int i = 0; i < nnz; ++i) {
+        if (!std::isfinite(K.valuePtr()[i])) {
+            std::cerr << "[GPU] Stiffness matrix contains NaN or infinity." << std::endl;
+            return false;
+        }
+    }
+    if (F.isZero(0.0)) {
+        U.setZero(n);
+        std::cout << "[GPU] Zero right-hand side; returning the zero solution."
+                  << std::endl;
+        return true;
+    }
+    if (!isGpuAvailable()) {
+        std::cerr << "[GPU] No usable CUDA device is available." << std::endl;
+        return false;
+    }
+
+    const double CG_TOL = 1e-9;
+    // In exact arithmetic CG needs at most n iterations, so the cap must not
+    // sit BELOW n: the CPU MT path on the regression models already needs
+    // ~9.9k Jacobi-PCG iterations, and a min(n, 10000) cap made comparable
+    // GPU solves fail spuriously and fall through to a second (CPU) solve.
+    // max(n, 10000) keeps the run finite while matching the CPU path's
+    // max(nDOFs, 5000) convention; non-convergence is still reported honestly.
+    const int CG_MAX_ITER = std::max(n, 10000);
 
     // CG working vectors on GPU:
     // r = residual, z = preconditioned residual, p = search direction
@@ -183,6 +265,8 @@ bool solveOnGpu(const Eigen::SparseMatrix<double>& K,
     double* d_alpha       = nullptr;
     double* d_minus_alpha = nullptr;
     double* d_beta        = nullptr;
+    int*    d_invalidDiag = nullptr;
+    int*    d_breakdown   = nullptr;
 
     int*    d_rowPtr = nullptr;
     int*    d_colIdx = nullptr;
@@ -196,6 +280,13 @@ bool solveOnGpu(const Eigen::SparseMatrix<double>& K,
     void*             spBuf     = nullptr;
 
     bool success = false;
+    double bNorm = 0.0;
+    double target_rNorm = 0.0;
+    std::chrono::high_resolution_clock::time_point tSolve0;
+    int iter = 0;
+    int blocks = (n + 255) / 256;
+    bool converged = false;
+    double finalRNorm = 0.0;
 
     // ------------------------------------------------------------------
     // 1. Allocate GPU memory
@@ -217,6 +308,8 @@ bool solveOnGpu(const Eigen::SparseMatrix<double>& K,
     CUDA_CHECK_GOTO(cudaMalloc(&d_alpha,       sizeof(double)), fail);
     CUDA_CHECK_GOTO(cudaMalloc(&d_minus_alpha, sizeof(double)), fail);
     CUDA_CHECK_GOTO(cudaMalloc(&d_beta,        sizeof(double)), fail);
+    CUDA_CHECK_GOTO(cudaMalloc(&d_invalidDiag, sizeof(int)),    fail);
+    CUDA_CHECK_GOTO(cudaMalloc(&d_breakdown,   sizeof(int)),    fail);
 
     // ------------------------------------------------------------------
     // 2. Host → Device transfer
@@ -226,6 +319,8 @@ bool solveOnGpu(const Eigen::SparseMatrix<double>& K,
     CUDA_CHECK_GOTO(cudaMemcpy(d_vals,   K.valuePtr(),      nnz     * sizeof(double), cudaMemcpyHostToDevice), fail);
     CUDA_CHECK_GOTO(cudaMemcpy(d_b,      F.data(),          n       * sizeof(double), cudaMemcpyHostToDevice), fail);
     CUDA_CHECK_GOTO(cudaMemset(d_x,      0,                 n       * sizeof(double)), fail); // x0 = 0
+    CUDA_CHECK_GOTO(cudaMemset(d_invalidDiag, 0, sizeof(int)), fail);
+    CUDA_CHECK_GOTO(cudaMemset(d_breakdown,   0, sizeof(int)), fail);
 
     {
         auto tTr = std::chrono::high_resolution_clock::now();
@@ -247,8 +342,17 @@ bool solveOnGpu(const Eigen::SparseMatrix<double>& K,
     // ------------------------------------------------------------------
     {
         int blocks = (n + 255) / 256;
-        extractDiagonal<<<blocks, 256>>>(d_rowPtr, d_colIdx, d_vals, d_diag, n);
+        extractDiagonal<<<blocks, 256>>>(d_rowPtr, d_colIdx, d_vals, d_diag,
+                                         d_invalidDiag, n);
         CUDA_CHECK_GOTO(cudaGetLastError(), fail);
+        int invalidDiagonal = 0;
+        CUDA_CHECK_GOTO(cudaMemcpy(&invalidDiagonal, d_invalidDiag, sizeof(int),
+                                   cudaMemcpyDeviceToHost), fail);
+        if (invalidDiagonal != 0) {
+            std::cerr << "[GPU] Jacobi preconditioner requires a finite, positive "
+                         "diagonal (the matrix is not SPD)." << std::endl;
+            goto fail;
+        }
     }
 
     // ------------------------------------------------------------------
@@ -277,6 +381,16 @@ bool solveOnGpu(const Eigen::SparseMatrix<double>& K,
             CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT, &bufSize), fail);
         if (bufSize > 0)
             CUDA_CHECK_GOTO(cudaMalloc(&spBuf, bufSize), fail);
+
+        // NVIDIA recommends preprocessing when the same CSR matrix is used by
+        // repeated SpMV calls, exactly as in this CG loop.  The API was added
+        // in CUDA 12.6; retain build compatibility with older toolkits.
+#if defined(CUDART_VERSION) && CUDART_VERSION >= 12060
+        CUSPARSE_CHECK_GOTO(cusparseSpMV_preprocess(
+            spHandle, CUSPARSE_OPERATION_NON_TRANSPOSE,
+            &alpha, matA, vecP, &beta, vecAp,
+            CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT, spBuf), fail);
+#endif
     }
 
     // ------------------------------------------------------------------
@@ -286,9 +400,12 @@ bool solveOnGpu(const Eigen::SparseMatrix<double>& K,
     CUDA_CHECK_GOTO(cudaMemcpy(d_r, d_b, n * sizeof(double), cudaMemcpyDeviceToDevice), fail);
 
     // Initial bNorm for convergence check
-    double bNorm = 0.0;
     CUBLAS_CHECK_GOTO(cublasDnrm2(blHandle, n, d_b, 1, &bNorm), fail);
-    double target_rNorm = CG_TOL * bNorm;
+    if (!std::isfinite(bNorm)) {
+        std::cerr << "[GPU] Right-hand-side norm overflowed." << std::endl;
+        goto fail;
+    }
+    target_rNorm = CG_TOL * bNorm;
     std::cout << "[GPU] CG starting. ||b||=" << bNorm << " target ||r|| < " << target_rNorm << std::endl;
 
     // Switch to DEVICE pointer mode so scalar results from cuBLAS stay on GPU
@@ -307,9 +424,8 @@ bool solveOnGpu(const Eigen::SparseMatrix<double>& K,
     // rz = r · z (result stays on device in d_rz)
     CUBLAS_CHECK_GOTO(cublasDdot(blHandle, n, d_r, 1, d_z, 1, d_rz), fail);
 
-    auto tSolve0 = std::chrono::high_resolution_clock::now();
-    int iter = 0;
-    int blocks = (n + 255) / 256;
+    tSolve0 = std::chrono::high_resolution_clock::now();
+    finalRNorm = bNorm;
 
     for (; iter < CG_MAX_ITER; ++iter) {
         // Ap = A * p
@@ -326,23 +442,38 @@ bool solveOnGpu(const Eigen::SparseMatrix<double>& K,
         CUBLAS_CHECK_GOTO(cublasDdot(blHandle, n, d_p, 1, d_Ap, 1, d_pAp), fail);
 
         // alpha_cg = rz / (p · Ap)  (done on device)
-        computeAlphaDevice<<<1, 1>>>(d_rz, d_pAp, d_alpha, d_minus_alpha);
+        computeAlphaDevice<<<1, 1>>>(d_rz, d_pAp, d_alpha, d_minus_alpha,
+                                     d_breakdown);
+        CUDA_CHECK_GOTO(cudaGetLastError(), fail);
 
         // x = x + alpha * p
         vecAxpyDevicePtr<<<blocks, 256>>>(d_alpha, d_p, d_x, n);
+        CUDA_CHECK_GOTO(cudaGetLastError(), fail);
 
         // r = r - alpha * Ap
         vecAxpyDevicePtr<<<blocks, 256>>>(d_minus_alpha, d_Ap, d_r, n);
+        CUDA_CHECK_GOTO(cudaGetLastError(), fail);
 
         // Check convergence periodically (every 50 iterations) to avoid pipeline stalls
         if ((iter + 1) % 50 == 0) {
             CUBLAS_CHECK_GOTO(cublasSetPointerMode(blHandle, CUBLAS_POINTER_MODE_HOST), fail);
             double rNorm = 0.0;
             CUBLAS_CHECK_GOTO(cublasDnrm2(blHandle, n, d_r, 1, &rNorm), fail);
-            
-            if (rNorm < target_rNorm) {
+            finalRNorm = rNorm;
+
+            if (std::isfinite(rNorm) && rNorm <= target_rNorm) {
                 iter++;
+                converged = true;
                 std::cout << "[GPU] CG converged at iter " << iter << "  ||r||=" << rNorm << std::endl;
+                break;
+            }
+
+            int breakdown = 0;
+            CUDA_CHECK_GOTO(cudaMemcpy(&breakdown, d_breakdown, sizeof(int),
+                                       cudaMemcpyDeviceToHost), fail);
+            if (!std::isfinite(rNorm) || breakdown != 0) {
+                std::cerr << "[GPU] CG numerical breakdown at iter " << (iter + 1)
+                          << " (||r||=" << rNorm << ")." << std::endl;
                 break;
             }
 
@@ -354,18 +485,29 @@ bool solveOnGpu(const Eigen::SparseMatrix<double>& K,
 
         // z = M^-1 * r
         jacobiApply<<<blocks, 256>>>(d_diag, d_r, d_z, n);
+        CUDA_CHECK_GOTO(cudaGetLastError(), fail);
 
         // rz_new = r * z (device pointer d_rz_new)
         CUBLAS_CHECK_GOTO(cublasDdot(blHandle, n, d_r, 1, d_z, 1, d_rz_new), fail);
 
         // beta = rz_new / rz, rz = rz_new
-        computeBetaDevice<<<1, 1>>>(d_rz, d_rz_new, d_beta);
+        computeBetaDevice<<<1, 1>>>(d_rz, d_rz_new, d_beta, d_breakdown);
+        CUDA_CHECK_GOTO(cudaGetLastError(), fail);
 
         // p = z + beta * p
         vecXpBetaYDevicePtr<<<blocks, 256>>>(d_z, d_beta, d_p, n);
+        CUDA_CHECK_GOTO(cudaGetLastError(), fail);
     }
 
     CUDA_CHECK_GOTO(cudaDeviceSynchronize(), fail);
+
+    // The loop may end between periodic checks or by reaching the iteration
+    // cap.  Never return an unconverged vector as a successful FEA solution.
+    if (!converged) {
+        CUBLAS_CHECK_GOTO(cublasSetPointerMode(blHandle, CUBLAS_POINTER_MODE_HOST), fail);
+        CUBLAS_CHECK_GOTO(cublasDnrm2(blHandle, n, d_r, 1, &finalRNorm), fail);
+        converged = std::isfinite(finalRNorm) && finalRNorm <= target_rNorm;
+    }
 
     {
         auto tSolve1 = std::chrono::high_resolution_clock::now();
@@ -373,6 +515,13 @@ bool solveOnGpu(const Eigen::SparseMatrix<double>& K,
         std::cout << "[GPU] PCG total: " << iter << " iters  "
                   << solveMs << " ms  ("
                   << (solveMs / std::max(iter, 1)) << " ms/iter)" << std::endl;
+    }
+
+    if (!converged) {
+        std::cerr << "[GPU] CG did not converge after " << iter
+                  << " iterations (||r||=" << finalRNorm
+                  << ", target=" << target_rNorm << ")." << std::endl;
+        goto fail;
     }
 
     // ------------------------------------------------------------------
@@ -393,6 +542,12 @@ fail:
     // ------------------------------------------------------------------
     // 7. Cleanup (always runs)
     // ------------------------------------------------------------------
+    // Descriptors are destroyed before their backing allocations.
+    if (vecP)     cusparseDestroyDnVec(vecP);
+    if (vecAp)    cusparseDestroyDnVec(vecAp);
+    if (matA)     cusparseDestroySpMat(matA);
+    if (spHandle) cusparseDestroy(spHandle);
+    if (blHandle) cublasDestroy(blHandle);
     if (spBuf)   cudaFree(spBuf);
     if (d_rowPtr) cudaFree(d_rowPtr);
     if (d_colIdx) cudaFree(d_colIdx);
@@ -404,11 +559,8 @@ fail:
     if (d_p)      cudaFree(d_p);
     if (d_Ap)     cudaFree(d_Ap);
     if (d_diag)   cudaFree(d_diag);
-    if (vecP)     cusparseDestroyDnVec(vecP);
-    if (vecAp)    cusparseDestroyDnVec(vecAp);
-    if (matA)     cusparseDestroySpMat(matA);
-    if (spHandle) cusparseDestroy(spHandle);
-    if (blHandle) cublasDestroy(blHandle);
+    if (d_invalidDiag) cudaFree(d_invalidDiag);
+    if (d_breakdown)   cudaFree(d_breakdown);
 
     return success;
 }

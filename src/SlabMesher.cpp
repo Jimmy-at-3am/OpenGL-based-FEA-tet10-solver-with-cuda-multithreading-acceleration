@@ -504,6 +504,15 @@ ToolpathMeshStats meshToolpathSlabs(const ToolpathSections::LayerSections& layer
                                     FEAModel& model)
 {
     ToolpathMeshStats stats;
+    auto progress = [&](float f) {
+        if (opt.progressOut)
+            opt.progressOut->store(opt.progressLo + (opt.progressHi - opt.progressLo) *
+                                                      std::clamp(f, 0.0f, 1.0f));
+    };
+    auto cancelled = [&]() {
+        return opt.cancelRequested && opt.cancelRequested->load();
+    };
+    progress(0.0f);
     const int nLayers = static_cast<int>(layers.sections.size());
     if (nLayers == 0) return stats;
 
@@ -536,6 +545,7 @@ ToolpathMeshStats meshToolpathSlabs(const ToolpathSections::LayerSections& layer
     std::vector<double>   slabAreaMM2(nSlabs, 0.0);
 
     for (int s = 0; s < nSlabs; ++s) {
+        if (cancelled()) return ToolpathMeshStats{};
         const LayerSlicer::Section& sec = layers.sections[repLayer[s]];
         std::vector<glm::vec2> pts2d;
         std::vector<std::array<int,3>> tris;
@@ -629,6 +639,7 @@ ToolpathMeshStats meshToolpathSlabs(const ToolpathSections::LayerSections& layer
         }
         slabPts[s]  = std::move(pts2d);
         slabTris[s] = std::move(tris);
+        progress(0.75f * static_cast<float>(s + 1) / static_cast<float>(nSlabs));
     }
 
     const int nTets  = static_cast<int>(tets.size() / 4);
@@ -636,10 +647,11 @@ ToolpathMeshStats meshToolpathSlabs(const ToolpathSections::LayerSections& layer
     if (nTets == 0) return stats;
 
     // ---- Weld-interface registry (new_TODO_06 general path) ----
-    auto& ls = *model.layers;
+    LayerStack ls = model.layers ? *model.layers : LayerStack{};
     ls.interfaces.clear();
     ls.tieAlpha = opt.tieAlpha;
     for (int s = 0; s + 1 < nSlabs; ++s) {
+        if (cancelled()) return ToolpathMeshStats{};
         if (slabTris[s].empty() || slabTris[s + 1].empty()) continue;
         LayerStack::WeldInterface wi;
         wi.slabBelow   = s;
@@ -668,10 +680,18 @@ ToolpathMeshStats meshToolpathSlabs(const ToolpathSections::LayerSections& layer
             stats.nTies += static_cast<int>(wi.ties.size());
             ls.interfaces.push_back(std::move(wi));
         }
+        progress(0.75f + 0.20f * static_cast<float>(s + 1) /
+                                  static_cast<float>(std::max(1, nSlabs - 1)));
     }
     stats.nInterfaces = static_cast<int>(ls.interfaces.size());
 
     // ---- Populate FEAModel (same contract as meshSlabs) ----
+    // Everything above is local. A cancelled job therefore leaves the live
+    // mesh and LayerStack untouched instead of exposing a half-built result.
+    if (cancelled()) return ToolpathMeshStats{};
+    if (!model.layers) model.layers = std::make_unique<LayerStack>();
+    *model.layers = std::move(ls);
+    auto& committedLs = *model.layers;
     model.originalVolumetricPositions = positions;
     model.tetrahedra                  = tets;
     model.nLinearNodes                = nNodes;
@@ -693,15 +713,15 @@ ToolpathMeshStats meshToolpathSlabs(const ToolpathSections::LayerSections& layer
     model.deformedPositions.clear();
     model.nodalDisplacementMagnitudes.assign(nNodes, 0.0f);
 
-    ls.buildAxis     = 2;
-    ls.layersPerSlab = k;
-    ls.physicalLayerThickness =
+    committedLs.buildAxis     = 2;
+    committedLs.layersPerSlab = k;
+    committedLs.physicalLayerThickness =
         (nLayers > 0 ? layers.heightMM[0] : 0.2f) / m2mm;
-    ls.planeCoords.assign(nSlabs + 1, 0.0f);
-    for (int s = 0; s < nSlabs; ++s) ls.planeCoords[s] = zBotMM[s] / m2mm;
-    ls.planeCoords[nSlabs] = zTopMM[nSlabs - 1] / m2mm;
-    ls.elemSlabIndex = elemSlab;
-    ls.elemRegion.assign(nTets, 1);  // single-material until new_TODO_07
+    committedLs.planeCoords.assign(nSlabs + 1, 0.0f);
+    for (int s = 0; s < nSlabs; ++s) committedLs.planeCoords[s] = zBotMM[s] / m2mm;
+    committedLs.planeCoords[nSlabs] = zTopMM[nSlabs - 1] / m2mm;
+    committedLs.elemSlabIndex = elemSlab;
+    committedLs.elemRegion.assign(nTets, 1);  // single-material until new_TODO_07
 
     model.buildBuffers();
 
@@ -709,6 +729,7 @@ ToolpathMeshStats meshToolpathSlabs(const ToolpathSections::LayerSections& layer
     stats.layersPerSlab = k;
     stats.nTets = nTets;
     stats.nNodes = nNodes;
+    progress(1.0f);
     std::cout << "[TPMESH] slabs=" << nSlabs << " (k=" << k << ")"
               << "  nodes=" << nNodes << "  tets=" << nTets
               << "  interfaces=" << stats.nInterfaces

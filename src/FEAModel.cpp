@@ -89,6 +89,12 @@ static void rebuildFracturedSurface(const std::vector<unsigned int>& tetrahedra,
 }
 
 void FEAModel::buildBuffers() {
+    // Async compute: a worker thread is mutating solver/mesh data and owns no
+    // GL context. Skip the entire rebuild (including the CPU-side vertex/index
+    // copy the render thread reads) — the main thread re-runs buildBuffers()
+    // once the job finishes.
+    if (deferGLUpload) return;
+
     // Apply FEA deformation if enabled
     if (showVolumetricMesh && hasVolumetricMesh && hasDeformation && !deformedPositions.empty()) {
         size_t positionCount = std::min(volumetricVertices.size(), std::min(deformedPositions.size(), originalVolumetricPositions.size()));
@@ -259,6 +265,14 @@ void FEAModel::generateCube() {
     showSlicePreview     = false;
     sliceLineVertexCount = 0;
 
+    // A stale gcode toolpath must not hijack the cube draw path.
+    toolpath.reset();
+    showToolpathPreview = false;
+    tpLineVertexCount   = 0;
+    tpRanges.clear();
+    sectionEnabled = false;
+    sectionZModel  = 0.0f;
+
     buildBuffers();
 }
 
@@ -357,7 +371,142 @@ bool FEAModel::loadGcode3mf(const std::string& filepath, bool partOnly) {
     geo.fileUnitToMM = 1.0f;           // Bambu gcode is always millimetres
     if (!processRawGeometry(geo, "GCODE")) return false;
     toolpath = std::move(tp);          // AFTER processRawGeometry (which resets it)
+    // Slicer-frontend preview: show the real extrusion moves instead of the
+    // placeholder bbox shell until GENERATE 3D MESH replaces the view.
+    buildToolpathPreview();
+    showToolpathPreview = (tpLineVertexCount > 0);
     return true;
+}
+
+// =============================================================================
+// FEAModel::buildToolpathPreview / drawToolpathPreview
+// =============================================================================
+// Feature-coloured GL_LINES built from toolpath->segments (mm plate frame),
+// mapped into the centered/rescaled model space via the same transform that
+// processRawGeometry applied to the bbox shell:
+//   model = (p_mm - partCenter_mm) / modelToMM.
+// Colours approximate the Bambu Studio line-type palette so a user coming from
+// the slicer immediately reads walls / infill / surfaces.
+void FEAModel::buildToolpathPreview() {
+    tpRanges.clear();
+    tpLineVertexCount = 0;
+    if (!toolpath || toolpath->segments.empty()) return;
+
+    const glm::vec3 centerMM = 0.5f * (physicalMinMM + physicalMaxMM);
+    const float     invMM    = 1.0f / std::max(1e-9f, modelToMM);
+
+    auto featureColor = [](int f) -> glm::vec3 {
+        switch (f) {
+            case Toolpath::FT_OUTER_WALL:        return {0.95f, 0.25f, 0.10f};
+            case Toolpath::FT_INNER_WALL:        return {0.98f, 0.70f, 0.15f};
+            case Toolpath::FT_OVERHANG_WALL:     return {0.15f, 0.55f, 0.95f};
+            case Toolpath::FT_SOLID_INFILL:      return {0.55f, 0.20f, 0.70f};
+            case Toolpath::FT_SPARSE_INFILL:     return {0.65f, 0.80f, 0.25f};
+            case Toolpath::FT_TOP_SURFACE:       return {0.85f, 0.10f, 0.30f};
+            case Toolpath::FT_BOTTOM_SURFACE:    return {0.35f, 0.75f, 0.95f};
+            case Toolpath::FT_BRIDGE:            return {0.30f, 0.60f, 0.90f};
+            case Toolpath::FT_GAP_INFILL:        return {0.90f, 0.90f, 0.90f};
+            case Toolpath::FT_SUPPORT:
+            case Toolpath::FT_SUPPORT_INTERFACE:
+            case Toolpath::FT_BRIM:              return {0.55f, 0.55f, 0.55f};
+            default:                             return {0.70f, 0.70f, 0.70f};
+        }
+    };
+
+    std::vector<Vertex> verts;
+    verts.reserve(toolpath->segments.size() * 2);
+    for (int f = 0; f < Toolpath::FT_COUNT; ++f) {
+        if (f == Toolpath::FT_CUSTOM) continue;   // prime/wipe: never part geometry
+        const int first = static_cast<int>(verts.size());
+        for (const Toolpath::Segment& s : toolpath->segments) {
+            if (s.feature != f) continue;
+            const glm::vec3 a = (s.p0 - centerMM) * invMM;
+            const glm::vec3 b = (s.p1 - centerMM) * invMM;
+            verts.push_back({ a, glm::vec3(0.0f, 0.0f, 1.0f), glm::vec2(0.0f), 0.0f });
+            verts.push_back({ b, glm::vec3(0.0f, 0.0f, 1.0f), glm::vec2(0.0f), 0.0f });
+        }
+        const int count = static_cast<int>(verts.size()) - first;
+        if (count > 0) tpRanges.push_back({ first, count, featureColor(f) });
+    }
+
+    tpLineVertexCount = static_cast<int>(verts.size());
+    if (verts.empty()) return;
+    if (tpVAO == 0) { glGenVertexArrays(1, &tpVAO); glGenBuffers(1, &tpVBO); }
+    glBindVertexArray(tpVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, tpVBO);
+    glBufferData(GL_ARRAY_BUFFER, verts.size() * sizeof(Vertex), &verts[0], GL_STATIC_DRAW);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)0); glEnableVertexAttribArray(0);
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, normal)); glEnableVertexAttribArray(1);
+    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, texCoords)); glEnableVertexAttribArray(2);
+    glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, elementScalar)); glEnableVertexAttribArray(3);
+    glBindVertexArray(0);
+    std::cout << "[GCODE] toolpath preview: " << (tpLineVertexCount / 2)
+              << " segments in " << tpRanges.size() << " feature groups" << std::endl;
+}
+
+void FEAModel::drawToolpathPreview(BuiltInShader& shader) {
+    if (tpVAO == 0 || tpLineVertexCount <= 0) return;
+    shader.use();
+    shader.setMat4("model", glm::mat4(1.0f));
+    shader.setInt("scalarMode", 0);
+    shader.setFloat("fragAlpha", 1.0f);
+    shader.setInt("sectionOn", sectionEnabled ? 1 : 0);
+    shader.setFloat("sectionZ", sectionZModel);
+    glLineWidth(1.5f);
+    glBindVertexArray(tpVAO);
+    for (const TpDrawRange& r : tpRanges) {
+        shader.setVec3("objectColor", r.color.x, r.color.y, r.color.z);
+        glDrawArrays(GL_LINES, r.first, r.count);
+    }
+    glBindVertexArray(0);
+    glLineWidth(1.0f);
+    shader.setInt("sectionOn", 0);
+}
+
+// Translucent grey XY plane at the section cut height, spanning the model's
+// XY bounds (slightly enlarged). Drawn after the model with depth writes off
+// so it never occludes later overlays.
+void FEAModel::drawSectionPlane(BuiltInShader& shader) {
+    if (!sectionEnabled) return;
+    const glm::vec3 mn = currentMinBounds, mx = currentMaxBounds;
+    const float padX = 0.08f * (mx.x - mn.x) + 1e-3f;
+    const float padY = 0.08f * (mx.y - mn.y) + 1e-3f;
+    const float z = sectionZModel;
+    const Vertex quad[6] = {
+        {{mn.x - padX, mn.y - padY, z}, {0,0,1}, {0,0}, 0},
+        {{mx.x + padX, mn.y - padY, z}, {0,0,1}, {0,0}, 0},
+        {{mx.x + padX, mx.y + padY, z}, {0,0,1}, {0,0}, 0},
+        {{mn.x - padX, mn.y - padY, z}, {0,0,1}, {0,0}, 0},
+        {{mx.x + padX, mx.y + padY, z}, {0,0,1}, {0,0}, 0},
+        {{mn.x - padX, mx.y + padY, z}, {0,0,1}, {0,0}, 0},
+    };
+    if (secVAO == 0) {
+        glGenVertexArrays(1, &secVAO); glGenBuffers(1, &secVBO);
+        glBindVertexArray(secVAO);
+        glBindBuffer(GL_ARRAY_BUFFER, secVBO);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(quad), nullptr, GL_DYNAMIC_DRAW);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)0); glEnableVertexAttribArray(0);
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, normal)); glEnableVertexAttribArray(1);
+        glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, texCoords)); glEnableVertexAttribArray(2);
+        glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, elementScalar)); glEnableVertexAttribArray(3);
+    }
+    glBindVertexArray(secVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, secVBO);
+    glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(quad), quad);
+
+    shader.use();
+    shader.setMat4("model", glm::mat4(1.0f));
+    shader.setInt("scalarMode", 0);
+    shader.setInt("sectionOn", 0);
+    shader.setVec3("objectColor", 0.45f, 0.47f, 0.50f);
+    shader.setFloat("fragAlpha", 0.40f);
+    glDepthMask(GL_FALSE);
+    glDisable(GL_CULL_FACE);
+    glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+    glDepthMask(GL_TRUE);
+    shader.setFloat("fragAlpha", 1.0f);
+    glBindVertexArray(0);
 }
 
 // =============================================================================
@@ -594,6 +743,14 @@ bool FEAModel::processRawGeometry(LoadedGeometry& geo, const std::string& format
     // Clear stale toolpath; loadGcode3mf() re-assigns it after this returns
     // (new_TODO_19A) — an STL loaded after a gcode must not keep stale beads.
     toolpath.reset();
+    showToolpathPreview = false;
+    tpLineVertexCount   = 0;
+    tpRanges.clear();
+
+    // Sectional view resets with every new geometry (the cut height belongs
+    // to the previous part).
+    sectionEnabled = false;
+    sectionZModel  = 0.0f;
 
     // new_TODO_04: drop any slice/layer state from the previously loaded model so
     // a stale section overlay or LayerStack never carries across a reload.
@@ -615,12 +772,24 @@ bool FEAModel::processRawGeometry(LoadedGeometry& geo, const std::string& format
 
 
 void FEAModel::draw(BuiltInShader& shader, glm::vec3 viewPos) {
+    // Slicer-frontend lane: while a gcode toolpath is loaded and the volume
+    // mesh is not being shown, render the real extrusion moves instead of the
+    // placeholder bbox shell.
+    if (hasToolpath() && showToolpathPreview && !(showVolumetricMesh && hasVolumetricMesh)) {
+        shader.use();
+        shader.setVec3("viewPos", viewPos);
+        drawToolpathPreview(shader);
+        return;
+    }
+
     if (indices.empty()) return;
 
     shader.use();
     shader.setMat4("model", glm::mat4(1.0f));
     shader.setVec3("viewPos", viewPos);
     shader.setFloat("fragAlpha", 1.0f);   // new_TODO_03: opaque unless ghost pass overrides
+    shader.setInt("sectionOn", sectionEnabled ? 1 : 0);
+    shader.setFloat("sectionZ", sectionZModel);
     int scalarMode = getActiveScalarMode();
     shader.setInt("scalarMode", scalarMode);
     shader.setFloat("scalarMin", getActiveScalarMin());
@@ -662,6 +831,7 @@ void FEAModel::draw(BuiltInShader& shader, glm::vec3 viewPos) {
         shader.setFloat("fragAlpha", 1.0f);
     }
 
+    shader.setInt("sectionOn", 0);   // overlays drawn after the model are never clipped
     glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
     glBindVertexArray(0);
 }
@@ -790,6 +960,13 @@ float FEAModel::getActiveScalarMax() const {
 }
 
 bool FEAModel::generateVolumetricMesh() {
+    auto progress = [&](float f) {
+        if (computeProgressOut) computeProgressOut->store(std::clamp(f, 0.0f, 1.0f));
+    };
+    auto cancelled = [&]() {
+        return computeCancelRequested && computeCancelRequested->load();
+    };
+    progress(0.02f);
     if (surfaceVertices.empty() || surfaceIndices.empty()) {
         std::cout << "No surface mesh to tetrahedralize!" << std::endl;
         return false;
@@ -907,6 +1084,8 @@ bool FEAModel::generateVolumetricMesh() {
              params.tetRobustnessTol);
 
     std::cout << "Running TetGen with command: " << switches << std::endl;
+    progress(0.18f);
+    if (cancelled()) return false;
 
     {
         float minA = FLT_MAX, maxA = 0.0f;
@@ -932,6 +1111,7 @@ bool FEAModel::generateVolumetricMesh() {
         b.parse_commandline(switches);
         tetrahedralize(&b, &in, &out);
     }
+
     catch (int e) {
         std::cout << "TetGen failed! Integer error code: " << e << std::endl;
         return false;
@@ -946,6 +1126,12 @@ bool FEAModel::generateVolumetricMesh() {
         return false;
     }
 
+    // TetGen has no cooperative cancellation API. If the user pressed X while
+    // it was inside tetrahedralize(), discard the completed local output here;
+    // the previously displayed model remains intact.
+    progress(0.82f);
+    if (cancelled()) return false;
+
     std::cout << "Meshing Complete! Generated " << out.numberoftetrahedra
               << " tetrahedrons, " << out.numberoftrifaces
               << " tri-faces (" << out.numberoftrifaces << " boundary)." << std::endl;
@@ -957,6 +1143,8 @@ bool FEAModel::generateVolumetricMesh() {
         MeshQuality::emitFidelityReport(refSurfaceForFidelity, *brep, out, params);
     else
         MeshQuality::emitFidelityReport(refSurfaceForFidelity, out, params);
+    progress(0.90f);
+    if (cancelled()) return false;
 
     volumetricVertices.clear();
     volumetricIndices.clear();
@@ -1024,6 +1212,7 @@ bool FEAModel::generateVolumetricMesh() {
     nLinearNodes = static_cast<int>(originalVolumetricPositions.size());
 
     buildBuffers();
+    progress(1.0f);
     return true;
 }
 
