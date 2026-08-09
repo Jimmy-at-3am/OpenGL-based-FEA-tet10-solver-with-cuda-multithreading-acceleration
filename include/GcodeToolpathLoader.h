@@ -1,6 +1,6 @@
 #pragma once
 // =============================================================================
-//  GcodeToolpathLoader.h  --  new_TODO_19A: open a Bambu .gcode.3mf (a zip),
+//  GcodeToolpathLoader.h  --  open a Bambu .gcode.3mf (a zip),
 //  extract Metadata/plate_1.gcode (or the first *.gcode entry) and parse it
 //  into a Toolpath::ToolpathModel.
 //

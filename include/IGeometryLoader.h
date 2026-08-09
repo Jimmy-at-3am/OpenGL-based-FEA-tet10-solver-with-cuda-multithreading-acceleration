@@ -43,7 +43,7 @@ struct LoadedGeometry {
     // STL always reports 1.  .3mf may report N (one per <object> element).
     int objectCount = 1;
 
-    // new_TODO_04C: physical unit of the authored coordinates, as a factor to
+    // physical unit of the authored coordinates, as a factor to
     // millimetres (the canonical internal length unit). STL is unitless -> 1.0
     // (treated as mm; FEAModel applies FEAParams::stlUnitToMM as an override).
     // 3MF reads <model unit=...>; STEP reads xstep.cascade.unit. Used by

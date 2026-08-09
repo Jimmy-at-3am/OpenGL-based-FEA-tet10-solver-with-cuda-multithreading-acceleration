@@ -1,5 +1,5 @@
 // =============================================================================
-//  SlabMesher.cpp  --  new_TODO_05: per-slab 2D triangulation + prism extrusion
+//  SlabMesher.cpp  --  per-slab 2D triangulation + prism extrusion
 //  -> conformal Tet4 slabs.
 //
 //  Triangulation: simple ear-clipper (O(n^3); fine for ≤ ~50-vertex FDM outlines).
@@ -23,7 +23,7 @@
 #include <iostream>
 
 #ifdef HAS_CDT
-#include "CDT.h"   // new_TODO_19C-b: constrained Delaunay (new_TODO_05's spec'd lib)
+#include "CDT.h"   // constrained Delaunay triangulation
 #endif
 
 namespace SlabMesher {
@@ -414,7 +414,7 @@ MeshStats meshSlabs(const LayerSlicer::SliceResult& slice,
 }
 
 // ============================================================================
-//  new_TODO_19C-b: toolpath lane below.
+//  toolpath lane below.
 // ============================================================================
 
 // Resample a closed loop so no edge exceeds hTarget (keeps original vertices;
@@ -646,7 +646,7 @@ ToolpathMeshStats meshToolpathSlabs(const ToolpathSections::LayerSections& layer
     const int nNodes = static_cast<int>(positions.size());
     if (nTets == 0) return stats;
 
-    // ---- Weld-interface registry (new_TODO_06 general path) ----
+    // ---- Weld-interface registry (general path) ----
     LayerStack ls = model.layers ? *model.layers : LayerStack{};
     ls.interfaces.clear();
     ls.tieAlpha = opt.tieAlpha;
@@ -721,7 +721,8 @@ ToolpathMeshStats meshToolpathSlabs(const ToolpathSections::LayerSections& layer
     for (int s = 0; s < nSlabs; ++s) committedLs.planeCoords[s] = zBotMM[s] / m2mm;
     committedLs.planeCoords[nSlabs] = zTopMM[nSlabs - 1] / m2mm;
     committedLs.elemSlabIndex = elemSlab;
-    committedLs.elemRegion.assign(nTets, 1);  // single-material until new_TODO_07
+    // TODO: assign material regions; toolpath meshes are currently single-material.
+    committedLs.elemRegion.assign(nTets, 1);
 
     model.buildBuffers();
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # =============================================================================
-# gen_holed_box.py  --  new_TODO_04 slice-contour test fixture generator.
+# gen_holed_box.py  --  slice-contour test fixture generator.
 #
 # Emits an ASCII STL of a 4x4x4 box (X,Y,Z in [-2,2]) with a 1x1 square
 # THROUGH-HOLE along the Z (build) axis. The hole is deliberately OFF-CENTRE

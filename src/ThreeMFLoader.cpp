@@ -516,7 +516,7 @@ bool ThreeMFLoader::load(const std::string& path, LoadedGeometry& out) {
     mz_free(primaryData);
 
     // ------------------------------------------------------------------
-    // new_TODO_04C: read the <model unit="..."> attribute so the real physical
+    // read the <model unit="..."> attribute so the real physical
     // size survives import (3MF default is millimeter). Scoped to the <model>
     // root tag so it cannot match a 'unit' substring elsewhere.
     // ------------------------------------------------------------------

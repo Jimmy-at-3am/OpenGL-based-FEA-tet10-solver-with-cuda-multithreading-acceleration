@@ -1,5 +1,5 @@
 // =============================================================================
-//  ToolpathSections.cpp  --  new_TODO_19B implementation. See header.
+//  ToolpathSections.cpp  --  implementation. See header.
 //
 //  Numerical care points:
 //   - Union fill rule is NonZero, NOT EvenOdd: bead rectangles overlap heavily

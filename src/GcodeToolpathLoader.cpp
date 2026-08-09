@@ -1,5 +1,5 @@
 // =============================================================================
-//  GcodeToolpathLoader.cpp  --  new_TODO_19A: Bambu .gcode.3mf -> ToolpathModel.
+//  GcodeToolpathLoader.cpp  --  Bambu .gcode.3mf -> ToolpathModel.
 //
 //  Port of code/fea_slicer/gcode_viewer/gcode_parser.cpp (kept line-for-line
 //  where possible so the prototype remains the reference implementation).

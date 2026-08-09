@@ -14,32 +14,32 @@
 // BRepHandle.h is included in FEAModel.cpp where Impl is complete (required by
 // unique_ptr destructor and move operations).
 class BRepHandle;
-namespace Toolpath { struct ToolpathModel; }  // new_TODO_19A (ToolpathModel.h)
+namespace Toolpath { struct ToolpathModel; }  // (ToolpathModel.h)
 
 struct ForceArrow {
     glm::vec3 start;
     glm::vec3 end;
 };
 
-// new_TODO_04: FE-facing layered-FDM data model. planeCoords (slab boundaries,
+// FE-facing layered-FDM data model. planeCoords (slab boundaries,
 // ascending, nSlabs+1) + buildAxis + thickness/grouping are filled by the slicer
-// (this TODO). elemSlabIndex / elemRegion are per-tet and filled by new_TODO_05.
+// itself. elemSlabIndex / elemRegion are per-tet and filled by the slab mesher.
 struct LayerStack {
     int   buildAxis = 2;                 // 0=X 1=Y 2=Z
     float physicalLayerThickness = 0.0f; // absolute units, post import scale
     int   layersPerSlab = 1;             // grouping factor k
     std::vector<float>   planeCoords;    // slab boundaries, ascending (nSlabs+1)
-    std::vector<int>     elemSlabIndex;  // per-tet (filled by new_TODO_05)
-    std::vector<uint8_t> elemRegion;     // 0=infill 1=wall (filled by new_TODO_05)
+    std::vector<int>     elemSlabIndex;  // per-tet (filled by the slab mesher)
+    std::vector<uint8_t> elemRegion;     // 0=infill 1=wall (filled by the slab mesher)
     int nSlabs() const {
         return planeCoords.empty() ? 0 : static_cast<int>(planeCoords.size()) - 1;
     }
 
-    // new_TODO_19C (the new_TODO_06 registry, general path): weld interface
+    // Weld-interface registry (general path): a weld interface
     // between slab s (its top ring) and slab s+1 (its bottom triangulation).
     // The toolpath lane meshes every slab with INDEPENDENT node rings (sections
     // differ per layer), so the interface is a set of barycentric point ties
-    // that the solver assembles as penalty springs. new_TODO_06's delamination
+    // that the solver assembles as penalty springs. The delamination pass
     // later releases individual ties; until then `released` stays false.
     struct WeldInterface {
         int slabBelow = 0;                 // couples slabBelow(top) <-> slabBelow+1(bottom)
@@ -47,7 +47,7 @@ struct LayerStack {
             unsigned nodeTop;              // node on slab s top ring
             unsigned triBottom[3];         // containing tri nodes on slab s+1 bottom ring
             float    bary[3];              // barycentric weights of nodeTop in triBottom
-            bool     released = false;     // new_TODO_06 flips this
+            bool     released = false;     // flips this
         };
         std::vector<Tie> ties;
         float areaMM2      = 0.0f;         // interface section area (for k_pen)
@@ -65,12 +65,12 @@ public:
     FEAParams params;
     bool needsUpdate = true;
     float bboxVolume = 1000.0f; // NEW: Stores overall part volume
-    // new_TODO_04: uniform model-space scale applied to the last loaded geometry
+    // uniform model-space scale applied to the last loaded geometry
     // (3.0/maxDim in processRawGeometry; 1.0 for the un-rescaled preset cube).
     // Converts print-unit layerThickness -> model units for the slicer.
     float importScale = 1.0f;
 
-    // new_TODO_04C: real-world physical size in MILLIMETRES (the canonical internal
+    // real-world physical size in MILLIMETRES (the canonical internal
     // length unit), preserved across the 3-unit render normalisation. The renderer
     // uses model-space coords; the slicer and the FEA solver use physical mm.
     //   modelToMM : multiply a model-space length to get millimetres
@@ -79,7 +79,7 @@ public:
     glm::vec3 physicalMaxMM = glm::vec3( 0.5f);
     float     modelToMM     = 1.0f;
     glm::vec3 physicalSizeMM() const { return physicalMaxMM - physicalMinMM; }
-    // new_TODO_04C: max nodal displacement of the last solve in PHYSICAL mm
+    // max nodal displacement of the last solve in PHYSICAL mm
     // (real-world, un-exaggerated). 0 until a solve runs.
     float     physicalMaxDispMM = 0.0f;
 
@@ -87,11 +87,11 @@ public:
     std::string lastLoadedFormat = "";  // "STL" | "3MF" | "STEP" | ""
     int         lastLoadedObjectCount = 0; // number of objects found in last load
 
-    // TODO_04: retained analytic B-rep (non-null when last load was STEP).
+    // retained analytic B-rep (non-null when last load was STEP).
     std::unique_ptr<BRepHandle> brep;
     bool hasBRep() const { return brep != nullptr; }
 
-    // new_TODO_19A: parsed Bambu .gcode.3mf toolpath (non-null when the last
+    // parsed Bambu .gcode.3mf toolpath (non-null when the last
     // load was a sliced gcode export). The authoritative FDM geometry source;
     // until the toolpath slab mesh is built, the render surface is only the
     // part-bbox shell synthesized by loadGcode3mf().
@@ -106,7 +106,7 @@ public:
     bool showAppliedForceField = false;
     std::vector<ForceArrow> appliedForces;
     std::vector<float> nodalDisplacementMagnitudes;
-    // new_TODO_19C: TRUE physical displacement per node (mm), no display
+    // TRUE physical displacement per node (mm), no display
     // exaggeration — the harness probes read THIS, never deformedPositions
     // (which bake in visualScale and are render-only). Filled by the scaled
     // linear/fracture solve path; empty when the last solve didn't compute it.
@@ -138,16 +138,16 @@ public:
     // 2=interlayer-shear, 3=intralayer).  Only meaningful when useFdmAnisotropy
     // is true; otherwise all killed elements carry mode 0.
     std::vector<uint8_t> elementFailureMode;
-    // new_TODO_03: von Mises stress each element carried at the iteration it died
+    // von Mises stress each element carried at the iteration it died
     // (0 for elements still alive). Filled by solveBrittleFracture from sigmaVM.
     std::vector<float>   elementVonMisesAtDeath;
 
-    // new_TODO_03: fracture result visualization controls + render buffers.
+    // fracture result visualization controls + render buffers.
     // fractureViewMode selects what colours the result: 1=deform (per-vertex
     // displacement on the surviving body), 3=failure mode, 4=crack order
     // (failure iteration), 5=von Mises at death. Modes 3/4/5 colour the DEAD
     // elements (drawn in a second pass); the alive body goes grey so the crack
-    // pattern reads clearly. (Numbering reserved through 7 for new_TODO_08.)
+    // pattern reads clearly. (Numbering reserved through 7.)
     int fractureViewMode = 1;
     enum FractureDeadView { DEAD_HIDDEN = 0, DEAD_GHOST = 1, DEAD_COLORED = 2 };
     FractureDeadView fractureDeadView = DEAD_HIDDEN;
@@ -160,7 +160,7 @@ public:
     float deadScalarMin = 0.0f;   // colour-range for dead-pass heatmaps (modes 4/5)
     float deadScalarMax = 1.0f;
 
-    // new_TODO_04: layered-FDM data model + 2-D section preview.
+    // layered-FDM data model + 2-D section preview.
     // `layers` is the FE-facing slab model (filled by setLayerStack after slicing).
     std::unique_ptr<LayerStack> layers;
     bool hasLayerStack() const { return layers != nullptr; }
@@ -171,7 +171,7 @@ public:
     unsigned int  sliceVAO = 0, sliceVBO = 0;
     int           sliceLineVertexCount = 0;
 
-    // new_TODO_19E: 3-D load-arrow overlay (same dedicated-GL_LINES pattern as
+    // 3-D load-arrow overlay (same dedicated-GL_LINES pattern as
     // the slice preview). Geometry comes from `appliedForces`, which the
     // solver's load presets fill from the SAME node sets and direction the
     // load actually uses — the arrow is the applied load, never a guess.
@@ -219,7 +219,7 @@ public:
     std::vector<glm::vec3> originalVolumetricPositions; // NEW: stores initial positions before deformation
     std::vector<glm::vec3> deformedPositions; // NEW: stores displaced positions
 
-    // TODO_03: snapshot of the input surface taken immediately before TetGen.
+    // snapshot of the input surface taken immediately before TetGen.
     // Compared against the vol-mesh boundary to compute Hausdorff + normal dev.
     MeshQuality::RefSurface refSurfaceForFidelity;
 
@@ -234,8 +234,8 @@ public:
     // All route through processRawGeometry() for identical post-processing.
     bool loadSTL(const std::string& filepath);
     bool load3MF(const std::string& filepath);
-    bool loadSTEP(const std::string& filepath); // TODO_04: STEP + B-rep retention
-    // new_TODO_19A: Bambu sliced export -> ToolpathModel + bbox-shell surface.
+    bool loadSTEP(const std::string& filepath); // STEP + B-rep retention
+    // Bambu sliced export -> ToolpathModel + bbox-shell surface.
     bool loadGcode3mf(const std::string& filepath, bool partOnly = false);
 
     // Load any supported format (dispatches by extension).
@@ -256,13 +256,13 @@ private:
     // calls buildBuffers().
     bool processRawGeometry(LoadedGeometry& geo, const std::string& formatTag);
 
-    // new_TODO_03: rebuild the dead-element render buffers (deadVertices/Indices)
+    // rebuild the dead-element render buffers (deadVertices/Indices)
     // from the current elementAlive/Failure* data + fractureViewMode. No-op when
     // no fracture state is present.
     void rebuildDeadElementBuffers();
 
 public:
-    // new_TODO_04: populate the FE-facing LayerStack (slab boundaries + grouping).
+    // populate the FE-facing LayerStack (slab boundaries + grouping).
     // Called by both the UI SLICE controls and the headless harness (same path).
     void setLayerStack(int buildAxis, float physicalLayerThickness, int layersPerSlab,
                        const std::vector<float>& slabBoundaryCoords);

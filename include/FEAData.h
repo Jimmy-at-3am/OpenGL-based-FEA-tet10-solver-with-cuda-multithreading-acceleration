@@ -5,7 +5,7 @@
 // texCoords.y = per-vertex applied-force magnitude (scalarMode 2)
 // elementScalar = per-ELEMENT value (flat, no interpolation) used by the
 //   fracture views: scalarMode 3 = failure mode, 4 = failure iteration,
-//   5 = von Mises at death, and reserved 6 = slab index (new_TODO_08).
+//   5 = von Mises at death, and reserved 6 = slab index.
 //   Kept as a dedicated channel so it never clobbers the force map.
 struct Vertex { glm::vec3 position; glm::vec3 normal; glm::vec2 texCoords; float elementScalar = 0.0f; };
 
@@ -20,9 +20,9 @@ struct FEAParams {
     float maxVolPercent = 0.1f;   // Limits maximum tetrahedron size relative to part size
     bool enablePolarRemoval = false; // Disable by default to preserve complex CAD topologies
 
-    // --- TODO_01: TetGen quality switches & quality-report knobs ---
+    // --- TetGen quality switches & quality-report knobs ---
     // Radius-edge ratio bound passed to TetGen as `pq<this>/...`. Lower = stricter
-    // (TetGen lower bound is 1.0; 1.2 is the tight default agreed for TODO_01).
+    // (TetGen lower bound is 1.0; 1.2 is the tight default).
     float tetRadiusEdge      = 1.2f;
     // Minimum dihedral angle bound (degrees) used for two purposes:
     //   1. Passed to TetGen as `.../<this>` -- a TARGET for its smoother, NOT a guarantee.
@@ -41,17 +41,17 @@ struct FEAParams {
     int   worstNCount        = 10;     // How many worst elements to dump.
     bool  useMultithreading  = true;   // Per-element parallel quality computation.
 
-    // --- TODO_04: STEP / BRep tessellation controls ---
+    // --- STEP / BRep tessellation controls ---
     // Chord error as a fraction of the bounding-box diagonal.
     // lin_def = sizingChordError * L_diag  (absolute linear deflection for OCC mesher).
     // 1e-3 → 0.1% chord error (COMSOL "Fine" equivalent on a 1 m part: 1 mm deflection).
     float sizingChordError   = 1e-3f;
 
-    // --- new_TODO_04: layered-FDM slice controls ---
-    // These describe the print/slice intent; consumed by LayerSlicer (this TODO)
-    // and the downstream extrusion/region pipeline (new_TODO_05+).
+    // --- layered-FDM slice controls ---
+    // These describe the print/slice intent; consumed by LayerSlicer
+    // and the downstream extrusion/region pipeline.
     bool  enableLayerSlicing = false;
-    // new_TODO_04C: STL is unitless; this multiplies STL coords to millimetres
+    // STL is unitless; this multiplies STL coords to millimetres
     // (1.0 = treat STL as mm, the slicer/printer convention). 3MF/STEP carry their
     // own declared unit and ignore this. Used for non-mm STL imports.
     float stlUnitToMM        = 1.0f;

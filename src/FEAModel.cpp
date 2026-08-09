@@ -1,8 +1,8 @@
 #include "FEAModel.h"
 #include "BRepHandle.h"     // must be included here so unique_ptr<BRepHandle> destructor
 #include "StepLoader.h"     // can see the complete BRepHandle type
-#include "ToolpathModel.h"        // new_TODO_19A: complete type for unique_ptr
-#include "GcodeToolpathLoader.h"  // new_TODO_19A: .gcode.3mf -> ToolpathModel
+#include "ToolpathModel.h"        // complete type for unique_ptr
+#include "GcodeToolpathLoader.h"  // .gcode.3mf -> ToolpathModel
 #include <meshoptimizer.h>
 #include <glad/glad.h>
 #include <fstream>
@@ -135,7 +135,7 @@ void FEAModel::buildBuffers() {
     glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, texCoords)); glEnableVertexAttribArray(2);
     glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, elementScalar)); glEnableVertexAttribArray(3);
 
-    // new_TODO_03: rebuild + upload the separate dead-element buffers so the
+    // rebuild + upload the separate dead-element buffers so the
     // fracture pattern can be drawn (ghosted / mode-coloured) in a second pass.
     rebuildDeadElementBuffers();
     if (!deadVertices.empty() && !deadIndices.empty()) {
@@ -154,7 +154,7 @@ void FEAModel::buildBuffers() {
     needsUpdate = false;
 }
 
-// new_TODO_03: build the dead-element render geometry. Each dead element emits
+// build the dead-element render geometry. Each dead element emits
 // its 4 triangular faces with DUPLICATED vertices, so every triangle carries a
 // single flat per-element value (selected by fractureViewMode) in elementScalar
 // — adjacent dead elements never blend colours. Positions are read from the
@@ -234,7 +234,7 @@ void FEAModel::generateCube() {
     bboxVolume = params.sizeX * params.sizeY * params.sizeZ;
     if (bboxVolume < 0.0001f) bboxVolume = 1.0f;
     importScale = 1.0f; // preset cube is authored in model units (no rescale)
-    // new_TODO_04C: preset cube is authored directly in millimetres, centred at
+    // preset cube is authored directly in millimetres, centred at
     // the origin and spanning [-size/2, +size/2]; model space IS physical mm here.
     modelToMM     = 1.0f;
     physicalMaxMM = 0.5f * glm::vec3(params.sizeX, params.sizeY, params.sizeZ);
@@ -259,7 +259,7 @@ void FEAModel::generateCube() {
     appliedForcePerNode = 0.0f;
     loadedFileName = "";
 
-    // new_TODO_04: drop slice/layer state so a prior section overlay does not
+    // drop slice/layer state so a prior section overlay does not
     // linger after a cube-dimension change or a switch back to CUBE mode.
     layers.reset();
     showSlicePreview     = false;
@@ -320,7 +320,7 @@ bool FEAModel::load3MF(const std::string& filepath) {
 }
 
 // =============================================================================
-// FEAModel::loadSTEP  (TODO_04)
+// FEAModel::loadSTEP
 // =============================================================================
 // Loads a .step/.stp file, retains the analytic B-rep in `brep`, and routes
 // the tessellated triangle mesh through the shared processRawGeometry pipeline.
@@ -335,13 +335,13 @@ bool FEAModel::loadSTEP(const std::string& filepath) {
 }
 
 // =============================================================================
-// FEAModel::loadGcode3mf  (new_TODO_19A)
+// FEAModel::loadGcode3mf
 // =============================================================================
 // A Bambu sliced export: the toolpath is the AUTHORITATIVE geometry (real
 // per-layer heights + infill as printed). No triangle mesh exists in a form we
 // mesh from, so synthesize a 12-triangle shell of the part bbox — enough for
 // processRawGeometry to establish units/model space and for the renderer and
-// camera to work until the toolpath slab mesh (new_TODO_19C) replaces it.
+// camera to work until the toolpath slab mesh replaces it.
 bool FEAModel::loadGcode3mf(const std::string& filepath, bool partOnly) {
     auto tp = std::make_unique<Toolpath::ToolpathModel>();
     std::string err;
@@ -518,7 +518,7 @@ bool FEAModel::loadFile(const std::string& filepath) {
     std::transform(lower.begin(), lower.end(), lower.begin(),
                    [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
     // Sliced gcode exports end in ".gcode.3mf" — they must NOT fall through to
-    // the design-3MF XML loader (new_TODO_19A).
+    // the design-3MF XML loader.
     if (lower.size() > 10 && lower.compare(lower.size() - 10, 10, ".gcode.3mf") == 0)
         return loadGcode3mf(filepath);
     std::string ext = std::filesystem::path(filepath).extension().string();
@@ -693,7 +693,7 @@ bool FEAModel::processRawGeometry(LoadedGeometry& geo, const std::string& format
         if (maxDim < 0.001f) maxDim = 1.0f;
         float scale = 3.0f / maxDim;
 
-        // new_TODO_04C: preserve the REAL physical size (mm) BEFORE the render
+        // preserve the REAL physical size (mm) BEFORE the render
         // rescale. STL is unitless -> apply the FEAParams override; 3MF/STEP carry
         // their declared unit in geo.fileUnitToMM (default 1.0 = mm).
         float unitToMM = geo.fileUnitToMM;
@@ -703,7 +703,7 @@ bool FEAModel::processRawGeometry(LoadedGeometry& geo, const std::string& format
 
         for (auto& v : vertices) v.position = (v.position - center) * scale;
         bboxVolume *= (scale * scale * scale);
-        importScale = scale; // new_TODO_04: print-unit -> model-unit factor for slicer
+        importScale = scale; // print-unit -> model-unit factor for slicer
         // model-space length * modelToMM = physical millimetres.
         modelToMM = unitToMM / scale;
         glm::vec3 szMM = physicalMaxMM - physicalMinMM;
@@ -741,7 +741,7 @@ bool FEAModel::processRawGeometry(LoadedGeometry& geo, const std::string& format
     brep.reset();
 
     // Clear stale toolpath; loadGcode3mf() re-assigns it after this returns
-    // (new_TODO_19A) — an STL loaded after a gcode must not keep stale beads.
+    // — an STL loaded after a gcode must not keep stale beads.
     toolpath.reset();
     showToolpathPreview = false;
     tpLineVertexCount   = 0;
@@ -752,7 +752,7 @@ bool FEAModel::processRawGeometry(LoadedGeometry& geo, const std::string& format
     sectionEnabled = false;
     sectionZModel  = 0.0f;
 
-    // new_TODO_04: drop any slice/layer state from the previously loaded model so
+    // drop any slice/layer state from the previously loaded model so
     // a stale section overlay or LayerStack never carries across a reload.
     layers.reset();
     showSlicePreview     = false;
@@ -787,7 +787,7 @@ void FEAModel::draw(BuiltInShader& shader, glm::vec3 viewPos) {
     shader.use();
     shader.setMat4("model", glm::mat4(1.0f));
     shader.setVec3("viewPos", viewPos);
-    shader.setFloat("fragAlpha", 1.0f);   // new_TODO_03: opaque unless ghost pass overrides
+    shader.setFloat("fragAlpha", 1.0f);   // opaque unless ghost pass overrides
     shader.setInt("sectionOn", sectionEnabled ? 1 : 0);
     shader.setFloat("sectionZ", sectionZModel);
     int scalarMode = getActiveScalarMode();
@@ -808,7 +808,7 @@ void FEAModel::draw(BuiltInShader& shader, glm::vec3 viewPos) {
         glDrawElements(GL_TRIANGLES, static_cast<unsigned int>(indices.size()), GL_UNSIGNED_INT, 0);
     }
 
-    // new_TODO_03: second pass — draw the DEAD elements so the fracture pattern
+    // second pass — draw the DEAD elements so the fracture pattern
     // stays visible. HIDDEN skips it; GHOST draws translucent grey; COLORED draws
     // them by the current fractureViewMode (mode / crack order / stress).
     if (!elementFailureMode.empty() && fractureDeadView != DEAD_HIDDEN
@@ -850,7 +850,7 @@ void FEAModel::updateScalarFieldData() {
         for (size_t i = 0; i < displacementCount; ++i)
             volumetricVertices[i].texCoords.x = nodalDisplacementMagnitudes[i];
 
-        // new_TODO_03 §2a: after fracture, detached / near-singular nodes pick up
+        // after fracture, detached / near-singular nodes pick up
         // enormous displacements that blow up the raw max and collapse the contour
         // to flat blue. When fracture state is active, base the colour range on the
         // 1st/99th PERCENTILE over only the nodes that still belong to >=1 alive
@@ -933,7 +933,7 @@ void FEAModel::updateBounds() {
 
 int FEAModel::getActiveScalarMode() const {
     if (showVolumetricMesh && hasVolumetricMesh) {
-        // new_TODO_03: with fracture results present, the ALIVE body is coloured
+        // with fracture results present, the ALIVE body is coloured
         // by displacement only in the DEFORM view; for MODE / CRACK ORDER / STRESS
         // it goes grey so the colour-coded dead elements (second pass) read clearly.
         if (!elementFailureMode.empty()) {
@@ -974,7 +974,7 @@ bool FEAModel::generateVolumetricMesh() {
 
     std::cout << "Starting TetGen Meshing..." << std::endl;
 
-    // TODO_03: snapshot the input surface BEFORE TetGen so fidelity check
+    // snapshot the input surface BEFORE TetGen so fidelity check
     // compares the original boundary, not any post-optimisation state.
     refSurfaceForFidelity.positions.clear();
     refSurfaceForFidelity.positions.reserve(surfaceVertices.size());
@@ -1068,7 +1068,7 @@ bool FEAModel::generateVolumetricMesh() {
     }
 
     float absoluteMaxVol = bboxVolume * (params.maxVolPercent / 100.0f);
-    // TODO_01: tighter TetGen switches.
+    // tighter TetGen switches.
     //   pq<radius-edge>/<min-dihedral>  -- quality bounds (Plan A.4 / care-point #?).
     //   a<maxVol>                       -- per-tet volume cap.
     //   A                               -- assign region attributes (no-op without regions).
@@ -1137,7 +1137,7 @@ bool FEAModel::generateVolumetricMesh() {
               << " tri-faces (" << out.numberoftrifaces << " boundary)." << std::endl;
 
     MeshQuality::emitReport(out, params);
-    // TODO_04: if a B-rep is retained, use exact OCC nearest-point for the
+    // if a B-rep is retained, use exact OCC nearest-point for the
     // forward Hausdorff pass (dramatically tighter result on smooth geometry).
     if (hasBRep())
         MeshQuality::emitFidelityReport(refSurfaceForFidelity, *brep, out, params);
@@ -1300,14 +1300,14 @@ void FEAModel::generateMidEdgeNodes()
 }
 
 // =============================================================================
-// new_TODO_04: layered-FDM slice data model + 2-D section preview.
+// layered-FDM slice data model + 2-D section preview.
 // These methods take only glm/std types so LayerSlicer.h (and OCC) never leak
 // into FEAModel.h. The slicer free functions live in src/LayerSlicer.cpp.
 // =============================================================================
 
 // Populate the FE-facing LayerStack. `slabBoundaryCoords` is ascending and has
 // nSlabs+1 entries (slab boundaries along the build axis). Per-tet fields
-// (elemSlabIndex / elemRegion) are filled later by new_TODO_05.
+// (elemSlabIndex / elemRegion) are filled later by the slab mesher.
 void FEAModel::setLayerStack(int buildAxis, float physicalLayerThickness,
                              int layersPerSlab,
                              const std::vector<float>& slabBoundaryCoords) {
@@ -1349,7 +1349,7 @@ void FEAModel::buildSlicePreview(const std::vector<glm::vec3>& segmentEndpoints)
     glBindVertexArray(0);
 }
 
-// new_TODO_19E: load-arrow overlay. Geometry from `appliedForces` (tail ->
+// load-arrow overlay. Geometry from `appliedForces` (tail ->
 // tip); each arrow = shaft line + 4 head lines. Same dedicated-VAO pattern as
 // the slice preview so model buffers are untouched.
 void FEAModel::buildForceArrowBuffers() {

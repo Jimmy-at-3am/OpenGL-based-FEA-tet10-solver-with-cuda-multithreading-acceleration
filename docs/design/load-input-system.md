@@ -1,13 +1,12 @@
 # Load & Boundary-Condition Input System — Design
 
 **Date:** 2026-08-09
-**Status:** Approved for implementation
 **Scope:** Algorithmic foundation for entering forces, torques, pressure, distributed
 forces, fixed supports, and gravity in the PolyFEA pre-processor.
 
 ---
 
-## 1. Existing architecture (as inspected)
+## 1. Existing architecture
 
 | Concern | Current state | Consequence for this work |
 |---|---|---|
@@ -461,11 +460,11 @@ into the load list, so replay is order-safe. Redo is cleared on a new command.
 - label text and formatted unit value
 - `HitId` per draggable gizmo component
 
-Command interface for the visual agent: begin/update/end/cancel drag, change magnitude,
+Command interface for renderer integration: begin/update/end/cancel drag, change magnitude,
 change direction mode, reverse direction, change target, commit, delete, undo, redo.
 
 Placeholder gizmos in `LoadGizmo.cpp` draw with the existing `GL_LINES` overlay pattern so
-the feature is usable immediately and the frontend agent replaces appearance only.
+the feature is usable immediately while renderer styling remains replaceable.
 
 ---
 
@@ -510,7 +509,7 @@ unmodified.
 
 ---
 
-## 16. Known limitations (to be confirmed at implementation)
+## 16. Known limitations
 
 - `ObjectLocal` is inert in the app until an object transform exists.
 - Torque on a single node or a collinear region is rejected by design, not approximated.

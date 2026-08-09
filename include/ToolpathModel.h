@@ -1,6 +1,6 @@
 #pragma once
 // =============================================================================
-//  ToolpathModel.h  --  new_TODO_19A: data contract for a parsed Bambu
+//  ToolpathModel.h  --  data contract for a parsed Bambu
 //  .gcode.3mf toolpath (the AUTHORITATIVE geometry source for FDM simulation:
 //  STL carries no units and no per-layer height / infill edits; only the
 //  sliced file records what the printer actually deposits).

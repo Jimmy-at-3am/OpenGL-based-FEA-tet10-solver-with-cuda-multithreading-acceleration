@@ -1,10 +1,10 @@
 // =============================================================================
-//  MeshQuality.h  --  TODO_01 + TODO_02: per-element tetrahedral quality
+//  MeshQuality.h  --  per-element tetrahedral quality
 //                     metrics + console quality-report printer.
 //
 //  Provides:
 //    * MeshQuality::initExactPredicates() -- idempotent wrapper around
-//      Shewchuk's exactinit() (care-point #1 in TODO_01).
+//      Shewchuk's exactinit() (numerical care-point #1).
 //    * Per-element shape measures (all double, all guarded against degenerate
 //      denominators -- care-point #2):
 //        Knupp/Pebay shape, min/max dihedral (deg), scaled Jacobian,
@@ -142,7 +142,7 @@ struct QualityReport {
 };
 
 // -----------------------------------------------------------------------------
-// TODO_03: Geometric fidelity (Hausdorff + normal deviation).
+// Geometric fidelity (Hausdorff + normal deviation).
 // -----------------------------------------------------------------------------
 
 // Snapshot of the input surface taken before TetGen meshing.  Stored in
@@ -165,7 +165,7 @@ struct FidelityReport {
     double     normalDev_max = 0.0;
     double     bboxDiag      = 1.0;  // vol-mesh bbox diagonal (for pass ratio)
     bool       pass          = false; // Hausdorff < 1% bboxDiag AND p95 < 15 deg
-    // TODO_04: true when forward pass used OCC exact nearest-point (NURBS reference).
+    // true when forward pass used OCC exact nearest-point (NURBS reference).
     bool       usedExactBRep = false;
 };
 
@@ -181,7 +181,7 @@ void emitFidelityReport(const RefSurface& ref, const tetgenio& out,
 void emitFidelityReport(const RefSurface& ref, const tetgenio& out,
                         const FEAParams& p);
 
-// TODO_04: BRep-exact overloads.
+// BRep-exact overloads.
 // Forward pass uses OCC BRepExtrema_DistShapeShape (exact NURBS nearest-point)
 // instead of BVH-on-triangulation.  Reverse pass is unchanged (ref → vol BVH).
 // When HAS_OCCT is not defined these fall back to the triangulation path.
@@ -212,8 +212,8 @@ void emitReport(const tetgenio& out, const FEAParams& p);
 // positions         : one entry per node (corner + mid-edge, glm::vec3).
 // tet10Connectivity : flat array, 10 indices per element (0-based).
 // These functions evaluate isoparametric quality at the 4 standard Gauss
-// points.  The Tet10 entry point is shipped as forward-looking API for
-// TODO_08/08; it does NOT gate TODO_02 acceptance (the cube smoke test uses
+// points.  The Tet10 entry point is shipped as a forward-looking API and
+// does NOT gate acceptance (the cube smoke test uses
 // the Tet4 tetgenio path).
 QualityReport computeReportTet10(
     const std::vector<glm::vec3>& positions,

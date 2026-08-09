@@ -182,7 +182,7 @@ static bool loadSTEP_impl(const std::string& path,
     }
 
     // --- Detect cascade unit (after TransferRoots) ---
-    // new_TODO_04C: keep the unit as a mm conversion factor (was previously logged
+    // keep the unit as a mm conversion factor (was previously logged
     // then discarded). FEAModel records the real physical size from it before the
     // 3-unit render normalisation.
     float stepUnitToMM = 1.0f;
@@ -247,7 +247,7 @@ static bool loadSTEP_impl(const std::string& path,
     // --- Harvest ---
     std::vector<int> triangleFaceId;
     harvestTriangles(shape, impl.faceMap, out, triangleFaceId);
-    out.fileUnitToMM = stepUnitToMM; // new_TODO_04C: real-size preservation
+    out.fileUnitToMM = stepUnitToMM; // real-size preservation
 
     if (out.positions.empty() || out.indices.empty()) {
         std::cout << "[STEP] Tessellation produced no triangles for '"

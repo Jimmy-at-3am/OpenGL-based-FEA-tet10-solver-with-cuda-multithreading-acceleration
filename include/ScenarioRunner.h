@@ -1,5 +1,5 @@
 // =============================================================================
-//  ScenarioRunner.h  --  new_TODO_02: headless scenario runner.
+//  ScenarioRunner.h  --  headless scenario runner.
 //
 //  A thin CLI wrapper over the EXACT functions the interactive UI calls
 //  (FEAModel geometry/mesh + FEASolver solve). It loads a JSON scenario, runs
@@ -7,7 +7,7 @@
 //  (mesh stats, solver telemetry, fracture totals, probe values, screenshot
 //  image statistics) plus PNG screenshots, and returns a meaningful exit code.
 //
-//  TOP RULE (new_TODO_02): never fork a parallel pipeline. Every stage here
+//  TOP RULE: never fork a parallel pipeline. Every stage here
 //  calls the same FEAModel / FEASolver method the corresponding UI button does.
 //
 //  Exit codes:

@@ -5,7 +5,7 @@ inline const char* modelVS = R"(
 layout (location = 0) in vec3 aPos;
 layout (location = 1) in vec3 aNormal;
 layout (location = 2) in vec2 aTexCoords;
-layout (location = 3) in float aElementScalar;   // new_TODO_03: per-element value
+layout (location = 3) in float aElementScalar;   // per-element value
 out vec3 FragPos;
 out vec3 Normal;
 out vec2 ScalarData;
@@ -34,7 +34,7 @@ uniform vec3 objectColor;
 uniform int scalarMode;
 uniform float scalarMin;
 uniform float scalarMax;
-uniform float fragAlpha;          // new_TODO_03: 1.0 normally, <1 for GHOST dead pass
+uniform float fragAlpha;          // 1.0 normally, <1 for GHOST dead pass
 // Sectional view: when sectionOn == 1, fragments below the world-space cut
 // height (Z) are discarded so the interior above the cut plane is exposed.
 // Uniforms default to 0 -> feature off for every path that never sets them.
@@ -49,7 +49,7 @@ vec3 contourColor(float t) {
     return mix(vec3(1.0, 0.92, 0.10), vec3(0.85, 0.00, 0.00), (t - 0.75) / 0.25);
 }
 
-// new_TODO_03: categorical failure-mode colour (matches the UI legend).
+// categorical failure-mode colour (matches the UI legend).
 vec3 categoricalColor(float m) {
     int mi = int(m + 0.5);
     if (mi == 1) return vec3(0.85, 0.05, 0.05); // interlayer tension - red

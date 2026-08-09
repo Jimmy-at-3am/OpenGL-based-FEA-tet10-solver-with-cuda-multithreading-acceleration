@@ -1,5 +1,5 @@
 // =============================================================================
-//  LayerSlicer.cpp  --  new_TODO_04: SLICE data model + slice-plane contour
+//  LayerSlicer.cpp  --  SLICE data model + slice-plane contour
 //  extraction (triangle-mesh path + layer grouping + Clipper2 cleanup).
 //
 //  Pipeline per slab-centre plane:
@@ -10,8 +10,8 @@
 //    5. Even-odd containment -> classify outer (CCW) vs hole (CW).
 //
 //  The B-rep path (sliceBRepPlane) lives in StepSlicer.cpp and is preferred when
-//  a BRepHandle is present; it returns false until new_TODO_04B lands the OCC
-//  body, so callers transparently fall back to the triangle path here.
+//  a BRepHandle is present; it returns false until the analytic OCC body is
+//  implemented, so callers transparently fall back to the triangle path here.
 // =============================================================================
 #include "LayerSlicer.h"
 
@@ -36,7 +36,7 @@ namespace LayerSlicer {
 // normal: X->(y,z) [y x z=+x], Y->(z,x) [z x x=+y], Z->(x,y) [x x y=+z]. A naive
 // Y->(x,z) is left-handed (x x z = -y), which would silently flip 'outer CCW' to
 // physically CW about +Y and mirror the section preview -- inconsistent with the
-// other two axes and a trap for the new_TODO_05 extrusion (which derives the
+// other two axes and a trap for the slab extrusion (which derives the
 // wall-offset side from the loop winding). Keeping all three right-handed makes
 // the documented "outer CCW" contract hold uniformly.
 static inline glm::vec2 to2D(const glm::vec3& p, int axis) {
@@ -72,7 +72,7 @@ double signedArea(const std::vector<glm::vec2>& loop) {
 
 // Even-odd point-in-polygon (ray cast). Boundary cases are irrelevant here
 // because we test loop centroids, which sit strictly inside/outside for the
-// convex cross-sections this TODO validates.
+// convex cross-sections handled here.
 static bool pointInLoop(const glm::vec2& pt, const std::vector<glm::vec2>& loop) {
     bool inside = false;
     const size_t n = loop.size();
@@ -192,7 +192,7 @@ static void stitchLoops(const std::vector<std::pair<glm::vec2, glm::vec2>>& segs
         const int64_t bix = (int64_t)std::llround(p.x * invTol);
         const int64_t biy = (int64_t)std::llround(p.y * invTol);
         // Search the 3x3 neighbourhood so points straddling a cell border still
-        // merge (robust weld, TODO_03/04 convention). Each neighbour key is
+        // merge (robust weld convention). Each neighbour key is
         // re-packed from the integer cell so the iy-seam carry bug cannot occur.
         for (int dy = -1; dy <= 1; ++dy)
             for (int dx = -1; dx <= 1; ++dx) {
@@ -307,7 +307,7 @@ static Section cleanupSection(std::vector<std::vector<glm::vec2>> loops,
     return classifySection(std::move(loops));
 }
 
-// Public (new_TODO_19B shares it): even-odd containment classification.
+// Public (shared with the toolpath-section builder): even-odd containment classification.
 // depth = number of OTHER loops containing this loop's probe point; even ->
 // outer (CCW), odd -> hole (CW).
 Section classifySection(std::vector<std::vector<glm::vec2>> loops) {

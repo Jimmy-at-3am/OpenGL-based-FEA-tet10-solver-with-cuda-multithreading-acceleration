@@ -1,5 +1,5 @@
 // =============================================================================
-//  tools/gen_unit_cube_stl.cpp -- TODO_01 fixture generator.
+//  tools/gen_unit_cube_stl.cpp -- fixture generator.
 //
 //  Produces assets/test_fixtures/unit_cube.stl, a binary STL of a 1 m^3
 //  axis-aligned cube centred at the origin, tessellated identically to

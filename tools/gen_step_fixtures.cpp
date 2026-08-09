@@ -1,5 +1,5 @@
 // =============================================================================
-// gen_step_fixtures.cpp  --  TODO_04 helper tool
+// gen_step_fixtures.cpp  --  helper tool
 //
 // Generates two STEP test fixtures:
 //   assets/test_fixtures/unit_cube.step   -- 1 mm × 1 mm × 1 mm box

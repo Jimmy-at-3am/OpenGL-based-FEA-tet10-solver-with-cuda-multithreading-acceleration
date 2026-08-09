@@ -1,6 +1,6 @@
 #pragma once
 // =============================================================================
-//  ToolpathSections.h  --  new_TODO_19B: bead segments -> per-layer "cookie"
+//  ToolpathSections.h  --  bead segments -> per-layer "cookie"
 //  polygons (the owner's two algorithms, 2026-07-02):
 //    1. rectangle-ize: every extruding move becomes an oriented rectangle
 //       (the oval/stadium bead cross-section squared off, endpoints extended

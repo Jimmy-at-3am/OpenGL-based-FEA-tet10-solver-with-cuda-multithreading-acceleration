@@ -1,6 +1,6 @@
 #pragma once
 // =============================================================================
-//  LayerSlicer.h  --  new_TODO_04: SLICE data model + slice-plane contour
+//  LayerSlicer.h  --  SLICE data model + slice-plane contour
 //  extraction. Produces, for every layer plane along the build axis, a clean
 //  closed-polygon cross-section (outer loops CCW, holes CW). No 3-D meshing yet.
 //
@@ -42,7 +42,7 @@ struct SliceGrouping {
     int   nSlabs = 0;                // ceil(nPhysical / k)
     float physicalLayerThickness = 0.0f; // model-space layer thickness (for slab boundaries)
     float slabThickness = 0.0f;          // k * physicalLayerThickness (model space)
-    // new_TODO_04C: physically-readable thicknesses in MILLIMETRES.
+    // physically-readable thicknesses in MILLIMETRES.
     float physThickMM = 0.0f;            // = FEAParams::layerThickness (mm)
     float slabThickMM = 0.0f;            // = k * layerThickness (mm)
     std::vector<float> slabBoundaries;   // model-space, ascending, nSlabs+1 (top may be thinner)
@@ -50,7 +50,7 @@ struct SliceGrouping {
 
 // Per-plane diagnostic stats (for the report + console). Areas carry BOTH the
 // model-space value (for back-compat / scale-invariant ratios) and the physical
-// mm / mm^2 value (new_TODO_04C: the physically-readable numbers).
+// mm / mm^2 value (the physically-readable numbers).
 struct PlaneStats {
     float  z = 0.0f;            // model-space plane height
     float  zMM = 0.0f;          // physical plane height (mm, from model centre)
@@ -100,12 +100,12 @@ double signedArea(const std::vector<glm::vec2>& loop);
 
 // Classify raw closed loops into a Section with the shared convention
 // (even-odd nesting depth: even -> outer CCW, odd -> hole CW). Extracted from
-// the slice-plane cleanup so the toolpath-section builder (new_TODO_19B) emits
+// the slice-plane cleanup so the toolpath-section builder emits
 // the exact same contract without duplicating the nesting logic.
 Section classifySection(std::vector<std::vector<glm::vec2>> loops);
 
 // B-rep section seam (defined in StepSlicer.cpp). Returns false when no B-rep
-// path is available (the OCC body lands in new_TODO_04B), so callers fall back to
+// path is available (the analytic OCC body is not yet implemented), so callers fall back to
 // the triangle path. `brep` is only dereferenced inside the OCC-enabled body.
 bool sliceBRepPlane(const BRepHandle& brep, int axis, float coord, double Ldiag,
                     Section& out);

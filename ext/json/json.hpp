@@ -1,8 +1,8 @@
 // =============================================================================
 //  ext/json/json.hpp  --  minimal, dependency-free JSON value type for the
-//  PolyFEA agent self-test harness (new_TODO_02).
+//  PolyFEA headless regression harness.
 //
-//  Vendored + offline-safe per the project handoff convention. This is NOT the
+//  Kept dependency-free and offline-safe. This is NOT the
 //  full nlohmann/json library; it is a compact hand-written implementation that
 //  supports exactly what the scenario runner needs: parse a scenario file,
 //  serialise a pretty-printed report, preserve object key insertion order (so

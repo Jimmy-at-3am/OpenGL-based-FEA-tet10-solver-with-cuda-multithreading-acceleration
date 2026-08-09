@@ -1,5 +1,5 @@
 // =============================================================================
-//  MeshQuality.cpp -- TODO_01 + TODO_02 implementation.
+//  MeshQuality.cpp -- per-element tetrahedral quality metrics.
 //
 //  Implements:
 //    * initExactPredicates(maxCoord)
@@ -8,7 +8,7 @@
 //    * computeReportTet10(positions, connectivity, FEAParams)
 //    * emitReportTet10(positions, connectivity, FEAParams[, ostream])
 //
-//  Numerical care-points (per TODO_01 + TODO_02):
+//  Numerical care-points:
 //    #1  exactinit() must be called before any orient3d/insphere use.
 //    #2  Guard Knupp denominator: if (det < 1e-30) return 0.
 //   #16  Use std::clamp(x, -1, 1) before acos for dihedrals.
@@ -531,7 +531,7 @@ double medianInPlace(std::vector<double>& v)
 }
 
 // =============================================================================
-// TODO_03: BVH for nearest-triangle queries (Hausdorff + normal deviation).
+// BVH for nearest-triangle queries (Hausdorff + normal deviation).
 // =============================================================================
 
 // Axis-aligned bounding box (double precision).
@@ -1282,7 +1282,7 @@ void emitReportTet10(
 }
 
 // =============================================================================
-//  Public: computeFidelity (TODO_03)
+//  Public: computeFidelity
 // =============================================================================
 FidelityReport computeFidelity(const RefSurface& ref, const tetgenio& out,
                                const FEAParams& p)
@@ -1501,7 +1501,7 @@ FidelityReport computeFidelity(const RefSurface& ref, const tetgenio& out,
 }
 
 // =============================================================================
-//  Public: emitFidelityReport (TODO_03)
+//  Public: emitFidelityReport
 // =============================================================================
 static void emitFidelityImpl(const FidelityReport& r, std::ostream& os)
 {
@@ -1548,7 +1548,7 @@ void emitFidelityReport(const RefSurface& ref, const tetgenio& out,
 }
 
 // =============================================================================
-//  TODO_04: BRep-exact fidelity overloads
+//  BRep-exact fidelity overloads
 //
 //  Forward pass: for each vol-boundary sample point, call
 //  brep.nearestPointOnShape() (exact NURBS) instead of the BVH.

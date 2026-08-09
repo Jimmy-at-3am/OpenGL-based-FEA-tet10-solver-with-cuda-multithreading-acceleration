@@ -1,6 +1,6 @@
 #pragma once
 // =============================================================================
-//  SlabMesher.h  --  new_TODO_05: per-slab 2D ear-clip triangulation + prism
+//  SlabMesher.h  --  per-slab 2D ear-clip triangulation + prism
 //  extrusion -> conformal tetrahedral slabs.
 //
 //  The sole public entry is meshSlabs().  It reads the SliceResult produced by
@@ -12,10 +12,10 @@
 //
 //  Adjacent slabs with identical 2D topology share ring nodes (conforming mesh,
 //  zero Steiner points).  Non-identical topology produces independent rings;
-//  conforming stitching across topology changes is deferred to new_TODO_06.
+//  TODO: conforming stitching across topology changes is not yet implemented.
 // =============================================================================
 #include "LayerSlicer.h"
-#include "ToolpathSections.h"   // new_TODO_19C-b: toolpath-lane input
+#include "ToolpathSections.h"   // toolpath-lane input
 #include "FEAData.h"
 #include <atomic>
 
@@ -49,14 +49,14 @@ MeshStats meshSlabs(const LayerSlicer::SliceResult& slice,
                     FEAModel& model);
 
 // =============================================================================
-// new_TODO_19C-b: toolpath lane. Meshes the per-layer cookie sections
+// toolpath lane. Meshes the per-layer cookie sections
 // (ToolpathSections output) into Tet4 slabs the way the printer builds them:
 // every slab gets its OWN 2-D triangulation (sections differ per layer, so no
 // shared rings), holes are bridged into the outer loop (Eberly keyholes), the
 // boundary is resampled coarsely ALONG ribbons (the owner's strip pattern: one
 // element across a bead, alternating apex — accuracy comes from Tet10, not
 // density), and consecutive slabs are coupled by barycentric weld TIES stored
-// in LayerStack::interfaces (the new_TODO_06 registry).
+// in LayerStack::interfaces (the weld-interface registry).
 // =============================================================================
 struct ToolpathMeshOptions {
     // Layer-grouping cap (k = ceil(nLayers/maxSlabs)). 128 keeps a typical
@@ -65,7 +65,7 @@ struct ToolpathMeshOptions {
     // that explicitly specify mesh.maxSlabs remain unaffected.
     int   maxSlabs     = 128;
     float targetEdgeMM = -1.0f; // boundary resample step; <0 -> 5 x median width
-    float tieAlpha     = 100.0f;// penalty stiffness factor (06 spec)
+    float tieAlpha     = 100.0f;// interlayer penalty stiffness factor
     std::atomic<float>* progressOut = nullptr;     // optional, 0..1
     std::atomic<bool>*  cancelRequested = nullptr; // checked per slab/interface
     float progressLo = 0.0f, progressHi = 1.0f;
