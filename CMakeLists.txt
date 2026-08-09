@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.20)
 option(USE_CUDA "Enable CUDA solver" ON)
 
 # ---------------------------------------------------------------------------
-# TODO_04: OpenCASCADE (OCCT) — STEP loader + analytic B-rep retention.
+# OpenCASCADE (OCCT) — STEP loader + analytic B-rep retention.
 #
 # Usage:
 #   cmake -S . -B build -DOCCT_ROOT="C:/OpenCASCADE-7.8.1-vc14-64" ...
@@ -146,7 +146,7 @@ endif()
 # miniz_SOURCE_DIR is now set; add include path and .c to SOURCES below.
 
 # --- Clipper2 (optional): robust 2-D polygon boolean + cleanup for slicing ---
-# new_TODO_04: LayerSlicer uses Clipper2 Union(EvenOdd)+SimplifyPaths as a
+# LayerSlicer uses Clipper2 Union(EvenOdd)+SimplifyPaths as a
 # robustness backstop when stitching slice-plane contours from dirty STL. It is
 # OPTIONAL — LayerSlicer.cpp has a raw-loop fallback guarded by HAS_CLIPPER2, so
 # a failed/disabled fetch degrades gracefully (clean meshes still slice).
@@ -176,8 +176,7 @@ if(USE_CLIPPER2)
   endif()
 endif()
 
-# --- CDT (new_TODO_19C-b, sanctioned by the new_TODO_05 spec + AGENT_DEV_GUIDE
-# third-party index): artem-ogre/CDT constrained Delaunay triangulation for
+# --- CDT (optional): artem-ogre/CDT constrained Delaunay triangulation for
 # the toolpath cookie sections (polygons with many holes — the hand-rolled
 # hole-bridging failed on Bambu's 46-hole diagonal-grid infill). Header-only;
 # populated like Clipper2. ---
@@ -233,11 +232,11 @@ set(SOURCES
     src/StepSlicer.cpp        # B-rep section seam (OCC body deferred to 04B)
     # new_TODO_05: per-slab 2D triangulation + prism extrusion -> Tet4 slabs
     src/SlabMesher.cpp
-    # new_TODO_19A: Bambu .gcode.3mf toolpath ingest (authoritative FDM source)
+    # Bambu .gcode.3mf toolpath ingest (authoritative FDM source)
     src/GcodeToolpathLoader.cpp
-    # new_TODO_19B: bead rectangles -> per-layer cookie sections (Clipper2)
+    # bead rectangles -> per-layer cookie sections (Clipper2)
     src/ToolpathSections.cpp
-    # new_TODO_02: headless agent self-test harness
+    # headless self-test / regression harness
     src/ScenarioRunner.cpp
     src/glad.c
     src/tetgen.cxx
@@ -245,7 +244,7 @@ set(SOURCES
     # --- Geometry loader pipeline ---
     src/STLLoader.cpp
     src/ThreeMFLoader.cpp
-    # TODO_04: STEP loader + analytic B-rep (OCC-guarded at compile time)
+    # STEP loader + analytic B-rep (OCC-guarded at compile time)
     src/StepLoader.cpp
     src/BRepHandle.cpp
     # miniz 2.2.0 split sources (ZIP decompressor for .3mf)
@@ -281,12 +280,12 @@ endif()
 # --- Create executable (C/C++ only; CUDA linked via FEACudaKernels) ---
 add_executable(${PROJECT_NAME} ${SOURCES})
 
-# --- Clipper2 (new_TODO_04): include path + HAS_CLIPPER2 only when populated ---
+# --- Clipper2: include path + HAS_CLIPPER2 only when populated ---
 if(HAS_CLIPPER2)
     target_include_directories(${PROJECT_NAME} PRIVATE ${CLIPPER2_INCLUDE_DIR})
     target_compile_definitions(${PROJECT_NAME} PRIVATE HAS_CLIPPER2=1)
 endif()
-# --- CDT (new_TODO_19C-b): include path + HAS_CDT only when populated ---
+# --- CDT: include path + HAS_CDT only when populated ---
 if(HAS_CDT)
     target_include_directories(${PROJECT_NAME} PRIVATE ${CDT_INCLUDE_DIR})
     target_compile_definitions(${PROJECT_NAME} PRIVATE HAS_CDT=1)
@@ -307,7 +306,7 @@ if(HAS_CUDA)
     target_compile_definitions(${PROJECT_NAME} PRIVATE HAS_CUDA=1)
 endif()
 
-# --- OpenCASCADE (TODO_04) ---
+# --- OpenCASCADE ---
 if(HAS_OCCT)
     # OCCT modules needed for STEP reading, B-rep, tessellation, healing,
     # and exact nearest-point queries.  CMake resolves transitive deps.
@@ -410,7 +409,7 @@ foreach(MAT_FILE ${MAT_FILES})
     )
 endforeach()
 
-# --- Copy scenarios/ and regression/ next to the executable (new_TODO_02) ---
+# --- Copy scenarios/ and regression/ next to the executable ---
 # The headless harness reads scenarios/*.json and regression/*.txt relative to
 # the working directory, so mirror both folders into the build output.
 # ALL-target (not POST_BUILD): a scenario-only edit produces "ninja: no work to
@@ -425,7 +424,7 @@ add_custom_target(stage_harness_data ALL
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         "${CMAKE_SOURCE_DIR}/regression"
         "$<TARGET_FILE_DIR:${PROJECT_NAME}>/regression"
-    # new_TODO_19E: sliced-gcode fixtures + showcase defaults live in their OWN
+    # sliced-gcode fixtures + showcase defaults live in their OWN
     # staged subfolder (the UI file panel reads "." and "gcode_models/" as two
     # sections; scenarios reference "gcode_models/<file>").
     COMMAND ${CMAKE_COMMAND} -E copy_directory
@@ -437,8 +436,8 @@ add_dependencies(stage_harness_data ${PROJECT_NAME})
 
 # --- Diagnostic tool ---
 # MeshQuality.cpp is linked into mesh_diag as well so both binaries share the
-# same quality library (TODO_01).  The diagnostic still has its own local
-# aspect-ratio routine, but future TODOs route mesh_diag through MeshQuality.
+# same quality library.  The diagnostic still has its own local aspect-ratio
+# routine; routing mesh_diag fully through MeshQuality is future work.
 add_executable(mesh_diag
     src/mesh_diag.cpp
     src/MeshQuality.cpp
@@ -455,7 +454,7 @@ add_custom_command(TARGET mesh_diag POST_BUILD
         "$<TARGET_FILE_DIR:mesh_diag>"
 )
 
-# --- TODO_01 fixture generator ---
+# --- Unit-cube fixture generator ---
 # Standalone one-shot tool that writes assets/test_fixtures/unit_cube.stl by
 # replicating FEAModel::generate_face's tessellation at size=1, sub=5.
 # Independent of OpenGL/TetGen so it builds and runs in any environment.
@@ -463,7 +462,7 @@ add_executable(gen_unit_cube_stl tools/gen_unit_cube_stl.cpp)
 set_target_properties(gen_unit_cube_stl PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools")
 
-# --- TODO_04 STEP fixture generator ---
+# --- STEP fixture generator ---
 # Generates assets/test_fixtures/unit_cube.step and sphere_r1.step using OCCT
 # primitives.  Only built when HAS_OCCT=1.
 if(HAS_OCCT)

@@ -71,13 +71,13 @@ public:
     //   CantileverBendingZ  : fix nodes at X_min, apply a concentrated
     //                         force in the -Z direction at the centroid of X_max.
     //                         Ideal for validating against Euler-Bernoulli formulas.
-    //   FacePull / FaceBend : new_TODO_19C well-posed face presets — clamp ALL
+    //   FacePull / FaceBend : well-posed face presets — clamp ALL
     //                         DOF on the min-face of `faceAxis` (no rigid
     //                         modes, unlike the Tension* single-node anchor),
     //                         equal-split the total force over the max-face
     //                         nodes: FacePull along +faceAxis, FaceBend along
     //                         `bendDir` (transverse, face-shear bending).
-    //   ThreePointBend      : classic 3-point bend (new_TODO_19D bending test).
+    //   ThreePointBend      : classic 3-point bend test.
     //                         Beam axis = faceAxis; load direction = bendDir.
     //                         Two support bands on the bendDir-MIN surface at
     //                         beamCentre ± span/2 (rollers: bendDir + third
@@ -95,7 +95,7 @@ public:
     int bendDir  = 0;  // FaceBend/ThreePointBend: force direction (!= faceAxis)
     double bendSpanMM = 50.0;         // ThreePointBend: requested support span
     double lastEffectiveSpanMM = 0.0; // ThreePointBend: measured node-band span
-    // new_TODO_19D equilibrium telemetry (FacePull/FaceBend only): the exact
+    // equilibrium telemetry (FacePull/FaceBend only): the exact
     // force sum applied along the load direction, and the clamp reaction
     // recovered from the penalty method (R = penalty * u_clamped per DOF).
     double lastAppliedForceN  = 0.0;
@@ -245,7 +245,7 @@ private:
         const std::vector<std::pair<int,int>>& singleDofFixed,
         int nNodes) const;
 
-    // new_TODO_04C: physical-units bridge. The renderer keeps geometry in the
+    // physical-units bridge. The renderer keeps geometry in the
     // 3-unit model space, but the FE math must run in real SI (metres, N, Pa) so
     // stress/displacement and the fracture comparison respect the ACTUAL part
     // size. scaleGeometryToMeters() rescales originalVolumetricPositions to metres

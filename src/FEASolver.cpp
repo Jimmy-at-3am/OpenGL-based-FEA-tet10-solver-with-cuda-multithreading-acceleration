@@ -358,7 +358,7 @@ static void symmetrizeLoadYAxial(VectorXd&               F_out,
 }
 
 // -----------------------------------------------------------------------------
-// new_TODO_04C: physical-units bridge (model space <-> real SI metres).
+// physical-units bridge (model space <-> real SI metres).
 // The whole solver reads geometry from model.originalVolumetricPositions, so
 // rescaling that one array to metres at the outermost solve entry makes every
 // downstream computation (stiffness, loads, stress, fracture) physical without
@@ -380,7 +380,7 @@ void FEASolver::restoreGeometryToModel(FEAModel& model) {
     model.originalVolumetricPositions = m_savedModelPositions; // exact model-space restore
     m_savedModelPositions.clear();
     m_geomInMeters = false;
-    // new_TODO_19E: appliedForces were recorded while the geometry was in
+    // appliedForces were recorded while the geometry was in
     // METRES; convert the arrow endpoints to model space here — the single
     // owner of the scale for both the linear and (outer) fracture solves.
     // (A conversion at the inner linear writeback missed the fracture path,
@@ -526,7 +526,7 @@ bool FEASolver::solveLinearStatic(FEAModel& model, float visualScale,
         model.generateMidEdgeNodes();
     }
 
-    // new_TODO_04C: run the FE math in real SI metres (after mid-edge nodes exist
+    // run the FE math in real SI metres (after mid-edge nodes exist
     // so they are scaled too). didScale is false when an outer solve (fracture)
     // already scaled the geometry, so we neither re-scale nor restore here.
     const bool didScale = scaleGeometryToMeters(model);
@@ -921,7 +921,7 @@ bool FEASolver::solveLinearStatic(FEAModel& model, float visualScale,
                   << "  faces: -=" << faceMin.size() << " +=" << faceMax.size() << " nodes." << std::endl;
     } else if (loadType == LoadType::FacePull ||
                loadType == LoadType::FaceBend) {
-        // new_TODO_19C: clamp ALL DOF on the min-face of faceAxis (statically
+        // clamp ALL DOF on the min-face of faceAxis (statically
         // well-posed — no rigid-body modes, deliberately avoiding the Tension*
         // single-node-anchor blowup documented 2026-07-02), load the max-face.
         const int ta = (faceAxis >= 0 && faceAxis <= 2) ? faceAxis : 2;
@@ -942,7 +942,7 @@ bool FEASolver::solveLinearStatic(FEAModel& model, float visualScale,
                   << " nodes at min-face, loading " << loadedNodes.size()
                   << " nodes at max-face." << std::endl;
     } else if (loadType == LoadType::ThreePointBend) {
-        // new_TODO_19D bending: geometry is in METRES here (scale-solve path).
+        // bending: geometry is in METRES here (scale-solve path).
         const int a = (faceAxis >= 0 && faceAxis <= 2) ? faceAxis : 2;
         const int d = bendDir;
         const int e = 3 - a - d;
@@ -1094,7 +1094,7 @@ bool FEASolver::solveLinearStatic(FEAModel& model, float visualScale,
                   << " N over " << faceMaxT.size() << "(+)/" << faceMinT.size() << "(-) nodes" << std::endl;
     } else if (loadType == LoadType::FacePull ||
                loadType == LoadType::FaceBend) {
-        // new_TODO_19C: equal nodal split of the total force over the loaded
+        // equal nodal split of the total force over the loaded
         // face. Equal split on Tet10 corner+midside nodes is not a consistent
         // load vector, but the SAME scheme is used for every mesh, so the
         // standing-vs-lying ORDERING comparison is scheme-invariant; the
@@ -1199,7 +1199,7 @@ bool FEASolver::solveLinearStatic(FEAModel& model, float visualScale,
     // Must run BEFORE penalty BCs zero the fixed-node F entries.
     recordAppliedForceArrows(model, F, nNodes);
 
-    // ---- new_TODO_19C-b: interlayer weld ties (new_TODO_06 registry) ----
+    // ---- interlayer weld ties (weld-interface registry) ----
     // Toolpath slabs have independent node rings per slab; each tie couples a
     // slab-s top node to its containing triangle on slab s+1's bottom ring via
     // penalty springs on the constraint u_top - sum(bary_i * u_bot_i) per DOF:
@@ -1405,7 +1405,7 @@ bool FEASolver::solveLinearStatic(FEAModel& model, float visualScale,
 
     if (U_out) *U_out = U;
 
-    // new_TODO_19D: clamp-reaction recovery for the face presets. With the
+    // clamp-reaction recovery for the face presets. With the
     // penalty BC method the reaction at a clamped DOF is penalty * u (the
     // spring force that holds the node at ~0). Summed along the load axis it
     // must balance the applied resultant; the residual also carries the
@@ -1425,7 +1425,7 @@ bool FEASolver::solveLinearStatic(FEAModel& model, float visualScale,
         lastReactionSumN = std::abs(rsum);   // magnitude convention (load is -d)
     }
 
-    // new_TODO_04C: U is now the PHYSICAL displacement in metres. Record the real
+    // U is now the PHYSICAL displacement in metres. Record the real
     // max nodal displacement (mm) for the report, then convert the (exaggerated)
     // displacement back to model space so the deformed overlay renders in the
     // 3-unit render frame the camera expects.
@@ -1441,7 +1441,7 @@ bool FEASolver::solveLinearStatic(FEAModel& model, float visualScale,
     #pragma omp parallel for schedule(static) if(useMultithreading)
     for (int i = 0; i < nNodes; ++i) {
         // TRUE physical displacement (mm), no exaggeration — probe truth
-        // source (new_TODO_19C; probes previously read the x10 render overlay).
+        // source (probes previously read the x10 render overlay).
         model.nodalDispMM[i] = glm::vec3(
             static_cast<float>(U(i * 3 + 0) * 1000.0),
             static_cast<float>(U(i * 3 + 1) * 1000.0),
@@ -2710,7 +2710,7 @@ bool FEASolver::solveBrittleFracture(FEAModel& model, float visualScale, int max
     if (static_cast<int>(model.elementFailureIter.size()) != nElems)
         model.elementFailureIter.assign(nElems, -1);
     model.elementFailureMode.assign(nElems, 0);
-    // new_TODO_03: per-element von Mises captured at the iteration each element
+    // per-element von Mises captured at the iteration each element
     // dies (visualization only; reset to 0 = alive at the start of every run).
     model.elementVonMisesAtDeath.assign(nElems, 0.0f);
 
@@ -2752,7 +2752,7 @@ bool FEASolver::solveBrittleFracture(FEAModel& model, float visualScale, int max
     // isTet10 must be derived AFTER the auto-detection above.
     const bool isTet10 = useQuadraticElements && model.hasQuadraticMesh;
 
-    // new_TODO_04C: scale to real SI metres for the whole fracture loop. The
+    // scale to real SI metres for the whole fracture loop. The
     // precomputed per-element D*B below and the nested solveLinearStatic both read
     // the now-metre originalVolumetricPositions, so recovered von Mises stress is
     // physical Pa and the comparison vs fractureStress respects the actual part
@@ -2860,7 +2860,7 @@ bool FEASolver::solveBrittleFracture(FEAModel& model, float visualScale, int max
         }
 
         if (!ok || U.size() == 0) {
-            // new_TODO_19C-b: a singular system AFTER elements have already
+            // a singular system AFTER elements have already
             // failed means the crack SEVERED the part — a freed chunk has
             // rigid modes. That is the correct terminal state of a break
             // test (the 19D standing-vs-lying acceptance depends on reaching

@@ -54,7 +54,7 @@ static constexpr int kModelsPerPage = 6;
 
 namespace fs = std::filesystem;
 
-// new_TODO_19E: the file panel reads TWO folders — "." (classic design models,
+// the file panel reads TWO folders — "." (classic design models,
 // staged flat) and "gcode_models/" (Bambu sliced exports + showcase defaults).
 // Entries keep their relative path (loadFile uses it); the UI displays the
 // bare filename with a GCODE badge for *.gcode.3mf.
@@ -77,7 +77,7 @@ void scanForModels() {
     std::sort(modelFiles.begin(), modelFiles.end());
 }
 
-// new_TODO_19E: showcase defaults (per-gcode-model calibrated load magnitude
+// showcase defaults (per-gcode-model calibrated load magnitude
 // from the 19D acceptance runs; 0 for uncalibrated models). Loaded once from
 // gcode_models/showcase_defaults.json (tiny hand parser — same key=value
 // robustness philosophy as the .mat loader; the file is machine-written).
@@ -176,7 +176,7 @@ std::vector<std::string> matFiles;
 std::string activeMaterialFile;
 MaterialProps currentMaterial;
 
-// new_TODO_19E: showcase state — magnitude typed by the user (N / N*m), the
+// showcase state — magnitude typed by the user (N / N*m), the
 // defaults record for the loaded gcode model, and the keyboard input queue
 // (filled by the GLFW char/key callbacks below main()).
 static ShowcaseDefaults showcaseCfg;
@@ -554,7 +554,7 @@ int runInteractive() {
                             camera.OrbitTarget = glm::vec3(0.0f);
                             camera.OrbitRadius = 5.0f;
                             if (isGcode) {
-                                // new_TODO_19E: pull the stored showcase default
+                                // pull the stored showcase default
                                 // (calibrated magnitude etc.) and auto-select the
                                 // PLA card — the gcode showcase is FDM physics.
                                 showcaseCfg = showcaseDefaultsFor(display);
@@ -690,7 +690,7 @@ int runInteractive() {
         static SlabMesher::ToolpathMeshStats lastTpStats;
         static bool hasTpStats = false;
 
-        // --- new_TODO_04: SLICE controls (shared by CUBE + IMPORT, handoff 5.4) ---
+        // --- SLICE controls (shared by CUBE + IMPORT) ---
         // The SLICE PREVIEW button calls the EXACT free functions the headless
         // harness calls in ScenarioRunner::runSlice (LayerSlicer::computeSlices +
         // model.setLayerStack + sectionToSegments + model.buildSlicePreview).
@@ -746,7 +746,7 @@ int runInteractive() {
             }
             y += 32.0f;
 
-            // new_TODO_04C: physical (real-world) readout — real mm dimensions and
+            // physical (real-world) readout — real mm dimensions and
             // the true layer count, so the print is physically readable.
             {
                 glm::vec3 mm = model.physicalSizeMM();
@@ -817,7 +817,7 @@ int runInteractive() {
 
             if (ui.button("GENERATE 3D MESH", rX, rY, rW, 35.0f)) {
                 if (model.hasToolpath()) {
-                    // new_TODO_19E: gcode models mesh through the toolpath lane
+                    // gcode models mesh through the toolpath lane
                     // — the EXACT functions the harness calls, on a worker.
                     // [same-path: mesh.method="toolpath" in ScenarioRunner]
                     // Slab cap: never below 128. The stored 19D defaults (8-12)
@@ -868,7 +868,7 @@ int runInteractive() {
             }
             rY += 40.0f;
 
-            // ===== new_TODO_19E: GCODE SHOWCASE panel =====
+            // ===== GCODE SHOWCASE panel =====
             // Workflow: pick gcode model -> GENERATE 3D MESH -> type/accept the
             // magnitude -> RUN -> color-spectrum result + 3-D load arrows.
             if (model.hasToolpath()) {
@@ -1163,7 +1163,7 @@ int runInteractive() {
                 }
                 rY += 30.0f;
 
-                // new_TODO_03: fracture result controls (only when a fracture run
+                // fracture result controls (only when a fracture run
                 // has produced per-element failure data).
                 const bool hasFracture = !model.elementFailureMode.empty();
                 if (hasFracture) {
@@ -1271,7 +1271,7 @@ int runInteractive() {
                     ui.drawText(legendValue, legendBarX - 72.0f, legendBarY + legendBarH - 6.0f, 7.8f, glm::vec3(0.9f));
                 }
 
-                // new_TODO_03: fracture legends for the per-element views. The
+                // fracture legends for the per-element views. The
                 // categorical legend mirrors the shader's categoricalColor() exactly.
                 if (hasFracture && model.fractureDeadView == FEAModel::DEAD_COLORED) {
                     if (model.fractureViewMode == 3 || model.fractureViewMode == 1) {
@@ -1515,7 +1515,7 @@ void scroll_callback(GLFWwindow* window, double xoffset, double yoffset) {
     camera.ProcessMouseScroll(static_cast<float>(yoffset));
 }
 
-// new_TODO_19E: keyboard input for the showcase magnitude field. Characters
+// keyboard input for the showcase magnitude field. Characters
 // queue up in g_charInput; the field consumes them only while focused, so
 // typing never leaks into camera controls.
 void char_callback(GLFWwindow*, unsigned int codepoint) {
@@ -1529,11 +1529,11 @@ void key_callback(GLFWwindow*, int key, int, int action, int) {
 }
 
 // =============================================================================
-//  CLI dispatch (new_TODO_02). No args -> interactive UI. Otherwise headless
+//  CLI dispatch. No args -> interactive UI. Otherwise headless
 //  scenario harness. Same pipeline functions as the UI buttons (TOP RULE).
 //    FEAPreProcessor --run scenarios/x.json --out report.json --shots shots/
 //    FEAPreProcessor --regress all
-//    FEAPreProcessor --dump-ui            (stub: prints "{}" until new_TODO_16)
+//    FEAPreProcessor --dump-ui            (stub: prints "{}")
 // =============================================================================
 // -----------------------------------------------------------------------------
 // The harness resolves scenarios/, materials/, assets and STL fixtures relative
@@ -1582,7 +1582,7 @@ int main(int argc, char** argv) {
     std::string arg1 = argv[1];
 
     if (arg1 == "--dump-ui") {
-        // Real widget tree lands in new_TODO_16; until then emit empty object.
+        // TODO: emit the real widget tree; for now emit an empty object.
         std::cout << "{}" << std::endl;
         return 0;
     }
