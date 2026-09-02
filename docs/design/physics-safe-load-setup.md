@@ -1,8 +1,8 @@
 # Physics-Safe Load Setup
 
-**Status:** Approved design; implementation is staged  
-**Audience:** PolyFEA developers, reviewers, and instructors  
-**Last reviewed:** 2026-08-30
+- **Status:** First safety foundation implemented; automated verification complete
+- **Audience:** PolyFEA developers, reviewers, and instructors
+- **Last reviewed:** 2026-08-30
 
 ## Decision summary
 
@@ -19,7 +19,8 @@ The first implemented slice is deliberately small:
 
 - a GL-free semantic description of load/support intent;
 - an analysis-capability gate shared by UI and tests;
-- correct pressure-resultant auditing on curved surfaces;
+- correct pressure-resultant auditing over planar facets that tessellate a
+  curved surface;
 - a compact Physics Receipt for the existing preset workflow;
 - no new contact, connector, follower-load, or manufacturing-strain solver.
 
@@ -67,10 +68,40 @@ The current brittle-fracture path is an element-deletion model. Its crack path a
 failure load remain mesh-sensitive unless a later regularized formulation and
 convergence evidence establish otherwise.
 
+The preset audit also found a mode-specific dispatch defect: `CantileverBendingZ`
+has a dedicated linear setup, but `solveNonlinearStatic` does not branch on that
+preset. It falls through to the Y-min clamp/Y-max surface-compression setup. The
+first safety foundation therefore blocks that one preset/mode pair instead of
+letting a familiar button launch a different physical problem.
+
+The tension presets contain a separate support defect. Their comments call the
+automatic restraint a 3-2-1 gauge, but the implementation fixes three DOFs at
+one node and one DOF at each of two other nodes: five scalar constraints, not
+six. At least one rigid mode therefore remains. This slice keeps the legacy
+tension workflow runnable to avoid changing solver behavior, marks every tension
+mode approximate, and exposes `5-DOF; >=1 RIGID MODE FREE` in the receipt.
+Completing and rank-testing the gauge is the first solver-side follow-up.
+
+### Existing preset truth table
+
+`Exact` below means exact input semantics, not verified mesh convergence or
+material validity.
+
+| Existing preset | Entered magnitude | Spatial distribution | Automatic support | Linear | Nonlinear | Brittle fracture |
+|---|---|---|---|---|---|---|
+| Cantilever Z | Total force at one tip node | Concentrated node | X-min full Cartesian clamp | Approximate: singular local stress | Unsupported: solver changes to Y compression | Approximate: point load plus element deletion |
+| Point Z | Total force at one top node | Concentrated node | Z-min full Cartesian clamp | Approximate | Approximate | Approximate |
+| Surface compression Y | Total force on one face | Linear corner-triangle tributary load; equal-node fallback. Tet10 midside nodes receive no direct face load | Y-min full Cartesian clamp | Approximate: bbox footprint, quadratic-face linearization, and fallback | Approximate | Approximate: same plus element deletion |
+| Tension X/Y/Z | Force magnitude on each of two opposite faces | Equal force per selected node | Five scalar constraints (3+1+1); at least one rigid mode remains | Approximate: mesh-dependent load and underconstrained gauge | Approximate | Approximate |
+
 ## Reliability findings
 
 | Finding | Failure if hidden | Required rule |
 |---|---|---|
+| Preset/mode dispatch mismatch | Selecting nonlinear analysis silently changes cantilever bending into Y compression | Test the concrete preset adapter as well as the abstract feature; block mismatched mode paths before solver construction |
+| Misnamed automatic support | A five-constraint tension gauge is presented as 3-2-1, hiding at least one remaining rigid mode and a possible singular/drifting solve | Show the resolved support in the receipt, mark the preset approximate, and require runtime `rank(CR)` plus a canonical six-mode test before relabeling it 3-2-1 |
+| Quadratic-face distribution mismatch | A corner-triangle tributary vector is called consistent area loading on a Tet10 face, hiding that midside nodes receive no direct load | Name the current path `LinearFacetTributary`, show `CORNER-TRI`, and reserve `ConsistentArea` for an adapter that integrates all quadratic face functions |
+| Conditional load fallback | “Area weighted” silently becomes equal force per node when the selected slab has no complete boundary triangles | Mark the preset approximate until resolved distribution is returned to the receipt; emit the fallback in solver diagnostics |
 | Patch force footprint | Remeshing changes area, traction, peak stress, and failure | Store an accepted physical radius or exact geometry; never regenerate it from element size |
 | Pressure semantics | A fixed nodal vector is presented as follower pressure | Mark current pressure as reference-configuration/small-deformation only; block unsupported combinations |
 | Curved pressure result | `pressure × area` is mislabeled as net force | Integrate the vector area and report scalar load integral, vector resultant, and moment separately |
@@ -182,11 +213,16 @@ The minimal common fields are:
 ```cpp
 enum class AnalysisMode { LinearStatic, NonlinearStatic, BrittleFracture };
 enum class FeatureKind {
-    PatchResultant, BoundaryTraction, Pressure, BearingLoad, RemoteResultant,
-    BodyAcceleration, FixedConstraint, PrescribedDisplacement, NormalSupport,
-    CylindricalSupport, ElasticSupport, Contact
+    PointForce, PatchResultant, BoundaryTraction, Pressure, BearingLoad,
+    RemoteResultant, BodyAcceleration, FixedConstraint,
+    PrescribedDisplacement, NormalSupport, CylindricalSupport, ElasticSupport,
+    Contact
 };
 enum class MagnitudeScope { TotalAcrossSelection, PerRegion };
+enum class DistributionKind {
+    Unspecified, ConcentratedNode, ConsistentArea, LinearFacetTributary,
+    EqualNode
+};
 enum class FrameKind { Global, BuildMaterial, ReferenceGeometry, CurrentBoundary };
 enum class EvolutionKind { Dead, Follower };
 enum class Capability { Exact, Approximate, Unsupported };
@@ -202,6 +238,17 @@ parameter bag whose invalid field combinations must be discovered later.
 Linear, state-independent loads may compile to immutable nodal contributions.
 Each contribution retains its feature ID until final global assembly so previews,
 audits, and errors can point back to the originating condition.
+
+### Reference-pressure audit
+
+`SurfaceFacet` represents one planar facet with constant outward normal, oriented
+area vector, and area centroid. A curved boundary must be supplied as its
+constituent planar facets; one area vector plus centroid is not sufficient to
+represent an aggregated curved patch. For uniform reference pressure, the audit
+sums `p |A_i|`, `sign p A_i`, and
+`(centroid_i - referencePoint) x (sign p A_i)` over those facets. This separates
+scalar normal load from vector force and moment without claiming follower-load
+assembly.
 
 ### Constraints
 
@@ -227,9 +274,11 @@ capability; it cannot create a solver object.
 
 | Capability | First implementation | Later solver work |
 |---|---|---|
-| Patch resultant, reference traction, gravity | Linear/dead contract and audit | Custom mesh-region adapter |
-| Fixed Cartesian constraint | Existing preset support | External constraint adapter |
-| Reference pressure | Correct audit; small-deformation compatibility | Boundary integration for custom regions |
+| Existing patch-resultant presets | Typed contract, corner-triangle/equal-node disclosure, and mode gate | Custom persistent mesh-region adapter with true Tet10 face integration |
+| Full Cartesian clamp | Existing preset support and receipt disclosure | External constraint adapter |
+| Tension numerical gauge | Disclose 3+1+1 five-DOF restraint and keep legacy workflow approximate | Add an independent sixth constraint, then prove six rigid modes are removed in a canonical test |
+| Reference pressure | Correct scalar/vector/moment audit; solver capability blocked | Boundary integration for custom regions |
+| Gravity/body acceleration | Semantic type blocked | Mass-consistent body-force assembly and resultant audit |
 | Prescribed displacement | Semantic type and blocked capability | Nonzero Dirichlet assembly and reactions |
 | Normal/cylindrical support | Semantic type and blocked capability | General constraint equations and fitted geometry |
 | Bearing load | Semantic type and blocked capability | Cylindrical-region distribution and integration |
@@ -244,19 +293,36 @@ The complete system must eventually verify:
 
 - unit, camera, rigid-transform, and remesh invariance;
 - total/per-region semantics on disconnected targets;
-- planar and closed/curved pressure resultants;
+- planar and closed triangulated-surface pressure resultants;
+- actual Tet4/Tet10 nodal face-load vectors, including quadratic midside weights;
 - force, moment, reaction, and virtual-work balance;
 - fixed, normal, cylindrical, and elastic canonical responses;
 - prescribed motion and reaction recovery;
-- constraint conflict and rigid-mode identification;
+- constraint conflict and rigid-mode identification, including runtime
+  `rank(CR)` and a six-mode canonical tension-gauge test;
 - case isolation;
 - inactive-fracture-target rejection;
 - finite-difference verification of follower-load tangents;
 - stress convergence outside load/support introduction zones.
 
 The first slice is accepted when its standalone unit test proves the capability
-matrix and curved-pressure audit, the main executable builds, and the existing
-regression suite remains unchanged.
+matrix, support disclosures, and faceted curved-surface pressure audit; the main
+executable builds; and the existing regression suite remains unchanged.
+
+### Verification record — 2026-08-30
+
+- The strict-warning focused target reports seven passing test groups; CTest reports
+  `1/1` passing.
+- The full application rebuild links and stages `FEAPreProcessor.exe`.
+- The existing `--regress all` suite reports aggregate `PASS`; later edits were
+  confined to the semantic contract, receipt, tests, and documentation rather
+  than solver assembly.
+- The final executable opens its expected main window and closes cleanly.
+- Receipt and slider copy are checked against `SimpleUI`'s exact per-character
+  advance and the existing 275 px column.
+- Windows screenshot capture could not inspect the OpenGL surface because the
+  automation helper returned `SetIsBorderRequired ... 0x80004002` twice. This is
+  recorded as a visual-QA limitation, not as evidence of layout correctness.
 
 ## Deliberately deferred work
 

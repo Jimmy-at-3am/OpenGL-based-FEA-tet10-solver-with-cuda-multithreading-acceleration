@@ -12,9 +12,11 @@
 #include "SimpleUI.h"
 #include "FEAModel.h"
 #include "FEASolver.h"
-#include "LayerSlicer.h"   // new_TODO_04: SLICE controls call the same free fns
-#include "SlabMesher.h"    // new_TODO_19E: MESH button routes gcode models here
+#include "LoadPhysics.h"
+#include "LayerSlicer.h"   // SLICE controls call the same free fns
+#include "SlabMesher.h"    // MESH button routes gcode models here
 #include "ScenarioRunner.h"
+#include "SolverStatus.h"
 
 #include <iostream>
 #include <filesystem>
@@ -31,6 +33,14 @@
 
 #include <omp.h>
 
+#ifdef _WIN32
+// NOMINMAX before windows.h: its min/max macros otherwise shadow std::min /
+// std::max everywhere below and the whole file stops compiling.
+#define NOMINMAX
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>         // SetThreadPriority: keep the render thread alive
+#endif
+
 #include "ToolpathModel.h"   // toolpath->layerCount for the slab readout
 
 // Define globals
@@ -43,6 +53,9 @@ float mouseX = 0.0f;
 float mouseY = 0.0f;
 bool mousePressed = false;
 bool prevMousePressed = false;
+bool  mouseClickLatch  = false;
+float mouseClickLatchX = 0.0f;
+float mouseClickLatchY = 0.0f;
 bool showWireframe = true;
 float deltaTime = 0.0f;
 float lastFrame = 0.0f;
@@ -201,7 +214,7 @@ void framebuffer_size_callback(GLFWwindow* window, int width, int height);
 void mouse_callback(GLFWwindow* window, double xpos, double ypos);
 void scroll_callback(GLFWwindow* window, double xoffset, double yoffset);
 void mouse_button_callback(GLFWwindow* window, int button, int action, int mods);
-void char_callback(GLFWwindow* window, unsigned int codepoint);  // new_TODO_19E
+void char_callback(GLFWwindow* window, unsigned int codepoint);
 void key_callback(GLFWwindow* window, int key, int scancode, int action, int mods);
 void processInput(GLFWwindow* window);
 
@@ -244,11 +257,49 @@ static void startComputeJob(FEAModel& model, const std::string& title, bool canc
     model.deferGLUpload = true;   // worker owns no GL context
     model.computeProgressOut = &g_job.progress;
     model.computeCancelRequested = &g_job.cancel;
+    SolverStatus::reset(title);
     g_job.running = true;
     g_job.th = std::thread([] {
-        // Keep a core free so rendering/input stay smooth during the solve.
+        // ------------------------------------------------------------------
+        // Keeping the UI alive while the solve runs.
+        //
+        // Reserving cores is NOT enough on its own. Threads have no affinity,
+        // so N compute threads and the render thread are just N+1 runnable
+        // threads at the same priority: the render thread gets one timeslice
+        // in N+1 and the window drops to a frame every few seconds, which is
+        // indistinguishable from "the progress panel never appeared".
+        //
+        // Windows' scheduler is strictly priority-preemptive, so the fix that
+        // actually works is priority, not counting: the render thread runs at
+        // ABOVE_NORMAL (set in main) and the whole compute team runs at
+        // BELOW_NORMAL. The render thread then preempts compute whenever it
+        // has work, and compute soaks up everything left over -- which is
+        // almost all of it, since a frame here costs ~2 ms.
+        //
+        // The thread-count reservation stays as a second line of defence:
+        // hardware_concurrency() reports LOGICAL processors (16 on an 8-core
+        // SMT part), so `hw - 2` frees one physical core's worth of SMT
+        // siblings rather than the `hw - 1` that left every core saturated.
+        // ------------------------------------------------------------------
+#ifdef _WIN32
+        SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+#endif
         const unsigned hw = std::thread::hardware_concurrency();
-        if (hw > 2) omp_set_num_threads(static_cast<int>(hw - 1));
+        if (hw > 3) {
+            omp_set_dynamic(0);   // don't let the runtime hand the cores back
+            omp_set_num_threads(static_cast<int>(hw - 2));
+        }
+#ifdef _WIN32
+        // OpenMP worker threads inherit the priority of the thread that first
+        // creates the team, but MSVC's runtime may have spun the pool up
+        // earlier (from the main thread, at NORMAL). Demote the whole pool
+        // explicitly from inside a parallel region so no compute thread can
+        // outrank the renderer.
+        #pragma omp parallel
+        {
+            SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+        }
+#endif
         g_job.okResult = g_job.work ? g_job.work() : false;
         g_job.done = true;
     });
@@ -298,9 +349,145 @@ static bool drawProgressPanel(SimpleUI& ui, const std::string& title, float prog
     return cancelClicked;
 }
 
+// =============================================================================
+// Solver stage overlay — bottom-right of the 3-D viewport.
+//
+// The COMSOL-style answer to "what is it actually doing?": one line per solve
+// stage, nested by depth, each showing the device it runs on, its own progress
+// and its own elapsed time. Stages the solver has registered but not reached
+// yet render greyed as QUEUED, so the list also says what is still to come.
+//
+// Deliberately unboxed (no panel, no fill) so it reads as an annotation on the
+// viewport rather than another widget: dark slate/navy text straight on the
+// light background, with a hairline under the active row carrying its bar.
+// =============================================================================
+static void drawSolverStatusOverlay(SimpleUI& ui, float viewportRight) {
+    std::string runLabel;
+    double      runElapsed = 0.0;
+    std::vector<SolverStatus::Stage> stages = SolverStatus::snapshot(&runLabel, &runElapsed);
+
+    if (stages.empty()) {
+        // Jobs that are not FEA solves (TetGen / toolpath meshing) publish no
+        // stages of their own. Synthesise one row from the job's coarse
+        // progress so the overlay never goes blank while work is running.
+        if (!computeBusy()) return;
+        SolverStatus::Stage s;
+        s.label    = "RUNNING";
+        s.device   = SolverStatus::Device::CPU;
+        s.state    = SolverStatus::State::Active;
+        s.progress = g_job.progress.load();
+        s.threads  = omp_get_max_threads();
+        s.depth    = 1;
+        s.tStart   = 0.0;
+        stages.push_back(s);
+    }
+
+    // Rows to show, newest-biased: everything unfinished, plus enough recent
+    // finished rows to give the run some history without scrolling forever.
+    constexpr size_t kMaxRows = 11;
+    if (stages.size() > kMaxRows) {
+        size_t drop = stages.size() - kMaxRows;
+        std::vector<SolverStatus::Stage> kept;
+        kept.reserve(kMaxRows);
+        for (auto& s : stages) {
+            const bool finished = (s.state == SolverStatus::State::Done ||
+                                   s.state == SolverStatus::State::Failed ||
+                                   s.state == SolverStatus::State::Cancelled);
+            if (drop > 0 && finished) { --drop; continue; }
+            kept.push_back(std::move(s));
+        }
+        stages.swap(kept);
+        if (stages.size() > kMaxRows)
+            stages.erase(stages.begin(), stages.end() - kMaxRows);
+    }
+
+    const float fs   = 7.5f;              // glyph size
+    const float cw   = fs * 1.2f;         // SimpleUI's fixed advance per char
+    const float lh   = 15.0f;             // line height
+    const float rowN = static_cast<float>(stages.size()) + 1.0f;   // + header
+
+    // Build every row's text first so the block can be right-aligned as a unit.
+    struct Row { std::string text; glm::vec3 col; float bar; };
+    std::vector<Row> rows;
+    rows.reserve(stages.size() + 1);
+
+    {
+        char hb[128];
+        snprintf(hb, sizeof(hb), "%s   %.1fS",
+                 runLabel.empty() ? "SOLVER" : runLabel.c_str(), runElapsed);
+        rows.push_back({hb, glm::vec3(0.05f, 0.12f, 0.30f), -1.0f});
+    }
+
+    for (const auto& s : stages) {
+        const bool running  = (s.state == SolverStatus::State::Active);
+        const bool queued   = (s.state == SolverStatus::State::Queued);
+        const double span   = queued ? 0.0
+                                     : (running ? runElapsed - s.tStart
+                                                : s.tEnd - s.tStart);
+
+        char devBuf[16] = "";
+        if (s.device == SolverStatus::Device::GPU)      snprintf(devBuf, sizeof(devBuf), "GPU");
+        else if (s.device == SolverStatus::Device::CPU) {
+            if (s.threads > 1) snprintf(devBuf, sizeof(devBuf), "CPU X%d", s.threads);
+            else               snprintf(devBuf, sizeof(devBuf), "CPU");
+        }
+
+        char stat[16];
+        switch (s.state) {
+            case SolverStatus::State::Queued:    snprintf(stat, sizeof(stat), "QUEUED"); break;
+            case SolverStatus::State::Done:      snprintf(stat, sizeof(stat), "DONE");   break;
+            case SolverStatus::State::Failed:    snprintf(stat, sizeof(stat), "FAILED"); break;
+            case SolverStatus::State::Cancelled: snprintf(stat, sizeof(stat), "STOPPED"); break;
+            case SolverStatus::State::Active:
+                if (s.progress >= 0.0f)
+                    snprintf(stat, sizeof(stat), "%d%%",
+                             static_cast<int>(s.progress * 100.0f + 0.5f));
+                else
+                    snprintf(stat, sizeof(stat), "RUN");
+                break;
+        }
+
+        // depth 1 = top level here (0 is reserved for the job header row).
+        const int indent = std::max(0, s.depth - 1) * 2;
+        char line[192];
+        snprintf(line, sizeof(line), "%*s%c %-22s %-8s %7s %6.1fS   %s",
+                 indent, "", running ? '>' : ' ',
+                 s.label.c_str(), devBuf, stat, span, s.detail.c_str());
+
+        glm::vec3 col;
+        switch (s.state) {
+            case SolverStatus::State::Active:    col = glm::vec3(0.07f, 0.21f, 0.50f); break;
+            case SolverStatus::State::Queued:    col = glm::vec3(0.56f, 0.59f, 0.63f); break;
+            case SolverStatus::State::Failed:
+            case SolverStatus::State::Cancelled: col = glm::vec3(0.55f, 0.16f, 0.14f); break;
+            default:                             col = glm::vec3(0.34f, 0.39f, 0.46f); break;
+        }
+        rows.push_back({line, col, running ? s.progress : -1.0f});
+    }
+
+    size_t maxLen = 0;
+    for (const auto& r : rows) maxLen = std::max(maxLen, r.text.size());
+    const float blockW = static_cast<float>(maxLen) * cw;
+    const float x0     = std::max(12.0f, viewportRight - 16.0f - blockW);
+    float       y      = static_cast<float>(scrHeight) - 14.0f - rowN * lh;
+
+    for (const auto& r : rows) {
+        ui.drawText(r.text, x0, y, fs, r.col);
+        if (r.bar >= 0.0f) {
+            // Hairline progress rule under the active row — a line, not a box.
+            const float bw = blockW * std::min(1.0f, r.bar);
+            ui.drawRect(x0, y + fs + 3.0f, bw, 1.5f, glm::vec3(0.15f, 0.40f, 0.72f));
+        }
+        y += lh;
+    }
+}
+
 // One startup/shutdown frame: clear, draw the progress panel, swap.
 static void drawBootFrame(GLFWwindow* window, SimpleUI& ui, const char* stage, float frac) {
     glfwPollEvents();
+    // No cancellable widget is drawn here, so drop any press the poll latched --
+    // otherwise a click during startup would fire a button on the first real frame.
+    mouseClickLatch = false;
     int w = 0, h = 0;
     glfwGetWindowSize(window, &w, &h);
     if (w > 0 && h > 0) { scrWidth = w; scrHeight = h; ui.resize(w, h); }
@@ -340,11 +527,19 @@ int runInteractive() {
     if (window == NULL) { glfwTerminate(); return -1; }
 
     glfwMakeContextCurrent(window);
+    // Synchronize presentation to the monitor refresh rate.
+    glfwSwapInterval(1);
+#ifdef _WIN32
+    // The render thread outranks every compute thread (see startComputeJob).
+    // Without this a saturated OpenMP team starves the loop to a frame every
+    // few seconds and the UI looks frozen rather than merely busy.
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
+#endif
     glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
     glfwSetCursorPosCallback(window, mouse_callback);
     glfwSetScrollCallback(window, scroll_callback);
     glfwSetMouseButtonCallback(window, mouse_button_callback);
-    glfwSetCharCallback(window, char_callback);   // new_TODO_19E magnitude field
+    glfwSetCharCallback(window, char_callback);   // magnitude field
     glfwSetKeyCallback(window, key_callback);
     glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
 
@@ -460,8 +655,8 @@ int runInteractive() {
         if (!busy) {
             // Overlays read solver-owned vectors (appliedForces etc.) that a
             // running job may be mutating — skip them until it finishes.
-            model.drawSlicePreview(schematicShader); // new_TODO_04: section overlay
-            model.drawForceArrows(schematicShader);  // new_TODO_19E: load arrows
+            model.drawSlicePreview(schematicShader); // section overlay
+            model.drawForceArrows(schematicShader);  // load arrows
         }
         model.drawSectionPlane(schematicShader);     // sectional-view cut plane
 
@@ -695,7 +890,7 @@ int runInteractive() {
         // harness calls in ScenarioRunner::runSlice (LayerSlicer::computeSlices +
         // model.setLayerStack + sectionToSegments + model.buildSlicePreview).
         static LayerSlicer::SliceResult sliceResult; // UI-local cache (decoupled)
-        static LayerSlicer::SliceGrouping sliceGrp;   // new_TODO_04C: physical readout
+        static LayerSlicer::SliceGrouping sliceGrp;   // physical readout
         static int   slicePreviewLayer = 0;
         static float sliceMaxSlabsF    = 40.0f;
         auto rebuildSlicePreview = [&](int layer) {
@@ -737,7 +932,7 @@ int runInteractive() {
                     model.surfaceVertices, model.surfaceIndices,
                     model.currentMinBounds, model.currentMaxBounds,
                     model.params, model.modelToMM, brep, grp, stats);
-                sliceGrp = grp; // new_TODO_04C: cache for the physical readout
+                sliceGrp = grp; // cache for the physical readout
                 // [same-path: harness model.setLayerStack]
                 model.setLayerStack(LayerSlicer::axisFromParams(model.params),
                                     grp.physicalLayerThickness, grp.layersPerSlab,
@@ -789,7 +984,7 @@ int runInteractive() {
                     [&model](bool, bool) { model.buildBuffers(); });
             }
             rY += 40.0f;
-            drawSliceControls(rX, rY, rW); // new_TODO_04: SLICE block (CUBE)
+            drawSliceControls(rX, rY, rW); // SLICE block (CUBE)
         }
         else if (currentMode == MODE_IMPORT) {
             std::string prLabel = model.params.enablePolarRemoval ? "VERTEX SMOOTHING: ON" : "VERTEX SMOOTHING: OFF";
@@ -979,22 +1174,33 @@ int runInteractive() {
                 rY += 30.0f;
 
                 // Load/axis presets for the generic (non-gcode) solvers.
-                static const FEASolver::LoadType loadTypeMap[] = {
-                    FEASolver::LoadType::CantileverBendingZ,
-                    FEASolver::LoadType::PointForceZ,
-                    FEASolver::LoadType::SurfaceCompressionY,
-                    FEASolver::LoadType::TensionX,
-                    FEASolver::LoadType::TensionY,
-                    FEASolver::LoadType::TensionZ,
+                struct LoadPresetOption {
+                    FEASolver::LoadType solver;
+                    load_physics::PresetKind physics;
+                    const char* label;
                 };
-                static const char* loadTypeNames[] = {
-                    "FORCE: CANTILEVER Z",
-                    "FORCE: POINT Z",
-                    "FORCE: SURFACE COMP Y",
-                    "FORCE: TENSION X",
-                    "FORCE: TENSION Y",
-                    "FORCE: TENSION Z",
+                static constexpr LoadPresetOption loadPresets[] = {
+                    {FEASolver::LoadType::CantileverBendingZ,
+                     load_physics::PresetKind::CantileverBendingZ,
+                     "FORCE: CANTILEVER Z"},
+                    {FEASolver::LoadType::PointForceZ,
+                     load_physics::PresetKind::PointForceZ,
+                     "FORCE: POINT Z"},
+                    {FEASolver::LoadType::SurfaceCompressionY,
+                     load_physics::PresetKind::SurfaceCompressionY,
+                     "FORCE: SURFACE COMP Y"},
+                    {FEASolver::LoadType::TensionX,
+                     load_physics::PresetKind::TensionX,
+                     "FORCE: TENSION X"},
+                    {FEASolver::LoadType::TensionY,
+                     load_physics::PresetKind::TensionY,
+                     "FORCE: TENSION Y"},
+                    {FEASolver::LoadType::TensionZ,
+                     load_physics::PresetKind::TensionZ,
+                     "FORCE: TENSION Z"},
                 };
+                static constexpr int kLoadPresetCount =
+                    static_cast<int>(sizeof(loadPresets) / sizeof(loadPresets[0]));
                 static const char* buildAxisNames[] = {
                     "LAYER: X (build top)",
                     "LAYER: Y (build top)",
@@ -1020,18 +1226,77 @@ int runInteractive() {
                 }
                 rY += 27.0f;
 
-                if (ui.button(loadTypeNames[loadTypeSel], rX, rY, rW, 22.0f)) {
-                    loadTypeSel = (loadTypeSel + 1) % 6;
+                if (ui.button(loadPresets[loadTypeSel].label, rX, rY, rW, 22.0f)) {
+                    loadTypeSel = (loadTypeSel + 1) % kLoadPresetCount;
                 }
                 rY += 27.0f;
 
-                ui.slider("POINT FORCE (MN)", forceMagnitudeMN, 1.0f, 1000.0f, rX, rY, rW, 15.0f);
+                const LoadPresetOption& selectedPreset = loadPresets[loadTypeSel];
+                const auto presetPhysics = load_physics::describePreset(
+                    selectedPreset.physics);
+                const auto linearCapability = load_physics::assessPreset(
+                    selectedPreset.physics,
+                    load_physics::AnalysisMode::LinearStatic);
+                const auto nonlinearCapability = load_physics::assessPreset(
+                    selectedPreset.physics,
+                    load_physics::AnalysisMode::NonlinearStatic);
+                const auto fractureCapability = load_physics::assessPreset(
+                    selectedPreset.physics,
+                    load_physics::AnalysisMode::BrittleFracture);
+                const char* fractureReceipt =
+                    fractureCapability.status == load_physics::Capability::Unsupported
+                        ? load_physics::capabilityName(fractureCapability.status)
+                        : "MESH-DEP";
+
+                ui.slider(presetPhysics.magnitudeLabel,
+                          forceMagnitudeMN, 1.0f, 1000.0f,
+                          rX, rY, rW, 15.0f);
                 rY += 20.0f;
 
-                if (ui.button("LINEAR STATIC FEA", rX, rY, rW, 25.0f)) {
+                ui.drawText(std::string("LOAD: ") + presetPhysics.scopeSummary,
+                            rX, rY, 6.1f, glm::vec3(0.65f, 0.82f, 0.95f));
+                rY += 10.0f;
+                ui.drawText(std::string("DIST: ") + presetPhysics.distributionSummary,
+                            rX, rY, 5.9f, glm::vec3(0.9f, 0.72f, 0.42f));
+                rY += 10.0f;
+                ui.drawText(std::string("SUPPORT: ") + presetPhysics.supportSummary,
+                            rX, rY, 5.9f, glm::vec3(0.78f, 0.68f, 0.94f));
+                rY += 10.0f;
+                const std::string capabilityReceipt =
+                    std::string("L ") + load_physics::capabilityName(linearCapability.status) +
+                    " | NL " + load_physics::capabilityName(nonlinearCapability.status) +
+                    " | FR " + fractureReceipt;
+                const bool anyModeBlocked = !linearCapability.canRun() ||
+                                            !nonlinearCapability.canRun() ||
+                                            !fractureCapability.canRun();
+                const bool anyModeApproximate =
+                    linearCapability.status == load_physics::Capability::Approximate ||
+                    nonlinearCapability.status == load_physics::Capability::Approximate ||
+                    fractureCapability.status == load_physics::Capability::Approximate;
+                ui.drawText(capabilityReceipt, rX, rY, 5.9f,
+                            anyModeBlocked
+                                ? glm::vec3(1.0f, 0.48f, 0.35f)
+                                : anyModeApproximate
+                                    ? glm::vec3(0.95f, 0.72f, 0.35f)
+                                    : glm::vec3(0.75f, 0.88f, 0.68f));
+                rY += 10.0f;
+                const load_physics::CapabilityResult* blockedCapability =
+                    !linearCapability.canRun() ? &linearCapability
+                    : !nonlinearCapability.canRun() ? &nonlinearCapability
+                    : !fractureCapability.canRun() ? &fractureCapability
+                    : nullptr;
+                if (blockedCapability != nullptr) {
+                    ui.drawText(std::string("BLOCK: ") + blockedCapability->reason,
+                                rX, rY, 5.9f, glm::vec3(1.0f, 0.42f, 0.32f));
+                    rY += 10.0f;
+                }
+                rY += 4.0f;
+
+                if (ui.button("LINEAR STATIC FEA", rX, rY, rW, 25.0f,
+                              false, !linearCapability.canRun())) {
                     std::cout << "Launching Static Solver..." << std::endl;
                     auto solver = std::make_shared<FEASolver>();
-                    solver->loadType             = loadTypeMap[loadTypeSel];
+                    solver->loadType             = selectedPreset.solver;
                     solver->buildAxis            = buildAxis;
                     solver->useQuadraticElements = true;
                     solver->useMultithreading    = useMultithreading;
@@ -1046,10 +1311,14 @@ int runInteractive() {
                         [&model](bool, bool) { model.buildBuffers(); });
                 }
                 rY += 30.0f;
-                if (ui.button("NONLINEAR FEA (NR)", rX, rY, rW, 25.0f)) {
+                const std::string nonlinearLabel = nonlinearCapability.canRun()
+                    ? "NONLINEAR FEA (NR)"
+                    : "NONLINEAR FEA: BLOCKED";
+                if (ui.button(nonlinearLabel, rX, rY, rW, 25.0f,
+                              false, !nonlinearCapability.canRun())) {
                     std::cout << "Launching Newton-Raphson Solver..." << std::endl;
                     auto solver = std::make_shared<FEASolver>();
-                    solver->loadType             = loadTypeMap[loadTypeSel];
+                    solver->loadType             = selectedPreset.solver;
                     solver->buildAxis            = buildAxis;
                     solver->useQuadraticElements = true;
                     solver->verboseDiagnostics   = true;
@@ -1075,10 +1344,11 @@ int runInteractive() {
                 ui.slider("CURV ANGLE (DEG)", curvAngleThreshold, 1.0f, 45.0f, rX, rY, rW, 15.0f); rY += 20.0f;
                 ui.slider("CURV FRAC LIMIT", curvFracLimit, 0.05f, 0.75f, rX, rY, rW, 15.0f); rY += 20.0f;
 
-                if (ui.button("RUN ADAPTIVE FEA", rX, rY, rW, 25.0f)) {
+                if (ui.button("RUN ADAPTIVE FEA", rX, rY, rW, 25.0f,
+                              false, !linearCapability.canRun())) {
                     std::cout << "Launching Adaptive Solver..." << std::endl;
                     auto solver = std::make_shared<FEASolver>();
-                    solver->loadType          = loadTypeMap[loadTypeSel];
+                    solver->loadType          = selectedPreset.solver;
                     solver->buildAxis         = buildAxis;
                     solver->useMultithreading = useMultithreading;
                     solver->useGPU            = useGPU;
@@ -1113,7 +1383,8 @@ int runInteractive() {
                 }
                 rY += 27.0f;
 
-                if (ui.button("BRITTLE FRACTURE", rX, rY, rW, 25.0f)) {
+                if (ui.button("BRITTLE FRACTURE", rX, rY, rW, 25.0f,
+                              false, !fractureCapability.canRun())) {
                     // Reset any previous fracture state so we start fresh.
                     model.elementAlive.clear();
                     model.elementFailureIter.clear();
@@ -1131,7 +1402,7 @@ int runInteractive() {
                     solver->useMultithreading    = useMultithreading;
                     solver->useGPU               = useGPU;
                     solver->useQuadraticElements = model.hasQuadraticMesh;
-                    solver->loadType             = loadTypeMap[loadTypeSel];
+                    solver->loadType             = selectedPreset.solver;
                     solver->buildAxis            = buildAxis;
                     solver->forceMagnitude       = static_cast<double>(forceMagnitudeMN) * 1.0e6;
                     solver->youngsModulus        = currentMaterial.E;
@@ -1306,7 +1577,7 @@ int runInteractive() {
                     }
                 }
             }
-            drawSliceControls(rX, rY, rW); // new_TODO_04: SLICE block (IMPORT)
+            drawSliceControls(rX, rY, rW); // SLICE block (IMPORT)
         }
 
         // End of the control panel: re-enable input for the left-side widgets
@@ -1430,19 +1701,31 @@ int runInteractive() {
             }
         }
 
+        // ===== Solver stage overlay (bottom-right of the 3-D viewport) =====
+        drawSolverStatusOverlay(ui, panelX);
+
         // ===== Compute-progress panel (bottom-left, slides in) =====
-        if (busy) {
+        // Re-read `busy` here rather than reusing the value latched at the top
+        // of the frame: a solver button pressed earlier in THIS frame has
+        // already started its job, and the top-of-frame value would hide the
+        // panel for one whole frame after the click that started the work.
+        if (computeBusy()) {
             const float slideT = static_cast<float>((glfwGetTime() - g_job.startTime) / 0.25);
             const std::string title = g_job.cancel.load()
                                           ? g_job.title + "  - CANCELLING..."
                                           : g_job.title;
             if (drawProgressPanel(ui, title, g_job.progress.load(),
                                   g_job.cancellable && !g_job.cancel.load(),
-                                  slideT, glfwGetTime()))
+                                  slideT, glfwGetTime())) {
                 g_job.cancel = true;
+                std::cout << "[JOB] cancel requested by user." << std::endl;
+            }
         }
 
         prevMousePressed = mousePressed;
+        // The latch lives exactly one frame: set by the callback during the
+        // poll below, consumed by a widget on the next pass, dropped here.
+        mouseClickLatch = false;
         glEnable(GL_DEPTH_TEST);
         glfwSwapBuffers(window);
         glfwPollEvents();
@@ -1486,7 +1769,16 @@ bool rightMousePressed = false;
 bool middleMousePressed = false;
 
 void mouse_button_callback(GLFWwindow* window, int button, int action, int mods) {
-    if (button == GLFW_MOUSE_BUTTON_LEFT) mousePressed = (action == GLFW_PRESS);
+    if (button == GLFW_MOUSE_BUTTON_LEFT) {
+        mousePressed = (action == GLFW_PRESS);
+        // Latch the press so a click that begins AND ends inside a single
+        // glfwPollEvents() still reaches the widgets on the next frame.
+        if (action == GLFW_PRESS) {
+            mouseClickLatch  = true;
+            mouseClickLatchX = mouseX;
+            mouseClickLatchY = mouseY;
+        }
+    }
     if (button == GLFW_MOUSE_BUTTON_RIGHT) rightMousePressed = (action == GLFW_PRESS);
     if (button == GLFW_MOUSE_BUTTON_MIDDLE) middleMousePressed = (action == GLFW_PRESS);
 }
@@ -1539,7 +1831,7 @@ void key_callback(GLFWwindow*, int key, int, int action, int) {
 // The harness resolves scenarios/, materials/, assets and STL fixtures relative
 // to the working directory, and the build stages all of them next to the exe.
 // Launched from anywhere else (e.g. the repo root) the run died with exit 2 on
-// missing files, which made "is this TODO actually green?" fail for the wrong
+// missing files, which made regression checks fail for the wrong
 // reason. If the CWD lacks the harness data but the exe's directory has it,
 // switch there. Caller-supplied paths are pinned to the original CWD first so
 // reports/screenshots still land where the caller expects.

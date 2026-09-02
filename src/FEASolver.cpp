@@ -17,6 +17,7 @@
 
 #include "IElement.h"
 #include "IMaterial.h"
+#include "SolverStatus.h"
 #include "TetrahedralElement.h"
 #include "Tet10Element.h"
 
@@ -533,16 +534,47 @@ bool FEASolver::solveLinearStatic(FEAModel& model, float visualScale,
     const double invLm  = (m_geomScale != 0.0) ? (1.0 / m_geomScale) : 1.0; // model-unit / metre
 
     reportProgress(0.02);
-    // Shared cancel cleanup: undo the metre scaling and bail.
-    auto cancelBail = [&]() -> bool {
-        std::cout << "[SOLVE] cancelled by user." << std::endl;
-        if (didScale) restoreGeometryToModel(model);
-        return false;
-    };
 
     const int nElems = static_cast<int>(model.tetrahedra.size() / 4);
     const int nNodes = static_cast<int>(model.originalVolumetricPositions.size());
     const int nDOFs  = nNodes * 3;
+
+    // -------------------------------------------------------------------------
+    // Viewport stage telemetry. The whole pipeline is registered QUEUED here so
+    // the overlay can show what is still to come, then each row flips ACTIVE ->
+    // DONE as we reach it. Assembly is always CPU work; only the linear solve
+    // can land on the GPU, which is the honest picture the overlay should show.
+    // -------------------------------------------------------------------------
+    const int  sd       = m_statusDepth;
+    const int  asmThreads = useMultithreading ? omp_get_max_threads() : 1;
+#ifdef HAS_CUDA
+    const auto solveDev = useGPU ? SolverStatus::Device::GPU : SolverStatus::Device::CPU;
+#else
+    const auto solveDev = SolverStatus::Device::CPU;
+#endif
+    const int sgElem  = SolverStatus::enqueue("BUILD ELEMENTS",   sd, SolverStatus::Device::CPU);
+    const int sgAsm   = SolverStatus::enqueue("ASSEMBLE MATRIX",  sd, SolverStatus::Device::CPU);
+    const int sgBC    = SolverStatus::enqueue("LOADS AND BCS",    sd, SolverStatus::Device::CPU);
+    const int sgSolve = SolverStatus::enqueue("SOLVE K U - F",    sd, solveDev);
+    const int sgPost  = SolverStatus::enqueue("RECOVER RESULTS",  sd, SolverStatus::Device::CPU);
+    {
+        char db[64];
+        snprintf(db, sizeof(db), "%d NODES  %d ELEMS", nNodes, nElems);
+        SolverStatus::detail(sgElem, db);
+    }
+
+    // Shared cancel cleanup: undo the metre scaling and bail.
+    auto cancelBail = [&]() -> bool {
+        std::cout << "[SOLVE] cancelled by user." << std::endl;
+        SolverStatus::cancelAll();
+        if (didScale) restoreGeometryToModel(model);
+        return false;
+    };
+    auto failBail = [&]() -> bool {
+        SolverStatus::failAll();
+        if (didScale) restoreGeometryToModel(model);
+        return false;
+    };
 
     std::cout << "Assembling stiffness matrix for " << nNodes
               << " nodes and " << nElems
@@ -571,6 +603,7 @@ bool FEASolver::solveLinearStatic(FEAModel& model, float visualScale,
     // -------------------------------------------------------------------------
     // Build the element list via the IElement interface.
     // -------------------------------------------------------------------------
+    SolverStatus::begin(sgElem, 1);
     std::vector<std::unique_ptr<IElement>> elements;
     if (useMultithreading) {
         // MT: pre-size and fill each slot in parallel. std::make_unique heap
@@ -648,6 +681,7 @@ bool FEASolver::solveLinearStatic(FEAModel& model, float visualScale,
     }
 
     reportProgress(0.12);
+    SolverStatus::end(sgElem);
     if (isCancelled()) return cancelBail();
 
     // -------------------------------------------------------------------------
@@ -660,6 +694,7 @@ bool FEASolver::solveLinearStatic(FEAModel& model, float visualScale,
     // matrix values -- Eigen's setFromTriplets sums bucket contents in input
     // order, and element-level order is preserved.
     // -------------------------------------------------------------------------
+    SolverStatus::begin(sgAsm, asmThreads);
     std::vector<Triplet<double>> tripletList;
     if (useMultithreading) {
         // MT: pre-sized disjoint write slots per element. Result is
@@ -689,6 +724,8 @@ bool FEASolver::solveLinearStatic(FEAModel& model, float visualScale,
                 if ((doneNow & 1023) == 0) {
                     reportProgress(0.12 + 0.30 * static_cast<double>(doneNow)
                                             / std::max(1, nElems));
+                    SolverStatus::progress(sgAsm, static_cast<float>(doneNow)
+                                                      / std::max(1, nElems));
                     if (isCancelled()) asmAbort.store(true, std::memory_order_relaxed);
                 }
                 // Respect fracture element mask: skip dead elements.
@@ -723,6 +760,7 @@ bool FEASolver::solveLinearStatic(FEAModel& model, float visualScale,
         for (int el = 0; el < nElems; ++el) {
             if ((el & 4095) == 0) {
                 reportProgress(0.12 + 0.30 * static_cast<double>(el) / std::max(1, nElems));
+                SolverStatus::progress(sgAsm, static_cast<float>(el) / std::max(1, nElems));
                 if (isCancelled()) return cancelBail();
             }
             // Respect fracture element mask: skip dead elements.
@@ -743,6 +781,8 @@ bool FEASolver::solveLinearStatic(FEAModel& model, float visualScale,
         }
     }
 
+    SolverStatus::progress(sgAsm, 1.0f);
+    SolverStatus::detail(sgAsm, "SETFROMTRIPLETS");
     SparseMatrix<double> K(nDOFs, nDOFs);
     K.setFromTriplets(tripletList.begin(), tripletList.end());
 
@@ -750,6 +790,15 @@ bool FEASolver::solveLinearStatic(FEAModel& model, float visualScale,
     // to prevent System RAM from maxing out (e.g., Tet10 triplets can use >10GB for 1M elements).
     std::vector<Triplet<double>>().swap(tripletList);
     std::vector<std::unique_ptr<IElement>>().swap(elements);
+
+    {
+        char db[80];
+        snprintf(db, sizeof(db), "%d DOF  %lld NNZ", nDOFs,
+                 static_cast<long long>(K.nonZeros()));
+        SolverStatus::detail(sgAsm, db);
+    }
+    SolverStatus::end(sgAsm);
+    SolverStatus::begin(sgBC, 1);
 
     reportProgress(0.48);
     if (isCancelled()) return cancelBail();
@@ -948,7 +997,7 @@ bool FEASolver::solveLinearStatic(FEAModel& model, float visualScale,
         const int e = 3 - a - d;
         if (d < 0 || d > 2 || d == a) {
             std::cout << "ThreePointBend: invalid bendDir/axis" << std::endl;
-            return false;
+            return failBail();
         }
         auto coordOf = [&](int ni, int ax) -> double {
             const glm::vec3& p = model.originalVolumetricPositions[ni];
@@ -993,7 +1042,7 @@ bool FEASolver::solveLinearStatic(FEAModel& model, float visualScale,
         if (supA.empty() || supB.empty() || loadedNodes.empty()) {
             std::cout << "ThreePointBend: empty support/load band (span too "
                          "large for the mesh?)" << std::endl;
-            return false;
+            return failBail();
         }
         // Rollers: support nodes pinned in d and e; support A also pins the
         // beam axis (removes the last rigid mode). Slightly stiffer than ideal
@@ -1037,7 +1086,7 @@ bool FEASolver::solveLinearStatic(FEAModel& model, float visualScale,
 
     if (loadedNodes.empty()) {
         std::cout << "No load nodes detected for automatic force application." << std::endl;
-        return false;
+        return failBail();
     }
 
     // -------------------------------------------------------------------------
@@ -1104,7 +1153,7 @@ bool FEASolver::solveLinearStatic(FEAModel& model, float visualScale,
         if (fd < 0 || fd > 2 || (loadType == LoadType::FaceBend && fd == ta)) {
             std::cout << "FaceBend: invalid bendDir " << bendDir
                       << " (must be 0..2 and != faceAxis)" << std::endl;
-            return false;
+            return failBail();
         }
         // Distribution set: on quadratic meshes load ONLY the mid-edge nodes
         // of the face — the consistent load vector for uniform traction on a
@@ -1218,7 +1267,7 @@ bool FEASolver::solveLinearStatic(FEAModel& model, float visualScale,
             const double t_m  = std::max(1e-9, (double)wi.thicknessMM * 1e-3);
             const double kt   = (double)model.layers->tieAlpha * Etie * A_m2 / t_m;
             for (const auto& tie : wi.ties) {
-                if (tie.released) continue;   // new_TODO_06 delamination hook
+                if (tie.released) continue;   // delamination hook
                 ++nTies;
                 const int top = static_cast<int>(tie.nodeTop);
                 for (int d = 0; d < 3; ++d) {
@@ -1263,11 +1312,14 @@ bool FEASolver::solveLinearStatic(FEAModel& model, float visualScale,
     }
 
     // The factorization/CG below is the long uninterruptible stage; the bar
-    // sits at 0.55 until it returns (cancel takes effect right after).
+    // sits at 0.55 until it returns (cancel takes effect right after). The
+    // overlay says so explicitly rather than looking hung.
     reportProgress(0.55);
+    SolverStatus::end(sgBC);
     if (isCancelled()) return cancelBail();
 
     VectorXd U;
+    SolverStatus::begin(sgSolve, useMultithreading ? omp_get_max_threads() : 1);
 
     // ---------------------------------------------------------------
     // GPU path: Jacobi-preconditioned conjugate gradient via cuSPARSE/cuBLAS
@@ -1279,18 +1331,27 @@ bool FEASolver::solveLinearStatic(FEAModel& model, float visualScale,
 
         // cuSPARSE consumes CSR. Make row-major storage explicit instead of
         // relying on CSC(K) matching CSR(K) only when K is exactly symmetric.
+        SolverStatus::detail(sgSolve, "CSC TO CSR");
         cuda_solver::CsrMatrix Kcsr = K;
         Kcsr.makeCompressed();
+        SolverStatus::detail(sgSolve, "CUSPARSE PCG");
 
         auto tGpu0 = std::chrono::high_resolution_clock::now();
-        bool gpuOK = cuda_solver::solveOnGpu(Kcsr, F, U);
+        bool gpuOK = cuda_solver::solveOnGpu(Kcsr, F, U, sd + 1, cancelRequested);
         auto tGpu1 = std::chrono::high_resolution_clock::now();
         double gpuMs = std::chrono::duration<double, std::milli>(tGpu1 - tGpu0).count();
 
         if (gpuOK) {
             std::cout << "[GPU] Solve succeeded in " << gpuMs << " ms" << std::endl;
+        } else if (isCancelled()) {
+            // A cancelled GPU solve also returns false. Falling through to the
+            // CPU path here would answer the user's cancel by starting the
+            // whole solve again, uninterruptibly.
+            SolverStatus::end(sgSolve, SolverStatus::State::Cancelled);
+            return cancelBail();
         } else {
             std::cout << "[GPU] GPU solve failed. Falling back to CPU..." << std::endl;
+            SolverStatus::detail(sgSolve, "GPU FAILED - CPU FALLBACK");
             useGPU = false; // fall through to CPU path below
         }
     }
@@ -1310,6 +1371,10 @@ bool FEASolver::solveLinearStatic(FEAModel& model, float visualScale,
         std::cout << "[MT] Solving via ConjugateGradient<Jacobi> on "
                   << omp_get_max_threads() << " thread(s)  (maxIters="
                   << maxIters << ", tol=" << cgTol << ")..." << std::endl;
+        // Eigen's CG exposes no per-iteration hook, so the overlay cannot show a
+        // percentage here -- it shows the method and stays indeterminate, which
+        // is also why cancelling only takes effect once this call returns.
+        SolverStatus::detail(sgSolve, "JACOBI-PCG  NO INTERRUPT");
 
         auto tSolve0 = std::chrono::high_resolution_clock::now();
         ConjugateGradient<SparseMatrix<double>, Lower|Upper,
@@ -1331,44 +1396,49 @@ bool FEASolver::solveLinearStatic(FEAModel& model, float visualScale,
             std::cout << "[MT] CG converged in " << cg.iterations()
                       << " iters, est. rel-error = " << cg.error()
                       << "  [" << solveMs << " ms]" << std::endl;
+            char db[80];
+            snprintf(db, sizeof(db), "JACOBI-PCG  %d ITERS",
+                     static_cast<int>(cg.iterations()));
+            SolverStatus::detail(sgSolve, db);
         } else {
             std::cout << "[MT] CG did not converge (iters=" << cg.iterations()
                       << ", err=" << cg.error()
                       << "). Falling back to serial SimplicialLDLT..."
                       << std::endl;
+            SolverStatus::detail(sgSolve, "CG STALLED - LDLT FALLBACK");
             SimplicialLDLT<SparseMatrix<double>> ldlt;
             ldlt.compute(K);
             if (ldlt.info() != Success) {
                 std::cout << "Matrix decomposition failed!" << std::endl;
-                if (didScale) restoreGeometryToModel(model);
-                return false;
+                return failBail();
             }
             U = ldlt.solve(F);
             if (ldlt.info() != Success) {
                 std::cout << "Solving failed!" << std::endl;
-                if (didScale) restoreGeometryToModel(model);
-                return false;
+                return failBail();
             }
         }
     } else {
         // --- ORIGINAL SERIAL PATH (preserved line-by-line; only the
         //     `VectorXd U` declaration is hoisted above this branch) -----
         std::cout << "Solving linear system using SimplicialLDLT..." << std::endl;
+        SolverStatus::detail(sgSolve, "SIMPLICIAL LDLT  SERIAL");
         SimplicialLDLT<SparseMatrix<double>> solver;
         solver.compute(K);
         if (solver.info() != Success) {
             std::cout << "Matrix decomposition failed!" << std::endl;
-            if (didScale) restoreGeometryToModel(model);
-            return false;
+            return failBail();
         }
 
         U = solver.solve(F);
         if (solver.info() != Success) {
             std::cout << "Solving failed!" << std::endl;
-            if (didScale) restoreGeometryToModel(model);
-            return false;
+            return failBail();
         }
     }
+
+    SolverStatus::end(sgSolve);
+    SolverStatus::begin(sgPost, 1);
 
     reportProgress(0.92);
     if (isCancelled()) return cancelBail();
@@ -1467,6 +1537,7 @@ bool FEASolver::solveLinearStatic(FEAModel& model, float visualScale,
     if (didScale) restoreGeometryToModel(model);   // (also converts appliedForces)
     model.buildBuffers();
 
+    SolverStatus::end(sgPost);
     reportProgress(1.0);
     std::cout << "Updated mesh with deformations (scaled " << visualScale << "x)" << std::endl;
     return true;
@@ -2821,11 +2892,17 @@ bool FEASolver::solveBrittleFracture(FEAModel& model, float visualScale, int max
     m_progLo = 0.0; m_progHi = 1.0;
     reportProgress(0.01);
 
+    // Each fracture iteration is a full re-assemble + re-solve, so it gets its
+    // own row in the overlay and the nested linear-solve stages indent under it.
+    m_statusDepth = 2;
+
     for (int iter = 0; iter < maxIters; ++iter) {
         useGPU = savedUseGPU; // re-enable GPU for each iteration
 
         if (isCancelled()) {
             std::cout << "[FRACTURE] cancelled by user at iteration " << iter << std::endl;
+            SolverStatus::cancelAll();
+            m_statusDepth = 1;
             useMultithreading = savedUseMT;
             m_progLo = 0.0; m_progHi = 1.0;
             if (didScale) restoreGeometryToModel(model);
@@ -2836,6 +2913,18 @@ bool FEASolver::solveBrittleFracture(FEAModel& model, float visualScale, int max
 
         const int aliveNow = static_cast<int>(
             std::count(model.elementAlive.begin(), model.elementAlive.end(), uint8_t(1)));
+
+        char itLabel[64];
+        snprintf(itLabel, sizeof(itLabel), "ITERATION %d/%d", iter + 1, maxIters);
+        const int sgIter = SolverStatus::beginNow(itLabel, 1,
+                                                  SolverStatus::Device::CPU, 0);
+        {
+            char db[80];
+            snprintf(db, sizeof(db), "%d/%d ALIVE", aliveNow, nElems);
+            SolverStatus::detail(sgIter, db);
+            SolverStatus::progress(sgIter,
+                                   static_cast<float>(iter) / std::max(1, maxIters));
+        }
         std::cout << (useFdmFracture ? "[FRACTURE-FDM]" : "[FRACTURE]")
                   << " === Iteration " << iter + 1 << "/" << maxIters
                   << "  (" << aliveNow << "/" << nElems << " elements alive) ===" << std::endl;
@@ -2853,6 +2942,8 @@ bool FEASolver::solveBrittleFracture(FEAModel& model, float visualScale, int max
         if (isCancelled()) {
             std::cout << "[FRACTURE] cancelled by user during iteration "
                       << iter + 1 << std::endl;
+            SolverStatus::cancelAll();
+            m_statusDepth = 1;
             useMultithreading = savedUseMT;
             m_progLo = 0.0; m_progHi = 1.0;
             if (didScale) restoreGeometryToModel(model);
@@ -2873,6 +2964,9 @@ bool FEASolver::solveBrittleFracture(FEAModel& model, float visualScale, int max
                 std::cout << "[FRACTURE] Solver singular at iteration " << iter
                           << " after prior element failures -> part SEVERED; "
                              "stopping with accumulated crack state." << std::endl;
+                SolverStatus::detail(sgIter, "PART SEVERED");
+                SolverStatus::end(sgIter);
+                m_statusDepth = 1;
                 useMultithreading = savedUseMT;
                 m_progLo = 0.0; m_progHi = 1.0;
                 reportProgress(1.0);
@@ -2880,6 +2974,8 @@ bool FEASolver::solveBrittleFracture(FEAModel& model, float visualScale, int max
                 return true;
             }
             std::cout << "[FRACTURE] Solver failed at iteration " << iter << "." << std::endl;
+            SolverStatus::end(sgIter, SolverStatus::State::Failed);
+            m_statusDepth = 1;
             useMultithreading = savedUseMT;
             m_progLo = 0.0; m_progHi = 1.0;
             if (didScale) restoreGeometryToModel(model);
@@ -2887,6 +2983,9 @@ bool FEASolver::solveBrittleFracture(FEAModel& model, float visualScale, int max
         }
 
         // ---- Per-element stress recovery (precomputed D*B, always parallel) ----
+        const int sgStress = SolverStatus::beginNow("RECOVER STRESS", m_statusDepth,
+                                                    SolverStatus::Device::CPU,
+                                                    omp_get_max_threads());
         std::vector<float>   sigmaVM(nElems, 0.0f);
         std::vector<uint8_t> failModeBuf(nElems, 0);
 
@@ -2975,7 +3074,7 @@ bool FEASolver::solveBrittleFracture(FEAModel& model, float visualScale, int max
             if (kill) {
                 model.elementAlive[el]       = 0;
                 model.elementFailureIter[el] = iter;
-                model.elementVonMisesAtDeath[el] = sigmaVM[el]; // new_TODO_03: stress at death
+                model.elementVonMisesAtDeath[el] = sigmaVM[el]; // stress at death
                 ++killed;
             }
         }
@@ -2998,6 +3097,16 @@ bool FEASolver::solveBrittleFracture(FEAModel& model, float visualScale, int max
                       << "  alive=" << alive << "/" << nElems << std::endl;
         }
 
+        {
+            char db[96];
+            snprintf(db, sizeof(db), "%d KILLED  MAX %.1f MPA", killed, maxSVM * 1e-6f);
+            SolverStatus::detail(sgStress, db);
+            SolverStatus::end(sgStress);
+            snprintf(db, sizeof(db), "%d/%d ALIVE  %d KILLED", alive, nElems, killed);
+            SolverStatus::detail(sgIter, db);
+            SolverStatus::end(sgIter);
+        }
+
         // Redraw with the updated alive mask so the user sees progression.
         model.needsUpdate = true;
         model.buildBuffers();
@@ -3009,6 +3118,7 @@ bool FEASolver::solveBrittleFracture(FEAModel& model, float visualScale, int max
             break;
         }
     }
+    m_statusDepth = 1;
 
     if (useFdmFracture) {
         int totInterTens = 0, totInterShear = 0, totIntralayer = 0;

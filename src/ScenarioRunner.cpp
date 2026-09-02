@@ -6,6 +6,7 @@
 //  annotated with "[same-path: <UI button>]".
 // =============================================================================
 #include "ScenarioRunner.h"
+#include "SolverStatus.h"
 
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
@@ -1194,6 +1195,7 @@ namespace ScenarioRunner {
 
 int runScenario(const std::string& scenarioPath, const std::string& outPath,
                 const std::string& shotsDir) {
+    SolverStatus::reset("SCENARIO " + fs::path(scenarioPath).stem().string());
     Value report = Value::makeObject();
 
     // Parse first so a malformed scenario is a clean exit-2 with a message.

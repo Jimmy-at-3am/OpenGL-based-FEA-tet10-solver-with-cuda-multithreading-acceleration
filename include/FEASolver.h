@@ -227,6 +227,12 @@ private:
     void reportProgress(double f) const;
     bool isCancelled() const { return cancelRequested && cancelRequested->load(); }
 
+    // Indentation level for the SolverStatus viewport overlay. A bare
+    // solveLinearStatic reports its stages at depth 1 (under the job header);
+    // solveBrittleFracture bumps this so each nested solve nests under its
+    // "ITERATION k / n" row, exactly like COMSOL's nested progress tree.
+    int m_statusDepth = 1;
+
     // Generic applied-load visualization: rebuilds model.appliedForces from the
     // ACTUAL assembled external force vector F — every arrow sits at a loaded
     // node and points along that node's true force direction, with length

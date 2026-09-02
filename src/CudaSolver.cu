@@ -20,6 +20,7 @@
 // ---------------------------------------------------------------------------
 
 #include "CudaSolver.h"
+#include "SolverStatus.h"
 
 #include <cuda_runtime.h>
 #include <cusparse.h>
@@ -190,9 +191,12 @@ std::string getGpuInfo() {
 // ---------------------------------------------------------------------------
 bool solveOnGpu(const CsrMatrix& K,
                 const Eigen::VectorXd& F,
-                Eigen::VectorXd& U) {
+                Eigen::VectorXd& U,
+                int statusDepth,
+                const std::atomic<bool>* cancel) {
 
     auto t0 = std::chrono::high_resolution_clock::now();
+    auto cancelled = [cancel] { return cancel && cancel->load(); };
 
     if (K.rows() == 0 || K.nonZeros() == 0) {
         std::cerr << "[GPU] Empty matrix." << std::endl;
@@ -280,6 +284,10 @@ bool solveOnGpu(const CsrMatrix& K,
     void*             spBuf     = nullptr;
 
     bool success = false;
+    // Viewport telemetry: the three phases the user actually waits on. The
+    // upload row is what makes the per-fracture-iteration H2D cost visible.
+    int sgUp = -1, sgPcg = -1, sgDown = -1;
+    bool wasCancelled = false;
     double bNorm = 0.0;
     double target_rNorm = 0.0;
     std::chrono::high_resolution_clock::time_point tSolve0;
@@ -287,6 +295,29 @@ bool solveOnGpu(const CsrMatrix& K,
     int blocks = (n + 255) / 256;
     bool converged = false;
     double finalRNorm = 0.0;
+    double trueRNorm  = 0.0;
+    // Residual replacement / attainable-accuracy bookkeeping (see below).
+    int    replacements = 0;
+    int    stagnated    = 0;
+    double bestTrue     = std::numeric_limits<double>::infinity();
+    const int kMaxReplacements = 8;
+    // Two replacements that fail to improve the true residual by 20% mean CG
+    // has hit its finite-precision floor for this matrix; more iterations
+    // cannot help.
+    const int    kStagnationLimit = 2;
+    // How far above the requested tolerance a stagnated solve may still be
+    // accepted. 100x of a 1e-9 relative target is a 1e-7 relative residual --
+    // still five orders tighter than FE discretisation error, so accepting it
+    // is honest engineering, whereas rejecting it throws away a good answer
+    // and falls back to a CPU solve that hits the very same floor.
+    const double kAcceptFactor = 100.0;
+
+    sgUp = SolverStatus::beginNow("UPLOAD TO GPU", statusDepth, SolverStatus::Device::GPU);
+    {
+        char db[80];
+        snprintf(db, sizeof(db), "%d DOF  %d NNZ", n, nnz);
+        SolverStatus::detail(sgUp, db);
+    }
 
     // ------------------------------------------------------------------
     // 1. Allocate GPU memory
@@ -424,6 +455,10 @@ bool solveOnGpu(const CsrMatrix& K,
     // rz = r · z (result stays on device in d_rz)
     CUBLAS_CHECK_GOTO(cublasDdot(blHandle, n, d_r, 1, d_z, 1, d_rz), fail);
 
+    SolverStatus::end(sgUp);
+    sgPcg = SolverStatus::beginNow("GPU PCG SOLVE", statusDepth, SolverStatus::Device::GPU);
+    SolverStatus::detail(sgPcg, "JACOBI-PCG  CUSPARSE SPMV");
+
     tSolve0 = std::chrono::high_resolution_clock::now();
     finalRNorm = bNorm;
 
@@ -462,10 +497,104 @@ bool solveOnGpu(const CsrMatrix& K,
             finalRNorm = rNorm;
 
             if (std::isfinite(rNorm) && rNorm <= target_rNorm) {
-                iter++;
-                converged = true;
-                std::cout << "[GPU] CG converged at iter " << iter << "  ||r||=" << rNorm << std::endl;
-                break;
+                // RESIDUAL REPLACEMENT.
+                //
+                // Everything above tracks the *recursively updated* residual
+                // r <- r - a*Ap. Over the tens of thousands of iterations this
+                // penalty-BC system needs, that recurrence drifts away from the
+                // true residual b - A*x through rounding: measured here, it
+                // claimed 7.3e-08 when the truth was 2.6e-06, i.e. it declared
+                // victory 36x early and returned an under-converged solution
+                // that the caller had no way to detect.
+                //
+                // So the recursive residual is treated as a cheap *hint* only.
+                // When it claims convergence, r is recomputed exactly, and if
+                // the truth disagrees the exact r is adopted (that is the
+                // "replacement") and CG continues from there rather than
+                // discarding the work done so far.
+                bool reallyConverged = false;
+                {
+                    cusparseDnVecDescr_t vecX = nullptr, vecT = nullptr;
+                    double one = 1.0, zero = 0.0, minusOne = -1.0;
+                    double trueN = -1.0;
+                    if (cusparseCreateDnVec(&vecX, n, d_x,  CUDA_R_64F) == CUSPARSE_STATUS_SUCCESS &&
+                        cusparseCreateDnVec(&vecT, n, d_Ap, CUDA_R_64F) == CUSPARSE_STATUS_SUCCESS &&
+                        cusparseSpMV(spHandle, CUSPARSE_OPERATION_NON_TRANSPOSE,
+                                     &one, matA, vecX, &zero, vecT,
+                                     CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT, spBuf)
+                            == CUSPARSE_STATUS_SUCCESS) {
+                        // r_true = b - A*x, built in place in d_r.
+                        cudaMemcpy(d_r, d_b, n * sizeof(double), cudaMemcpyDeviceToDevice);
+                        cublasDaxpy(blHandle, n, &minusOne, d_Ap, 1, d_r, 1);
+                        cublasDnrm2(blHandle, n, d_r, 1, &trueN);
+                    }
+                    if (vecX) cusparseDestroyDnVec(vecX);
+                    if (vecT) cusparseDestroyDnVec(vecT);
+
+                    if (!std::isfinite(trueN) || trueN < 0.0) {
+                        std::cerr << "[GPU] true-residual evaluation failed." << std::endl;
+                        goto fail;
+                    }
+                    finalRNorm = trueN;
+                    if (trueN <= target_rNorm) {
+                        reallyConverged = true;
+                    } else {
+                        ++replacements;
+                        std::cout << "[GPU] residual replacement " << replacements
+                                  << " at iter " << (iter + 1)
+                                  << ": recursive ||r||=" << rNorm
+                                  << " but true ||b-Ax||=" << trueN << std::endl;
+
+                        // ATTAINABLE-ACCURACY FLOOR.
+                        // Once the exact residual stops improving, the limit is
+                        // FP64 rounding against this matrix's conditioning, not
+                        // the iteration count -- the penalty method's 1e7*maxDiag
+                        // entries spread the spectrum so far that the requested
+                        // tolerance can sit BELOW what double precision can
+                        // resolve. Measured here: the floor is ~1.3e-9 relative
+                        // against a 1e-9 request. Grinding on cannot close that.
+                        if (trueN < bestTrue * 0.8) { bestTrue = trueN; stagnated = 0; }
+                        else                        { ++stagnated; }
+
+                        if (stagnated >= kStagnationLimit || replacements > kMaxReplacements) {
+                            const double relResid = (bNorm > 0.0) ? trueN / bNorm : trueN;
+                            if (trueN <= kAcceptFactor * target_rNorm) {
+                                std::cout << "[GPU] CG reached its attainable-accuracy floor: "
+                                             "true relative residual " << relResid
+                                          << " vs requested " << CG_TOL
+                                          << ". Accepting -- further iterations cannot improve "
+                                             "it in double precision." << std::endl;
+                                finalRNorm = trueN;
+                                reallyConverged = true;
+                                goto acceptFloor;
+                            }
+                            std::cerr << "[GPU] CG stalled at true relative residual "
+                                      << relResid << ", well above the requested "
+                                      << CG_TOL << "; rejecting the GPU solve." << std::endl;
+                            goto fail;
+                        }
+                        // Restart the Krylov recursion from the exact residual:
+                        // z = M^-1 r, p = z, rz = r.z. Without this the stale
+                        // p/rz would immediately reintroduce the same drift.
+                        jacobiApply<<<blocks, 256>>>(d_diag, d_r, d_z, n);
+                        CUDA_CHECK_GOTO(cudaGetLastError(), fail);
+                        CUDA_CHECK_GOTO(cudaMemcpy(d_p, d_z, n * sizeof(double),
+                                                   cudaMemcpyDeviceToDevice), fail);
+                        CUBLAS_CHECK_GOTO(cublasSetPointerMode(blHandle,
+                                              CUBLAS_POINTER_MODE_DEVICE), fail);
+                        CUBLAS_CHECK_GOTO(cublasDdot(blHandle, n, d_r, 1, d_z, 1, d_rz), fail);
+                        continue;   // pointer mode already back to DEVICE
+                    }
+                }
+
+acceptFloor:
+                if (reallyConverged) {
+                    iter++;
+                    converged = true;
+                    std::cout << "[GPU] CG converged at iter " << iter
+                              << "  true ||b-Ax||=" << finalRNorm << std::endl;
+                    break;
+                }
             }
 
             int breakdown = 0;
@@ -479,6 +608,30 @@ bool solveOnGpu(const CsrMatrix& K,
 
             if ((iter + 1) % 500 == 0) {
                 std::cout << "[GPU] CG iter " << (iter + 1) << "  ||r||=" << rNorm << std::endl;
+            }
+
+            {
+                // Progress on log10 of the residual reduction achieved versus
+                // the reduction required. For CG this is a far more honest
+                // estimate than iter/maxIter, which is never reached.
+                char db[96];
+                snprintf(db, sizeof(db), "ITER %d  RES %.1E", iter + 1, rNorm);
+                SolverStatus::detail(sgPcg, db);
+                if (rNorm > 0.0 && bNorm > 0.0 && target_rNorm > 0.0) {
+                    const double total = std::log10(bNorm / target_rNorm);
+                    const double done  = std::log10(bNorm / rNorm);
+                    if (total > 0.0)
+                        SolverStatus::progress(sgPcg, static_cast<float>(
+                            std::min(1.0, std::max(0.0, done / total))));
+                }
+            }
+
+            // The only interruptible point in the whole solve chain.
+            if (cancelled()) {
+                std::cout << "[GPU] CG cancelled by user at iter " << (iter + 1)
+                          << "." << std::endl;
+                wasCancelled = true;
+                break;
             }
             CUBLAS_CHECK_GOTO(cublasSetPointerMode(blHandle, CUBLAS_POINTER_MODE_DEVICE), fail);
         }
@@ -500,6 +653,8 @@ bool solveOnGpu(const CsrMatrix& K,
     }
 
     CUDA_CHECK_GOTO(cudaDeviceSynchronize(), fail);
+
+    if (wasCancelled) goto fail;
 
     // The loop may end between periodic checks or by reaching the iteration
     // cap.  Never return an unconverged vector as a successful FEA solution.
@@ -524,6 +679,47 @@ bool solveOnGpu(const CsrMatrix& K,
         goto fail;
     }
 
+    // Final safety net. The convergence test above already judges on the true
+    // residual, so this should agree; it exists so that no path -- including
+    // the loop ending at CG_MAX_ITER -- can return an unverified x.
+    {
+        double alpha = 1.0, beta = 0.0;
+        cusparseDnVecDescr_t vecX = nullptr, vecR = nullptr;
+        trueRNorm = -1.0;
+        if (cusparseCreateDnVec(&vecX, n, d_x,  CUDA_R_64F) == CUSPARSE_STATUS_SUCCESS &&
+            cusparseCreateDnVec(&vecR, n, d_Ap, CUDA_R_64F) == CUSPARSE_STATUS_SUCCESS) {
+            // Ap := A*x, then Ap := Ap - b, then ||Ap||.
+            if (cusparseSpMV(spHandle, CUSPARSE_OPERATION_NON_TRANSPOSE,
+                             &alpha, matA, vecX, &beta, vecR,
+                             CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT, spBuf)
+                == CUSPARSE_STATUS_SUCCESS) {
+                const double minusOne = -1.0;
+                cublasDaxpy(blHandle, n, &minusOne, d_b, 1, d_Ap, 1);
+                cublasDnrm2(blHandle, n, d_Ap, 1, &trueRNorm);
+            }
+        }
+        if (vecX) cusparseDestroyDnVec(vecX);
+        if (vecR) cusparseDestroyDnVec(vecR);
+
+        std::cout << "[GPU] true ||b - A x|| = " << trueRNorm
+                  << "  (recursive ||r|| = " << finalRNorm << ")" << std::endl;
+
+        // Same acceptance band as the in-loop floor test, so a solve accepted
+        // there is not thrown away here.
+        if (!(trueRNorm >= 0.0) || !std::isfinite(trueRNorm) ||
+            trueRNorm > kAcceptFactor * target_rNorm) {
+            std::cerr << "[GPU] recursive residual disagrees with the true residual ("
+                      << trueRNorm << " vs target " << target_rNorm
+                      << "); rejecting the GPU solution." << std::endl;
+            goto fail;
+        }
+        char db[96];
+        snprintf(db, sizeof(db), "%d ITERS  TRUE RES %.1E", iter, trueRNorm);
+        SolverStatus::detail(sgPcg, db);
+    }
+    SolverStatus::end(sgPcg);
+    sgDown = SolverStatus::beginNow("DOWNLOAD FROM GPU", statusDepth, SolverStatus::Device::GPU);
+
     // ------------------------------------------------------------------
     // 6. Device → Host: copy solution
     // ------------------------------------------------------------------
@@ -536,9 +732,19 @@ bool solveOnGpu(const CsrMatrix& K,
         std::cout << "[GPU] Total GPU time: " << totalMs << " ms" << std::endl;
     }
 
+    SolverStatus::end(sgDown);
     success = true;
 
 fail:
+    if (!success) {
+        // Any goto-fail path that left a row open would otherwise sit ACTIVE
+        // in the overlay forever.
+        const SolverStatus::State st = wasCancelled ? SolverStatus::State::Cancelled
+                                                    : SolverStatus::State::Failed;
+        if (sgUp   >= 0) SolverStatus::end(sgUp,   st);
+        if (sgPcg  >= 0) SolverStatus::end(sgPcg,  st);
+        if (sgDown >= 0) SolverStatus::end(sgDown, st);
+    }
     // ------------------------------------------------------------------
     // 7. Cleanup (always runs)
     // ------------------------------------------------------------------

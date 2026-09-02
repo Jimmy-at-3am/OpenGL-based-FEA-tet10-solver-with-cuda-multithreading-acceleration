@@ -111,6 +111,11 @@ void SimpleUI::drawText(std::string text, float x, float y, float size, glm::vec
         else if (c == ':') { addLine(0.4, 0.3, 0.6, 0.3); addLine(0.4, 0.7, 0.6, 0.7); }
         else if (c == '-') { addLine(0.1, 0.5, 0.9, 0.5); }
         else if (c == '_') { addLine(0.0, 1.0, 1.0, 1.0); }
+        // Added for the solver status overlay, which reports percentages,
+        // "ITER 3/14" ratios and a ">" active-stage marker.
+        else if (c == '/') { addLine(0.1, 1.0, 0.9, 0.0); }
+        else if (c == '%') { addLine(0.1, 1.0, 0.9, 0.0); addLine(0.1, 0.1, 0.35, 0.1); addLine(0.35, 0.1, 0.35, 0.35); addLine(0.35, 0.35, 0.1, 0.35); addLine(0.1, 0.35, 0.1, 0.1); addLine(0.65, 0.65, 0.9, 0.65); addLine(0.9, 0.65, 0.9, 0.9); addLine(0.9, 0.9, 0.65, 0.9); addLine(0.65, 0.9, 0.65, 0.65); }
+        else if (c == '>') { addLine(0.2, 0.15, 0.75, 0.5); addLine(0.75, 0.5, 0.2, 0.85); }
         cursorX += size * 1.2f;
     }
 
@@ -125,7 +130,22 @@ bool SimpleUI::button(std::string label, float x, float y, float w, float h, boo
     if (inputLocked) disabled = true;   // compute in progress: render-only
     bool hovered = (mouseX >= x && mouseX <= x + w && mouseY >= y && mouseY <= y + h);
     bool clicked = false;
-    if (hovered && mousePressed && !prevMousePressed && !disabled) { clicked = true; }
+    if (!disabled) {
+        if (hovered && mousePressed && !prevMousePressed) {
+            clicked = true;
+        } else if (mouseClickLatch &&
+                   mouseClickLatchX >= x && mouseClickLatchX <= x + w &&
+                   mouseClickLatchY >= y && mouseClickLatchY <= y + h) {
+            // Press+release were swallowed by one poll (slow frame during a
+            // compute job) so no rising edge was ever observable -- honour the
+            // latched press instead. This is what makes the progress panel's
+            // cancel X reliable while every core is busy solving.
+            clicked = true;
+        }
+        // Whichever path fired, consume the latch so a second overlapping
+        // widget cannot claim the same physical click.
+        if (clicked) mouseClickLatch = false;
+    }
 
     glm::vec3 fillColor = active ? glm::vec3(0.2f, 0.5f, 0.8f) : (disabled ? glm::vec3(0.25f, 0.25f, 0.25f) : glm::vec3(0.2f, 0.2f, 0.2f));
     if (hovered && !disabled && !active) {

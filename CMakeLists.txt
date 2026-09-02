@@ -223,14 +223,17 @@ set(SOURCES
     src/BuiltInShader.cpp
     src/SimpleUI.cpp
     src/GeometryUtils.cpp
+    src/LoadPhysics.cpp
     src/FEAModel.cpp
     src/FEASolver.cpp
     src/MeshQuality.cpp
     src/Tet10Element.cpp
-    # new_TODO_04: layered-FDM slice data model + contour extraction
+    # live solve-stage telemetry driving the viewport status overlay
+    src/SolverStatus.cpp
+    # layered-FDM slice data model + contour extraction
     src/LayerSlicer.cpp
-    src/StepSlicer.cpp        # B-rep section seam (OCC body deferred to 04B)
-    # new_TODO_05: per-slab 2D triangulation + prism extrusion -> Tet4 slabs
+    src/StepSlicer.cpp        # B-rep section seam
+    # per-slab 2D triangulation + prism extrusion -> Tet4 slabs
     src/SlabMesher.cpp
     # Bambu .gcode.3mf toolpath ingest (authoritative FDM source)
     src/GcodeToolpathLoader.cpp
@@ -489,3 +492,16 @@ foreach(FIXTURE_STEP_FILE ${FIXTURE_STEP_FILES})
             "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
     )
 endforeach()
+
+# --- Focused physics-contract tests (no renderer or solver dependencies) ---
+enable_testing()
+add_executable(load_physics_tests
+    tests/load_physics_tests.cpp
+    src/LoadPhysics.cpp)
+target_include_directories(load_physics_tests PRIVATE ${CMAKE_SOURCE_DIR}/include)
+if(MSVC)
+    target_compile_options(load_physics_tests PRIVATE /W4 /WX)
+else()
+    target_compile_options(load_physics_tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
+endif()
+add_test(NAME load_physics_tests COMMAND load_physics_tests)

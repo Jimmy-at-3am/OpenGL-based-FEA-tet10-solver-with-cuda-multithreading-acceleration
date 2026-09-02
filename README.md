@@ -21,6 +21,8 @@ CUDA-accelerated solver — no commercial FEA libraries used.
 - [Architecture](#architecture)
 - [Mathematical foundation](#mathematical-foundation)
 - [Solver pipeline](#solver-pipeline)
+- [FDM layer slicing & G-code toolpath meshing](#fdm-layer-slicing--g-code-toolpath-meshing)
+- [Headless scenario runner & regression testing](#headless-scenario-runner--regression-testing)
 - [Visualiser](#visualiser)
 - [Building from source](#building-from-source)
 - [Examples](#examples)
@@ -56,6 +58,22 @@ heatmaps.
 - Automatic fallback cascade between all three solvers
 - Real-time OpenGL 3.3+ visualiser with displacement and force heatmaps
 - OpenMP multithreaded stiffness matrix assembly
+- **FDM layer slicing**: slab-based cross-sectioning of any surface/B-rep model
+  along a build axis, with conforming Tet4 slab meshing (`LayerSlicer` +
+  `SlabMesher` + `StepSlicer`)
+- **G-code toolpath ingestion**: parses Bambu Studio `.gcode.3mf` containers
+  into per-layer bead geometry (`GcodeToolpathLoader` + `ToolpathModel`),
+  reconstructs per-layer print cross-sections via polygon boolean union
+  (`ToolpathSections`), and meshes the result with weak-tie layer interfaces
+  for delamination studies
+- Cross-section ("section view") slicing plane with an interactive height
+  slider, rendered as a live schema overlay
+- Async compute: long-running slice/mesh/solve jobs run on a background
+  thread with a progress bar and user cancellation, instead of blocking the
+  render loop
+- Headless scenario runner + regression harness (`--run`, `--regress all`)
+  driving the exact same geometry → mesh → solve pipeline as the UI, for
+  repeatable, assert-checked test scenarios
 
 ---
 
@@ -77,7 +95,12 @@ problem encountered in the previous one:
 | 9 | Adaptive meshing | Tet4 elements produced inaccurate strain gradients on curved surfaces |
 | 10 | Mesh quality + fidelity reports | Needed to detect sliver elements and quantify how well the mesh reproduces the input geometry |
 | 11 | Multi-format loaders (3MF, STEP) | STL discards units and exact geometry; STEP retains analytic NURBS for far higher fidelity |
-| 12 | STEP B-rep retention (current) | Discrete-triangulation Hausdorff error masked true surface accuracy; exact NURBS nearest-point fixes it |
+| 12 | STEP B-rep retention | Discrete-triangulation Hausdorff error masked true surface accuracy; exact NURBS nearest-point fixes it |
+| 13 | Headless `ScenarioRunner` + regression harness | Manual UI clicking couldn't catch regressions as the pipeline grew; needed a repeatable, assert-checked test suite |
+| 14 | FDM layer slicing + slab meshing (`LayerSlicer`, `SlabMesher`, `StepSlicer`) | Needed to analyse 3D-printed parts as stacks of physical layers, not a single monolithic volume |
+| 15 | G-code toolpath ingestion (`GcodeToolpathLoader`, `ToolpathModel`, `ToolpathSections`) | Slab geometry alone can't capture print-time weak points; the actual bead layout (walls, infill, support) determines real anisotropic strength |
+| 16 | Async compute + progress/cancellation | Slicing, toolpath meshing, and solving on dense G-code models could take tens of seconds, freezing the render loop with no way to abort |
+| 17 | Toolpath preview + section view (current) | Needed to visually verify sliced layers and toolpath meshing results before committing to a full solve |
 
 ---
 
@@ -93,6 +116,12 @@ PolyFEA/
 │   ├── STLLoader.h / ThreeMFLoader.h / StepLoader.h
 │   ├── BRepHandle.h             # pImpl wrapper isolating OpenCASCADE (analytic B-rep)
 │   ├── MeshQuality.h            # Per-element quality + Hausdorff/normal-deviation fidelity
+│   ├── LayerSlicer.h            # Build-axis slab cross-sectioning (mesh + B-rep sources)
+│   ├── SlabMesher.h             # Slab / toolpath-lane → conforming Tet4 volumetric mesh
+│   ├── GcodeToolpathLoader.h    # Bambu `.gcode.3mf` parser → ToolpathModel
+│   ├── ToolpathModel.h          # Parsed bead-segment data contract (layers, features, bbox)
+│   ├── ToolpathSections.h       # Bead segments → per-layer cookie polygons (Clipper2 + CDT)
+│   ├── ScenarioRunner.h         # Headless JSON scenario + regression harness
 │   ├── FEASolver.h              # Solver orchestration, load types, solver selection
 │   ├── CudaSolver.h             # GPU PCG entry point
 │   └── FEAModel.h               # Mesh data, deformed positions, retained B-rep, GPU flags
@@ -101,9 +130,16 @@ PolyFEA/
 │   ├── FEASolver.cpp            # Stiffness assembly (OpenMP), boundary conditions, Newton-Raphson
 │   ├── MeshQuality.cpp          # Quality metrics, BVH fidelity, OCC exact-nearest-point path
 │   ├── StepLoader.cpp / BRepHandle.cpp  # OpenCASCADE-aware translation units
+│   ├── LayerSlicer.cpp / StepSlicer.cpp # Slab cross-sections from triangulated / B-rep surfaces
+│   ├── SlabMesher.cpp           # Ear-clip + prism-split slab meshing, toolpath-lane meshing
+│   ├── GcodeToolpathLoader.cpp / ToolpathSections.cpp  # G-code ingest + per-layer bead cookies
+│   ├── ScenarioRunner.cpp       # `--run` / `--regress all` headless pipeline driver
 │   ├── CudaSolver.cu            # Jacobi-preconditioned CG in CUDA (cuSPARSE SpMV + kernels)
-│   └── main.cpp                 # OpenGL render loop, GLFW/GLAD, SimpleUI overlay
-├── assets/               # Example models and result screenshots
+│   └── main.cpp                 # OpenGL render loop, GLFW/GLAD, SimpleUI overlay, async jobs
+├── scenarios/            # JSON scenario definitions consumed by ScenarioRunner
+├── regression/           # Expected-result sentinel files checked by `--regress all`
+├── tools/                # Fixture generators (gen_step_fixtures, gen_unit_cube_stl)
+├── assets/               # Example models, G-code fixtures, materials, and screenshots
 ├── lib/                  # Third-party compiled dependencies
 ├── CMakeLists.txt
 └── build.bat
@@ -230,6 +266,82 @@ meshes this recovers up to ~15 GB of system RAM before the solve begins.
 
 ---
 
+## FDM layer slicing & G-code toolpath meshing
+
+Two independent ways to turn a 3D-printed part into a physically meaningful
+volumetric mesh, both producing conforming Tet4 slabs along a build axis:
+
+### Slab meshing from surface/B-rep geometry (`LayerSlicer` + `SlabMesher`)
+
+1. `LayerSlicer::computeSlices()` samples the loaded surface mesh (or, when a
+   STEP B-rep is present, the analytic shape via `StepSlicer::sliceBRepPlane`)
+   at the centre of every slab along the chosen build axis, producing one
+   `Section` per slab with outer loops CCW and holes CW.
+2. `SliceGrouping` derives the physical layer count, the slab-to-layer
+   grouping factor, and slab thickness in both model units and millimetres.
+3. `SlabMesher::meshSlabs()` ear-clip triangulates each 2D cross-section,
+   extrudes it into a prism along the build axis, and splits every prism into
+   3 Tet4 elements using the Dompierre rule (guaranteed positive Jacobians).
+   Adjacent slabs with identical topology share ring nodes, so the resulting
+   mesh is conforming across layer boundaries.
+
+### G-code toolpath meshing (`GcodeToolpathLoader` + `ToolpathSections` + `SlabMesher`)
+
+1. `GcodeToolpathLoader` reads a Bambu Studio `.gcode.3mf` (a ZIP container),
+   extracts `Metadata/plate_1.gcode`, and tessellates G2/G3 arcs at ~0.3 mm
+   sagitta into a `Toolpath::ToolpathModel` — bead segments with nozzle
+   endpoints, line width, and layer height, tagged by feature (outer wall,
+   inner wall, infill, support, …) and optionally filtered to exclude print
+   aids.
+2. `ToolpathSections` converts each layer's bead segments into "cookie"
+   polygons: every segment is rectangle-ized from its stadium cross-section,
+   unioned via **Clipper2** (non-zero fill rule), then morphologically closed
+   (inflate → deflate) to weld small gaps and seal corners, and simplified to
+   drop dust loops — preserving the sparse-infill pattern rather than
+   collapsing it into a solid slab.
+3. `SlabMesher::meshToolpathSlabs()` triangulates the resulting multi-hole
+   sections with **CDT** (constrained Delaunay — needed once infill has
+   dozens of holes per layer) and meshes each toolpath lane, inserting
+   barycentric weld ties between adjacent slabs (`LayerStack::interfaces`) so
+   layer-adhesion strength can later be modelled as weaker than in-plane bead
+   strength — the basis for delamination studies.
+
+Both pipelines report progress through `progressOut`/`cancelRequested`
+callbacks (see [Async compute](#async-compute) below) and are driven by the
+same UI buttons that the scenario runner calls headlessly.
+
+---
+
+## Headless scenario runner & regression testing
+
+`ScenarioRunner` is a thin CLI wrapper over the *exact* functions the
+interactive UI buttons call — geometry load → slice/mesh → solve → visualise
+— so there is never a second, divergent pipeline for tests versus the app.
+
+```bat
+FEAPreProcessor --run scenarios/demo_box_linear.json --out report.json --shots shots/
+FEAPreProcessor --regress all
+```
+
+- `--run <scenario.json>` executes one JSON scenario (geometry fixture,
+  slicing/meshing strategy, material, load type and magnitude, and assertion
+  thresholds on stress/displacement/fracture), writing a machine-readable
+  `report.json` (mesh stats, solver telemetry, fracture totals, probe values)
+  plus PNG screenshots, and exits 0 (asserts passed) / 1 (assert failed) / 2
+  (could not run).
+- `--regress all` runs every file in `scenarios/*.json` against the
+  corresponding sentinel in `regression/*.txt`, prints a one-line pass/fail
+  table per scenario, and returns the aggregate exit code — this is the
+  project's self-check oracle and is expected to pass cleanly from the repo
+  root.
+- `scenarios/` currently covers: linear/fracture demo boxes, three-point
+  bending shafts (lying/standing), G-code ingestion (box/pod, with and
+  without print aids), G-code section extraction, G-code slab meshing
+  (standard and weak-tie toolpath variants), slice-contour extraction
+  (box/concentric/holed), and unit-conversion checks.
+
+---
+
 ## Visualiser
 
 Built on OpenGL 3.3+ with GLFW and GLAD.
@@ -243,8 +355,26 @@ Built on OpenGL 3.3+ with GLFW and GLAD.
   - Scalar heatmap via `updateScalarFieldData` — paints nodal displacement
     magnitudes or force magnitudes using a dynamic gradient shader
   - Force arrow vectors (`ForceArrow`) drawn at load application sites
+  - Toolpath preview — sliced layer contours and per-layer toolpath sections
+    rendered as line segments, steppable layer-by-layer
+  - Section view — an interactive `SECTION_Z` height slider drives
+    `model.sectionZModel`; when `model.sectionEnabled` is set, the cross-section
+    at that height is drawn via `model.drawSectionPlane()` as a live schema
+    overlay
   - Schema axes and boundary grid
   - `SimpleUI` C++ immediate-mode overlay rendered without CAD viewport overlap
+
+### Async compute
+
+Slicing, toolpath meshing, and solving on dense models can take tens of
+seconds — too long to block the render loop. A `ComputeJob` (worker thread +
+`std::atomic<bool> cancel` + `std::atomic<float> progress`) runs the same
+functions the UI buttons call, checking progress/cancellation between layers
+or solver iterations so it can unwind cleanly without partial results. A
+sliding bottom-left panel shows a progress bar (or an animated stripe for
+indeterminate stages) with a cancel button; multi-stage jobs — e.g. toolpath
+sections → slab mesh → solve — report progress across weighted sub-ranges of
+the bar.
 
 ---
 
@@ -259,7 +389,10 @@ Built on OpenGL 3.3+ with GLFW and GLAD.
   and 3MF import work regardless.)
 - OpenGL 3.3+ capable GPU
 
-Everything else (Eigen, miniz, meshoptimizer) is fetched automatically by CMake at configure time.
+Everything else (Eigen, miniz, meshoptimizer, Clipper2, CDT, nlohmann/json) is
+fetched automatically by CMake at configure time. Clipper2 and CDT are
+optional (`-DUSE_CLIPPER2=OFF` / `-DUSE_CDT=OFF`) — toolpath section meshing
+degrades gracefully without them.
 
 ### Windows
 
@@ -311,7 +444,7 @@ the effect of element shape quality versus mesh density on solver accuracy.
 | 4   | 2.088       | 0.01007%   | 318   | 139      | 0.2520 m   | 0.790% |
 | 5   | 3.0         | 0.004629%  | 426   | 192      | 0.2537 m   | 1.483% |
 
-*(Add heatmap screenshot here — assets/cantilever_benchmark.png)*
+![Cantilever benchmark — displacement heatmap](assets/pictures/benchmark_test.png)
 
 **Key finding — mesh quality dominates over mesh density:**
 Run 2 uses 1808 nodes (the densest mesh) yet produces 2.631% error. Run 3 uses
@@ -345,6 +478,11 @@ ratio is the primary driver of numerical accuracy, not node count.
 - [x] CUDA PCG accelerated solver
 - [x] Adaptive Tet4 → Tet10 mesh promotion
 - [x] Per-element mesh quality metrics + Hausdorff/normal-deviation fidelity
+- [x] Headless scenario runner + regression harness (`--run`, `--regress all`)
+- [x] FDM layer slicing + conforming slab meshing (`LayerSlicer`, `SlabMesher`, `StepSlicer`)
+- [x] G-code toolpath ingestion + per-layer bead cookie meshing with weak-tie interfaces
+- [x] Async background compute with progress reporting and cancellation
+- [x] Toolpath preview and interactive section-view slicing plane
 - [ ] Von Mises stress and principal stress output
 - [ ] Pressure boundary conditions
 - [ ] Thermal analysis coupling (heat conduction FEA)
@@ -358,7 +496,10 @@ ratio is the primary driver of numerical accuracy, not node count.
 - **[TetGen](http://www.tetgen.org)** — Hang Si, WIAS Berlin. 3D Delaunay tetrahedralization.
 - **[meshoptimizer](https://github.com/zeux/meshoptimizer)** — Arseny Kapoulkine. Feature-preserving mesh decimation.
 - **[OpenCASCADE](https://www.opencascade.com)** — STEP I/O, B-rep tessellation, exact NURBS nearest-point queries (optional, `USE_OCCT`).
-- **[miniz](https://github.com/richgel999/miniz)** — Rich Geldreich. ZIP decompression for 3MF containers.
+- **[miniz](https://github.com/richgel999/miniz)** — Rich Geldreich. ZIP decompression for 3MF and `.gcode.3mf` containers.
+- **[Clipper2](https://github.com/AngusJohnson/Clipper2)** — Angus Johnson. Robust 2-D polygon boolean union/offset for toolpath cookie sections (optional, `USE_CLIPPER2`).
+- **[CDT](https://github.com/artem-ogre/CDT)** — Artem Ogre. Constrained Delaunay triangulation for multi-hole toolpath sections (optional, `USE_CDT`).
+- **[nlohmann/json](https://github.com/nlohmann/json)** — Niels Lohmann. JSON parsing for scenario files and reports.
 - **[Eigen](https://eigen.tuxfamily.org)** — Sparse matrix storage, SimplicialLDLT, ConjugateGradient solvers.
 - **[GLFW](https://www.glfw.org)** and **[GLAD](https://glad.dav1d.de)** — OpenGL context and extension loading.
 - **[CUDA Toolkit](https://developer.nvidia.com/cuda-toolkit)** / **cuSPARSE** — NVIDIA. GPU sparse matrix-vector products.

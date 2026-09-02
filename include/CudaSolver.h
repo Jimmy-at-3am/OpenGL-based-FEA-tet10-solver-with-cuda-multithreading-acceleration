@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Eigen/Sparse>
+#include <atomic>
 #include <string>
 
 // GPU-accelerated sparse linear solver using NVIDIA cuBLAS and cuSPARSE.
@@ -27,8 +28,16 @@ std::string getGpuInfo();
 // K must be SPD (symmetric positive definite), as produced by FEA assembly.
 // Returns true on success, false on failure.
 // On success, U is resized and filled with the solution.
+//
+// `cancel` is optional. Unlike Eigen's CG (whose solve() is a single opaque
+// call), this PCG loop is hand-written, so the flag is polled at the periodic
+// convergence checkpoint and the solve aborts there — cancelling a GPU solve
+// costs at most ~50 iterations, not the whole run. A cancelled solve returns
+// false and leaves U untouched.
 bool solveOnGpu(const CsrMatrix& K,
                 const Eigen::VectorXd& F,
-                Eigen::VectorXd& U);
+                Eigen::VectorXd& U,
+                int statusDepth = 2,
+                const std::atomic<bool>* cancel = nullptr);
 
 } // namespace cuda_solver
