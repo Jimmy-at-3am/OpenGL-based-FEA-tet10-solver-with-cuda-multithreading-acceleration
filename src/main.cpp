@@ -525,9 +525,9 @@ void drawInspectorTabs(
     SimpleUI& ui, ui_interaction::InspectorState& state,
     const ui_design::Rect& inspectorRect) {
     const std::vector<ui_design::WidgetId> ids{
-        {ui_design::ControlId::None, 0},
-        {ui_design::ControlId::None, 1},
-        {ui_design::ControlId::None, 2},
+        {ui_design::ControlId::SelectModelTab, 0},
+        {ui_design::ControlId::SelectMeshTab, 0},
+        {ui_design::ControlId::SelectSolveTab, 0},
     };
     const std::vector<std::string> labels{"Model", "Mesh", "Solve"};
     int selected = static_cast<int>(state.activeTab);
@@ -535,8 +535,28 @@ void drawInspectorTabs(
         inspectorRect.x + 16.0f, inspectorRect.y + 12.0f,
         inspectorRect.w - 32.0f, 36.0f};
     if (ui.segmentedControl(ids, tabs, labels, selected)) {
-        ui_interaction::selectTab(
-            state, static_cast<ui_design::InspectorTab>(selected));
+        if (selected == 0) {
+            ui_action_wiring::invokeInspectorAction<
+                ui_action_wiring::InspectorAction::SelectModelTab>(
+                    ids[0], [&](const auto&) {
+                        ui_interaction::selectTab(
+                            state, ui_design::InspectorTab::Model);
+                    });
+        } else if (selected == 1) {
+            ui_action_wiring::invokeInspectorAction<
+                ui_action_wiring::InspectorAction::SelectMeshTab>(
+                    ids[1], [&](const auto&) {
+                        ui_interaction::selectTab(
+                            state, ui_design::InspectorTab::Mesh);
+                    });
+        } else {
+            ui_action_wiring::invokeInspectorAction<
+                ui_action_wiring::InspectorAction::SelectSolveTab>(
+                    ids[2], [&](const auto&) {
+                        ui_interaction::selectTab(
+                            state, ui_design::InspectorTab::Solve);
+                    });
+        }
     }
 }
 
@@ -578,27 +598,15 @@ std::optional<int> drawSelectableRows(
     return std::nullopt;
 }
 
-template <typename Callback>
+template <ui_action_wiring::InspectorAction Action, typename Callback>
 bool dispatchInspectorAction(ui_design::WidgetId widget, Callback callback) {
-    struct ImmediateActionHandler {
-        Callback& callback;
-        void activate(const ui_action_wiring::InspectorEvent& event) {
-            callback(event);
-        }
-    } handler{callback};
-    return ui_action_wiring::makeInspectorBindings(handler).activate(widget);
+    return ui_action_wiring::invokeInspectorAction<Action>(widget, callback);
 }
 
-template <typename Callback>
+template <ui_action_wiring::InspectorAction Action, typename Callback>
 bool dispatchInspectorValue(
     ui_design::WidgetId widget, double value, Callback callback) {
-    struct ImmediateActionHandler {
-        Callback& callback;
-        void activate(const ui_action_wiring::InspectorEvent& event) {
-            callback(event);
-        }
-    } handler{callback};
-    return ui_action_wiring::makeInspectorBindings(handler).change(widget, value);
+    return ui_action_wiring::invokeInspectorValue<Action>(widget, value, callback);
 }
 
 int runInteractive() {
@@ -815,22 +823,25 @@ int runInteractive() {
 
             if (const auto selected = drawModeSegment(
                     ui, currentMode, {lX, lY, lW, 36.0f})) {
-                const ui_design::ControlId modeControl = *selected == MODE_CUBE
-                    ? ui_design::ControlId::SelectCubeMode
-                    : ui_design::ControlId::SelectImportMode;
-                dispatchInspectorAction({modeControl, 0}, [&](const auto&) {
-                    if (*selected == MODE_CUBE) {
+                if (*selected == MODE_CUBE) {
+                    dispatchInspectorAction<
+                        ui_action_wiring::InspectorAction::SelectCubeMode>(
+                        {ui_design::ControlId::SelectCubeMode, 0}, [&](const auto&) {
                         currentMode = MODE_CUBE;
                         model.needsUpdate = true;
                         camera.OrbitTarget = glm::vec3(0.0f);
                         camera.OrbitRadius = 5.0f;
                         camera.UpdatePosition();
-                    } else {
+                    });
+                } else {
+                    dispatchInspectorAction<
+                        ui_action_wiring::InspectorAction::SelectImportMode>(
+                        {ui_design::ControlId::SelectImportMode, 0}, [&](const auto&) {
                         currentMode = MODE_IMPORT;
                         scanForModels();
                         modelListPage = 0;
-                    }
-                });
+                    });
+                }
             }
             lY += 52.0f;
 
@@ -904,7 +915,8 @@ int runInteractive() {
                     }
 
                     if (selectedModel) {
-                        dispatchInspectorAction(
+                        dispatchInspectorAction<
+                            ui_action_wiring::InspectorAction::SelectModelFile>(
                             {ui_design::ControlId::SelectModelFile, *selectedModel},
                             [&](const ui_action_wiring::InspectorEvent& event) {
                                 const int i = event.widget.instance;
@@ -941,7 +953,8 @@ int runInteractive() {
                                       {lX, lY, navButtonW, 32.0f},
                                       ui_design::ControlRole::Secondary, false,
                                       modelListPage == 0)) {
-                            dispatchInspectorAction(
+                            dispatchInspectorAction<
+                                ui_action_wiring::InspectorAction::PreviousModelPage>(
                                 {ui_design::ControlId::PreviousModelPage, 0},
                                 [&](const auto&) { --modelListPage; });
                         }
@@ -955,7 +968,8 @@ int runInteractive() {
                                       {lX + lW - navButtonW, lY, navButtonW, 32.0f},
                                       ui_design::ControlRole::Secondary, false,
                                       modelListPage == totalPages - 1)) {
-                            dispatchInspectorAction(
+                            dispatchInspectorAction<
+                                ui_action_wiring::InspectorAction::NextModelPage>(
                                 {ui_design::ControlId::NextModelPage, 0},
                                 [&](const auto&) { ++modelListPage; });
                         }
@@ -1021,7 +1035,8 @@ int runInteractive() {
                     ui, ui_design::ControlId::SelectMaterial, materialLabels, 0,
                     activeMaterialIndex, {lX, lY, lW, rowsHeight});
                 if (selectedMaterial) {
-                    dispatchInspectorAction(
+                    dispatchInspectorAction<
+                        ui_action_wiring::InspectorAction::SelectMaterial>(
                         {ui_design::ControlId::SelectMaterial, *selectedMaterial},
                         [&](const ui_action_wiring::InspectorEvent& event) {
                             const std::string& mf =
@@ -1120,7 +1135,8 @@ int runInteractive() {
             y += 24.0f;
             if (ui.toggle(ui_design::ControlId::ToggleSlicing, "Layer slicing",
                           {x, y, w, 32.0f}, model.params.enableLayerSlicing)) {
-                dispatchInspectorValue(
+                dispatchInspectorValue<
+                    ui_action_wiring::InspectorAction::ToggleSlicing>(
                     {ui_design::ControlId::ToggleSlicing, 0},
                     model.params.enableLayerSlicing ? 1.0 : 0.0,
                     [&](const auto&) {
@@ -1134,7 +1150,8 @@ int runInteractive() {
                                "Layer thickness", model.params.layerThickness,
                                0.01f, 1.0f, {x, y, w, 48.0f},
                                ui_design::formatValue(model.params.layerThickness, 2, false, "mm"))) {
-                dispatchInspectorValue(
+                dispatchInspectorValue<
+                    ui_action_wiring::InspectorAction::EditLayerThickness>(
                     {ui_design::ControlId::EditLayerThickness, 0},
                     model.params.layerThickness, [](const auto&) {});
             }
@@ -1147,19 +1164,32 @@ int runInteractive() {
             };
             if (ui.segmentedControl(axisIds, {x, y, w, 34.0f},
                                     {"X", "Y", "Z"}, sliceAxis)) {
-                const ui_design::ControlId axisControl = sliceAxis == 0
-                    ? ui_design::ControlId::SelectSliceAxisX
-                    : sliceAxis == 1
-                        ? ui_design::ControlId::SelectSliceAxisY
-                        : ui_design::ControlId::SelectSliceAxisZ;
-                dispatchInspectorValue({axisControl, 0}, sliceAxis,
-                    [&](const auto&) { model.params.buildAxisSel = sliceAxis; });
+                const auto applySliceAxis =
+                    [&](const auto&) { model.params.buildAxisSel = sliceAxis; };
+                if (sliceAxis == 0) {
+                    dispatchInspectorValue<
+                        ui_action_wiring::InspectorAction::SelectSliceAxisX>(
+                        {ui_design::ControlId::SelectSliceAxisX, 0}, sliceAxis,
+                        applySliceAxis);
+                } else if (sliceAxis == 1) {
+                    dispatchInspectorValue<
+                        ui_action_wiring::InspectorAction::SelectSliceAxisY>(
+                        {ui_design::ControlId::SelectSliceAxisY, 0}, sliceAxis,
+                        applySliceAxis);
+                } else {
+                    dispatchInspectorValue<
+                        ui_action_wiring::InspectorAction::SelectSliceAxisZ>(
+                        {ui_design::ControlId::SelectSliceAxisZ, 0}, sliceAxis,
+                        applySliceAxis);
+                }
             }
             y += 46.0f;
             if (ui.sliderField(ui_design::ControlId::EditMaxSlabs, "Maximum slabs",
                                sliceMaxSlabsF, 2.0f, 200.0f, {x, y, w, 48.0f},
                                ui_design::formatValue(sliceMaxSlabsF, 0, false, ""))) {
-                dispatchInspectorValue({ui_design::ControlId::EditMaxSlabs, 0},
+                dispatchInspectorValue<
+                    ui_action_wiring::InspectorAction::EditMaxSlabs>(
+                    {ui_design::ControlId::EditMaxSlabs, 0},
                                        sliceMaxSlabsF, [](const auto&) {});
             }
             model.params.maxSlabs = static_cast<int>(sliceMaxSlabsF + 0.5f);
@@ -1168,14 +1198,17 @@ int runInteractive() {
                                model.params.wallWidth, 0.05f, 2.0f,
                                {x, y, w, 48.0f},
                                ui_design::formatValue(model.params.wallWidth, 2, false, "mm"))) {
-                dispatchInspectorValue({ui_design::ControlId::EditWallWidth, 0},
+                dispatchInspectorValue<
+                    ui_action_wiring::InspectorAction::EditWallWidth>(
+                    {ui_design::ControlId::EditWallWidth, 0},
                                        model.params.wallWidth, [](const auto&) {});
             }
             y += 60.0f;
 
             if (ui.button(ui_design::ControlId::PreviewSlice, "Preview slice",
                           {x, y, w, 36.0f}, ui_design::ControlRole::Primary)) {
-                dispatchInspectorAction(
+                dispatchInspectorAction<
+                    ui_action_wiring::InspectorAction::PreviewSlice>(
                     {ui_design::ControlId::PreviewSlice, 0}, [&](const auto&) {
                         LayerSlicer::SliceGrouping grp;
                         std::vector<LayerSlicer::PlaneStats> stats;
@@ -1222,7 +1255,8 @@ int runInteractive() {
                                    "Preview layer", layerF, 0.0f,
                                    static_cast<float>(nL - 1), {x, y, w, 48.0f},
                                    ui_design::formatValue(layerF, 0, false, ""))) {
-                    dispatchInspectorValue(
+                    dispatchInspectorValue<
+                        ui_action_wiring::InspectorAction::SelectPreviewLayer>(
                         {ui_design::ControlId::SelectPreviewLayer, 0}, layerF,
                         [&](const auto&) {
                             rebuildSlicePreview(static_cast<int>(layerF + 0.5f));
@@ -1242,21 +1276,27 @@ int runInteractive() {
             if (ui.sliderField(ui_design::ControlId::EditSizeX, "X size",
                                model.params.sizeX, 0.1f, 10.0f, {rX, rY, rW, 48.0f},
                                ui_design::formatValue(model.params.sizeX, 3, false, "m"))) {
-                dispatchInspectorValue({ui_design::ControlId::EditSizeX, 0},
+                dispatchInspectorValue<
+                    ui_action_wiring::InspectorAction::EditSizeX>(
+                    {ui_design::ControlId::EditSizeX, 0},
                     model.params.sizeX, [&](const auto&) { model.needsUpdate = true; });
             }
             rY += 60.0f;
             if (ui.sliderField(ui_design::ControlId::EditSizeY, "Y size",
                                model.params.sizeY, 0.1f, 5.0f, {rX, rY, rW, 48.0f},
                                ui_design::formatValue(model.params.sizeY, 3, false, "m"))) {
-                dispatchInspectorValue({ui_design::ControlId::EditSizeY, 0},
+                dispatchInspectorValue<
+                    ui_action_wiring::InspectorAction::EditSizeY>(
+                    {ui_design::ControlId::EditSizeY, 0},
                     model.params.sizeY, [&](const auto&) { model.needsUpdate = true; });
             }
             rY += 60.0f;
             if (ui.sliderField(ui_design::ControlId::EditSizeZ, "Z size",
                                model.params.sizeZ, 0.1f, 5.0f, {rX, rY, rW, 48.0f},
                                ui_design::formatValue(model.params.sizeZ, 3, false, "m"))) {
-                dispatchInspectorValue({ui_design::ControlId::EditSizeZ, 0},
+                dispatchInspectorValue<
+                    ui_action_wiring::InspectorAction::EditSizeZ>(
+                    {ui_design::ControlId::EditSizeZ, 0},
                     model.params.sizeZ, [&](const auto&) { model.needsUpdate = true; });
             }
             rY += 60.0f;
@@ -1264,7 +1304,9 @@ int runInteractive() {
                                model.params.subdivisions, 1.0f, 20.0f,
                                {rX, rY, rW, 48.0f},
                                ui_design::formatValue(model.params.subdivisions, 0, false, ""))) {
-                dispatchInspectorValue({ui_design::ControlId::EditSubdivisions, 0},
+                dispatchInspectorValue<
+                    ui_action_wiring::InspectorAction::EditSubdivisions>(
+                    {ui_design::ControlId::EditSubdivisions, 0},
                     model.params.subdivisions, [&](const auto&) { model.needsUpdate = true; });
             }
             rY += 60.0f;
@@ -1272,7 +1314,8 @@ int runInteractive() {
             if (ui.toggle(ui_design::ControlId::ToggleVertexSmoothing,
                           "Vertex smoothing", {rX, rY, rW, 32.0f},
                           model.params.enablePolarRemoval)) {
-                dispatchInspectorValue(
+                dispatchInspectorValue<
+                    ui_action_wiring::InspectorAction::ToggleVertexSmoothing>(
                     {ui_design::ControlId::ToggleVertexSmoothing, 0},
                     model.params.enablePolarRemoval ? 1.0 : 0.0,
                     [&](const auto&) {
@@ -1286,7 +1329,9 @@ int runInteractive() {
                            model.params.tetRadiusEdge, 1.1f, 3.0f,
                            {rX, rY, rW, 48.0f},
                            ui_design::formatValue(model.params.tetRadiusEdge, 2, false, "p"))) {
-            dispatchInspectorValue({ui_design::ControlId::EditMeshQuality, 0},
+            dispatchInspectorValue<
+                ui_action_wiring::InspectorAction::EditMeshQuality>(
+                {ui_design::ControlId::EditMeshQuality, 0},
                                    model.params.tetRadiusEdge, [](const auto&) {});
         }
         rY += 60.0f;
@@ -1295,7 +1340,9 @@ int runInteractive() {
                            {rX, rY, rW, 48.0f},
                            ui_design::formatValue(model.params.maxVolPercent, 2, true, "%"),
                            true)) {
-            dispatchInspectorValue({ui_design::ControlId::EditMaxVolumePercent, 0},
+            dispatchInspectorValue<
+                ui_action_wiring::InspectorAction::EditMaxVolumePercent>(
+                {ui_design::ControlId::EditMaxVolumePercent, 0},
                                    model.params.maxVolPercent, [](const auto&) {});
         }
         rY += 60.0f;
@@ -1306,7 +1353,8 @@ int runInteractive() {
                           {rX, rY, viewButtonW, 34.0f},
                           ui_design::ControlRole::Secondary,
                           !model.showVolumetricMesh)) {
-                dispatchInspectorAction(
+                dispatchInspectorAction<
+                    ui_action_wiring::InspectorAction::SelectSurfaceView>(
                     {ui_design::ControlId::SelectSurfaceView, 0}, [&](const auto&) {
                         model.showVolumetricMesh = false;
                         model.buildBuffers();
@@ -1316,7 +1364,8 @@ int runInteractive() {
                           {rX + viewButtonW + 8.0f, rY, viewButtonW, 34.0f},
                           ui_design::ControlRole::Secondary,
                           model.showVolumetricMesh, !model.hasVolumetricMesh)) {
-                dispatchInspectorAction(
+                dispatchInspectorAction<
+                    ui_action_wiring::InspectorAction::SelectVolumeView>(
                     {ui_design::ControlId::SelectVolumeView, 0}, [&](const auto&) {
                         if (model.hasVolumetricMesh) {
                             model.showVolumetricMesh = true;
@@ -1329,7 +1378,8 @@ int runInteractive() {
 
         if (ui.button(ui_design::ControlId::GenerateVolumeMesh, "Generate volume mesh",
                       {rX, rY, rW, 40.0f}, ui_design::ControlRole::Primary)) {
-            dispatchInspectorAction(
+            dispatchInspectorAction<
+                ui_action_wiring::InspectorAction::GenerateVolumeMesh>(
                 {ui_design::ControlId::GenerateVolumeMesh, 0}, [&](const auto&) {
                 if (currentMode == MODE_CUBE) {
                     std::cout << "Button Clicked: Launching TetGen..." << std::endl;
@@ -1429,7 +1479,8 @@ int runInteractive() {
                               fieldLabel, {rX, rY, rW * 0.62f, 34.0f},
                               ui_design::ControlRole::Secondary,
                               showcaseMagFocused)) {
-                    dispatchInspectorAction(
+                    dispatchInspectorAction<
+                        ui_action_wiring::InspectorAction::EditShowcaseMagnitude>(
                         {ui_design::ControlId::EditShowcaseMagnitude, 0}, [&](const auto&) {
                             showcaseMagFocused = !showcaseMagFocused;
                             g_charInput.clear(); g_backspace = false; g_enter = false;
@@ -1438,7 +1489,8 @@ int runInteractive() {
                 if (ui.button(ui_design::ControlId::ResetShowcaseMagnitude,
                               "Default", {rX + rW * 0.65f, rY, rW * 0.35f, 34.0f},
                               ui_design::ControlRole::Secondary)) {
-                    dispatchInspectorAction(
+                    dispatchInspectorAction<
+                        ui_action_wiring::InspectorAction::ResetShowcaseMagnitude>(
                         {ui_design::ControlId::ResetShowcaseMagnitude, 0}, [&](const auto&) {
                             char b[32]; snprintf(b, sizeof(b), "%.0f", showcaseCfg.magN);
                             showcaseMagText = b;
@@ -1463,7 +1515,8 @@ int runInteractive() {
                               "Run showcase fracture", {rX, rY, rW, 40.0f},
                               ui_design::ControlRole::Primary,
                               false, !model.hasVolumetricMesh)) {
-                    dispatchInspectorAction(
+                    dispatchInspectorAction<
+                        ui_action_wiring::InspectorAction::RunShowcaseFracture>(
                         {ui_design::ControlId::RunShowcaseFracture, 0}, [&](const auto&) {
                     double mag = 0.0;
                     try { mag = std::stod(showcaseMagText); } catch (...) {}
@@ -1532,7 +1585,8 @@ int runInteractive() {
                 if (ui.toggle(ui_design::ControlId::ToggleMultithreading,
                               "Multithreading", {rX, rY, rW, 32.0f},
                               useMultithreading)) {
-                    dispatchInspectorValue(
+                    dispatchInspectorValue<
+                        ui_action_wiring::InspectorAction::ToggleMultithreading>(
                         {ui_design::ControlId::ToggleMultithreading, 0},
                         useMultithreading ? 1.0 : 0.0, [](const auto&) {});
                 }
@@ -1570,7 +1624,8 @@ int runInteractive() {
                 if (ui.toggle(ui_design::ControlId::ToggleGpuAcceleration,
                               "GPU acceleration (CUDA)", {rX, rY, rW, 32.0f},
                               useGPU)) {
-                    dispatchInspectorValue(
+                    dispatchInspectorValue<
+                        ui_action_wiring::InspectorAction::ToggleGpuAcceleration>(
                         {ui_design::ControlId::ToggleGpuAcceleration, 0},
                         useGPU ? 1.0 : 0.0, [](const auto&) {});
                 }
@@ -1596,7 +1651,8 @@ int runInteractive() {
                 };
                 if (ui.segmentedControl(buildAxisIds, {rX, rY, rW, 34.0f},
                                         {"X", "Y", "Z"}, selectedBuildAxis)) {
-                    dispatchInspectorValue(
+                    dispatchInspectorValue<
+                        ui_action_wiring::InspectorAction::SelectBuildAxis>(
                         {ui_design::ControlId::SelectBuildAxis, selectedBuildAxis},
                         selectedBuildAxis,
                         [&](const auto&) { buildAxis = selectedBuildAxis; });
@@ -1618,7 +1674,8 @@ int runInteractive() {
                     loadPresetLabels, 0, loadTypeSel,
                     {rX, rY, rW, loadRowsHeight});
                 if (selectedLoadPreset) {
-                    dispatchInspectorValue(
+                    dispatchInspectorValue<
+                        ui_action_wiring::InspectorAction::SelectLoadPreset>(
                         {ui_design::ControlId::SelectLoadPreset, *selectedLoadPreset},
                         *selectedLoadPreset,
                         [&](const auto&) { loadTypeSel = *selectedLoadPreset; });
@@ -1647,7 +1704,8 @@ int runInteractive() {
                                    forceMagnitudeMN, 1.0f, 1000.0f,
                                    {rX, rY, rW, 48.0f},
                                    ui_design::formatValue(forceMagnitudeMN, 1, false, "MN"))) {
-                    dispatchInspectorValue(
+                    dispatchInspectorValue<
+                        ui_action_wiring::InspectorAction::EditLoadMagnitude>(
                         {ui_design::ControlId::EditLoadMagnitude, 0},
                         forceMagnitudeMN, [](const auto&) {});
                 }
@@ -1705,7 +1763,8 @@ int runInteractive() {
                               "Run linear analysis", {rX, rY, rW, 40.0f},
                               ui_design::ControlRole::Primary,
                               false, !linearCapability.canRun())) {
-                    dispatchInspectorAction(
+                    dispatchInspectorAction<
+                        ui_action_wiring::InspectorAction::RunLinearAnalysis>(
                         {ui_design::ControlId::RunLinearAnalysis, 0}, [&](const auto&) {
                     std::cout << "Launching Static Solver..." << std::endl;
                     auto solver = std::make_shared<FEASolver>();
@@ -1732,7 +1791,8 @@ int runInteractive() {
                               nonlinearLabel, {rX, rY, rW, 40.0f},
                               ui_design::ControlRole::Secondary,
                               false, !nonlinearCapability.canRun())) {
-                    dispatchInspectorAction(
+                    dispatchInspectorAction<
+                        ui_action_wiring::InspectorAction::RunNonlinearAnalysis>(
                         {ui_design::ControlId::RunNonlinearAnalysis, 0}, [&](const auto&) {
                     std::cout << "Launching Newton-Raphson Solver..." << std::endl;
                     auto solver = std::make_shared<FEASolver>();
@@ -1765,7 +1825,8 @@ int runInteractive() {
                                    "Curvature angle", curvAngleThreshold,
                                    1.0f, 45.0f, {rX, rY, rW, 48.0f},
                                    ui_design::formatValue(curvAngleThreshold, 1, false, "deg"))) {
-                    dispatchInspectorValue(
+                    dispatchInspectorValue<
+                        ui_action_wiring::InspectorAction::EditCurvatureAngle>(
                         {ui_design::ControlId::EditCurvatureAngle, 0},
                         curvAngleThreshold, [](const auto&) {});
                 }
@@ -1774,7 +1835,8 @@ int runInteractive() {
                                    "Curvature fraction", curvFracLimit,
                                    0.05f, 0.75f, {rX, rY, rW, 48.0f},
                                    ui_design::formatValue(curvFracLimit, 2, false, ""))) {
-                    dispatchInspectorValue(
+                    dispatchInspectorValue<
+                        ui_action_wiring::InspectorAction::EditCurvatureFraction>(
                         {ui_design::ControlId::EditCurvatureFraction, 0},
                         curvFracLimit, [](const auto&) {});
                 }
@@ -1784,7 +1846,8 @@ int runInteractive() {
                               "Run adaptive analysis", {rX, rY, rW, 40.0f},
                               ui_design::ControlRole::Secondary,
                               false, !linearCapability.canRun())) {
-                    dispatchInspectorAction(
+                    dispatchInspectorAction<
+                        ui_action_wiring::InspectorAction::RunAdaptiveAnalysis>(
                         {ui_design::ControlId::RunAdaptiveAnalysis, 0}, [&](const auto&) {
                     std::cout << "Launching Adaptive Solver..." << std::endl;
                     auto solver = std::make_shared<FEASolver>();
@@ -1814,7 +1877,8 @@ int runInteractive() {
                     if (ui.toggle(ui_design::ControlId::ToggleFdmAnisotropy,
                                   fdmLabel, {rX, rY, rW, 32.0f},
                                   useFdmAnisotropy)) {
-                        dispatchInspectorValue(
+                        dispatchInspectorValue<
+                            ui_action_wiring::InspectorAction::ToggleFdmAnisotropy>(
                             {ui_design::ControlId::ToggleFdmAnisotropy, 0},
                             useFdmAnisotropy ? 1.0 : 0.0,
                             [&](const auto&) {
@@ -1832,7 +1896,8 @@ int runInteractive() {
                               "Run brittle fracture", {rX, rY, rW, 40.0f},
                               ui_design::ControlRole::Secondary,
                               false, !fractureCapability.canRun())) {
-                    dispatchInspectorAction(
+                    dispatchInspectorAction<
+                        ui_action_wiring::InspectorAction::RunBrittleFracture>(
                         {ui_design::ControlId::RunBrittleFracture, 0}, [&](const auto&) {
                     // Reset any previous fracture state so we start fresh.
                     model.elementAlive.clear();
@@ -1882,7 +1947,8 @@ int runInteractive() {
                               {rX, rY, resultButtonW, 34.0f},
                               ui_design::ControlRole::Secondary,
                               !model.showDeformedMesh)) {
-                    dispatchInspectorAction(
+                    dispatchInspectorAction<
+                        ui_action_wiring::InspectorAction::SelectOriginalResult>(
                         {ui_design::ControlId::SelectOriginalResult, 0}, [&](const auto&) {
                             model.showDeformedMesh = false;
                             model.buildBuffers();
@@ -1892,7 +1958,8 @@ int runInteractive() {
                               {rX + resultButtonW + 8.0f, rY, resultButtonW, 34.0f},
                               ui_design::ControlRole::Secondary,
                               model.showDeformedMesh)) {
-                    dispatchInspectorAction(
+                    dispatchInspectorAction<
+                        ui_action_wiring::InspectorAction::SelectDeformedResult>(
                         {ui_design::ControlId::SelectDeformedResult, 0}, [&](const auto&) {
                             model.showDeformedMesh = true;
                             model.buildBuffers();
@@ -1922,7 +1989,8 @@ int runInteractive() {
                             {"Deform", "Mode", "Crack order", "Stress"},
                             fractureSelection)) {
                         const int selectedValue = fractureValues[fractureSelection];
-                        dispatchInspectorValue(
+                        dispatchInspectorValue<
+                            ui_action_wiring::InspectorAction::SelectFractureView>(
                             {ui_design::ControlId::SelectFractureView,
                              fractureSelection}, selectedValue,
                             [&](const auto&) {
@@ -1941,7 +2009,8 @@ int runInteractive() {
                     if (ui.segmentedControl(deadIds, {rX, rY, rW, 34.0f},
                                             {"Hidden", "Ghost", "Colored"},
                                             deadSelection)) {
-                        dispatchInspectorValue(
+                        dispatchInspectorValue<
+                            ui_action_wiring::InspectorAction::SelectDeadElementView>(
                             {ui_design::ControlId::SelectDeadElementView, deadSelection},
                             deadSelection,
                             [&](const auto&) {
@@ -1956,7 +2025,8 @@ int runInteractive() {
                 if (ui.toggle(ui_design::ControlId::ToggleForceMap, "Force map",
                               {rX, rY, rW, 32.0f},
                               model.showAppliedForceField)) {
-                    dispatchInspectorValue(
+                    dispatchInspectorValue<
+                        ui_action_wiring::InspectorAction::ToggleForceMap>(
                         {ui_design::ControlId::ToggleForceMap, 0},
                         model.showAppliedForceField ? 1.0 : 0.0,
                         [](const auto&) {});

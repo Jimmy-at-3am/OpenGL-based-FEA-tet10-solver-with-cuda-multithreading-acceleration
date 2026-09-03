@@ -188,6 +188,9 @@ const std::vector<ControlId>& requiredControls() {
 
 const std::vector<ControlId>& requiredInspectorControls() {
     static const std::vector<ControlId> controls = {
+        ControlId::SelectModelTab,
+        ControlId::SelectMeshTab,
+        ControlId::SelectSolveTab,
         ControlId::SelectCubeMode,
         ControlId::SelectImportMode,
         ControlId::SelectModelFile,
@@ -251,6 +254,12 @@ std::string_view controlToken(ControlId id) {
     switch (id) {
     case ControlId::None:
         return {};
+    case ControlId::SelectModelTab:
+        return "select-model-tab";
+    case ControlId::SelectMeshTab:
+        return "select-mesh-tab";
+    case ControlId::SelectSolveTab:
+        return "select-solve-tab";
     case ControlId::CancelJob:
         return "cancel-job";
     case ControlId::SelectCubeMode:

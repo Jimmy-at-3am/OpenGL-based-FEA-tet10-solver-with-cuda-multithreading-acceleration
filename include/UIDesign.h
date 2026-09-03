@@ -60,6 +60,9 @@ struct TextDrawPolicy {
 
 enum class ControlId {
     None,
+    SelectModelTab,
+    SelectMeshTab,
+    SelectSolveTab,
     CancelJob,
     SelectCubeMode,
     SelectImportMode,
