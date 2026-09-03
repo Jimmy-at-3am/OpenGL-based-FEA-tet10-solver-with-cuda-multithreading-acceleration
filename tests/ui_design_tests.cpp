@@ -394,6 +394,114 @@ void testKeyboardNavigationMapsPressedKeysToIntents() {
                 ui_interaction::KeyIntent::None);
 }
 
+void testCompactLayoutKeepsPositiveViewport() {
+    const auto layout = ui_design::computeWindowLayout(800, 600);
+    expectTrue(layout.viewport.w > 0.0f,
+               "compact viewport width must remain positive");
+    expectTrue(layout.inspector.w <= 380.0f,
+               "inspector must respect maximum width");
+}
+
+void testKeyIntentQueueKeepsOnlyFirstIntentPerFrame() {
+    std::optional<ui_interaction::KeyIntent> pending;
+    expectTrue(ui_interaction::queueKeyIntent(
+                   pending, ui_interaction::KeyIntent::FocusNext),
+               "first key intent in a frame must be queued");
+    expectFalse(ui_interaction::queueKeyIntent(
+                    pending, ui_interaction::KeyIntent::Activate),
+                "a second key intent in the same frame must be rejected");
+    expectEqual(*pending, ui_interaction::KeyIntent::FocusNext);
+    expectFalse(ui_interaction::queueKeyIntent(
+                    pending, ui_interaction::KeyIntent::None),
+                "None must never occupy the pending key slot");
+}
+
+void testVisibleFocusOrderUsesStableWidgetsAndIncludesDisabledControls() {
+    std::vector<ui_design::WidgetId> visible;
+    const ui_design::Rect clip{100.0f, 100.0f, 320.0f, 400.0f};
+    ui_interaction::appendVisibleFocus(
+        visible, {ui_design::ControlId::SelectModelFile, 3},
+        {110.0f, 110.0f, 280.0f, 32.0f}, clip);
+    ui_interaction::appendVisibleFocus(
+        visible, {ui_design::ControlId::RunLinearAnalysis, 0},
+        {110.0f, 500.0f, 280.0f, 40.0f}, clip);
+    ui_interaction::appendVisibleFocus(
+        visible, {ui_design::ControlId::RunNonlinearAnalysis, 0},
+        {110.0f, 170.0f, 280.0f, 40.0f}, clip);
+
+    expectTrue(visible.size() == 2,
+               "only controls intersecting the active visible clip are focusable");
+    expectTrue(visible.front() ==
+                   ui_design::WidgetId{ui_design::ControlId::SelectModelFile, 3},
+               "focus order must preserve repeated-row widget identity");
+    expectTrue(visible.back() ==
+                   ui_design::WidgetId{ui_design::ControlId::RunNonlinearAnalysis, 0},
+               "disabled visible controls remain in focus order");
+    expectTrue(*ui_interaction::nextWidgetFocus(visible, visible.back(), 1) ==
+                   visible.front(),
+               "widget focus must wrap through visible controls");
+}
+
+void testKeyboardMutationHonorsDisabledAndBusyGates() {
+    expectTrue(ui_interaction::allowsKeyboardMutation(
+                   ui_interaction::KeyIntent::Activate, false, false),
+               "enabled idle controls must accept keyboard activation");
+    expectFalse(ui_interaction::allowsKeyboardMutation(
+                    ui_interaction::KeyIntent::Activate, true, false),
+                "disabled controls must not activate");
+    expectFalse(ui_interaction::allowsKeyboardMutation(
+                    ui_interaction::KeyIntent::Increase, false, true),
+                "busy inspector controls must not adjust");
+}
+
+void testKeyboardSliderAdjustmentUsesLinearAndLogarithmicRanges() {
+    expectNear(ui_interaction::adjustSlider(5.0f, 0.0f, 10.0f, false, 1), 5.1f);
+    expectNear(ui_interaction::adjustSlider(0.0f, 0.0f, 10.0f, false, -1), 0.0f);
+    expectNear(ui_interaction::adjustSlider(10.0f, 0.0f, 10.0f, false, 1), 10.0f);
+
+    const float increased = ui_interaction::adjustSlider(
+        0.01f, 0.00001f, 0.2f, true, 1);
+    const float expected = 0.01f * std::pow(0.2f / 0.00001f, 0.01f);
+    expectNear(increased, expected, 1e-6f);
+    expectNear(ui_interaction::adjustSlider(
+                   0.00001f, 0.00001f, 0.2f, true, -1),
+               0.00001f, 1e-8f);
+}
+
+void testSegmentAdjustmentMovesToAdjacentClampedOption() {
+    expectEqual(ui_interaction::adjustSegmentIndex(1, 3, -1), 0);
+    expectEqual(ui_interaction::adjustSegmentIndex(1, 3, 1), 2);
+    expectEqual(ui_interaction::adjustSegmentIndex(0, 3, -1), 0);
+    expectEqual(ui_interaction::adjustSegmentIndex(2, 3, 1), 2);
+}
+
+void testEscapePrefersCancellableJobThenHelp() {
+    expectEqual(ui_interaction::resolveEscape(true, true, true),
+                ui_interaction::EscapeAction::CancelJob);
+    expectEqual(ui_interaction::resolveEscape(true, false, true),
+                ui_interaction::EscapeAction::CloseHelp);
+    expectEqual(ui_interaction::resolveEscape(false, false, true),
+                ui_interaction::EscapeAction::CloseHelp);
+    expectEqual(ui_interaction::resolveEscape(false, false, false),
+                ui_interaction::EscapeAction::None);
+}
+
+void testDpiScaleChangesRebuildOnlyWhenEffectiveScaleChanges() {
+    expectNear(ui_interaction::effectiveContentScale(1.25f, 1.5f), 1.5f);
+    expectNear(ui_interaction::effectiveContentScale(0.0f, -2.0f), 1.0f);
+    expectFalse(ui_interaction::contentScaleChanged(1.5f, 1.5f),
+                "unchanged scale must not rebuild font atlases");
+    expectTrue(ui_interaction::contentScaleChanged(1.5f, 2.0f),
+               "effective scale changes must rebuild font atlases");
+
+    const auto normal = ui_interaction::motionDurations(false);
+    const auto reduced = ui_interaction::motionDurations(true);
+    expectTrue(normal.selectionMs >= 140 && normal.selectionMs <= 180,
+               "normal tab/segment motion must use the approved duration");
+    expectEqual(reduced.selectionMs, 0);
+    expectEqual(reduced.progressMs, 0);
+}
+
 void testViewportSurfacePaintOrderKeepsHelpAboveStatusAndProgressAboveHelp() {
     const auto allSurfaces = ui_design::viewportSurfacePaintOrder(true, true);
     const std::vector<ui_design::ViewportSurface> expectedAll = {
@@ -440,6 +548,14 @@ int main() {
         {"focus order skips hidden controls", testFocusOrderSkipsHiddenControls},
         {"selecting inspector tab clears focus", testSelectingInspectorTabClearsFocus},
         {"keyboard navigation maps pressed keys to intents", testKeyboardNavigationMapsPressedKeysToIntents},
+        {"compact layout keeps positive viewport", testCompactLayoutKeepsPositiveViewport},
+        {"key intent queue keeps first", testKeyIntentQueueKeepsOnlyFirstIntentPerFrame},
+        {"visible focus order uses stable widgets", testVisibleFocusOrderUsesStableWidgetsAndIncludesDisabledControls},
+        {"keyboard mutation honors gates", testKeyboardMutationHonorsDisabledAndBusyGates},
+        {"keyboard slider adjustment", testKeyboardSliderAdjustmentUsesLinearAndLogarithmicRanges},
+        {"segment adjustment", testSegmentAdjustmentMovesToAdjacentClampedOption},
+        {"escape routing", testEscapePrefersCancellableJobThenHelp},
+        {"DPI and reduced motion", testDpiScaleChangesRebuildOnlyWhenEffectiveScaleChanges},
         {"viewport surface paint order", testViewportSurfacePaintOrderKeepsHelpAboveStatusAndProgressAboveHelp},
     };
 

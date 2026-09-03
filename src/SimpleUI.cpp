@@ -1,6 +1,7 @@
 #include "SimpleUI.h"
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <glad/glad.h>
 #include <glm/gtc/matrix_transform.hpp>
@@ -10,7 +11,20 @@
 #include "Globals.h"
 #include "BuiltInShader.h"
 
+namespace {
+
+double monotonicSeconds() {
+    using Clock = std::chrono::steady_clock;
+    return std::chrono::duration<double>(Clock::now().time_since_epoch()).count();
+}
+
+}  // namespace
+
 void SimpleUI::init(int width, int height) {
+    init(width, height, 1.0f);
+}
+
+void SimpleUI::init(int width, int height, float scale) {
     BuiltInShader uiShader(uiVertexShaderSource, uiFragmentShaderSource);
     programID = uiShader.ID;
     glGenVertexArrays(1, &VAO); glGenBuffers(1, &VBO);
@@ -30,8 +44,12 @@ void SimpleUI::init(int width, int height) {
                           reinterpret_cast<void*>(2 * sizeof(float)));
     glEnableVertexAttribArray(1); glBindVertexArray(0);
 
-    resize(width, height, 1.0f);
-    fontRenderer.initialize(width, height, 1.0f);
+    viewportWidth = width;
+    viewportHeight = height;
+    contentScale = scale > 0.0f ? scale : 1.0f;
+    projection = glm::ortho(0.0f, (float)width, (float)height, 0.0f);
+    fontRenderer.initialize(width, height, contentScale);
+    fontInitialized = true;
 }
 
 void SimpleUI::resize(int width, int height) {
@@ -39,14 +57,79 @@ void SimpleUI::resize(int width, int height) {
 }
 
 void SimpleUI::resize(int width, int height, float scale) {
+    const float nextScale = scale > 0.0f ? scale : 1.0f;
+    const bool rebuildFonts = fontInitialized &&
+                              ui_interaction::contentScaleChanged(contentScale, nextScale);
     viewportWidth = width;
     viewportHeight = height;
-    contentScale = scale > 0.0f ? scale : 1.0f;
+    contentScale = nextScale;
     projection = glm::ortho(0.0f, (float)width, (float)height, 0.0f);
-    fontRenderer.resize(width, height, contentScale);
+    if (rebuildFonts) {
+        fontRenderer.initialize(width, height, contentScale);
+    } else {
+        fontRenderer.resize(width, height, contentScale);
+    }
     if (!clipStack.empty()) {
         applyClip();
     }
+}
+
+void SimpleUI::beginInteractionFrame(
+    std::optional<ui_interaction::KeyIntent> intent) {
+    visibleFocusOrder.clear();
+    pendingKeyIntent = intent;
+    keyboardTargetWidgetID = focusedWidgetID;
+    keyIntentConsumed = false;
+}
+
+void SimpleUI::endInteractionFrame() {
+    if (pendingKeyIntent == ui_interaction::KeyIntent::FocusNext) {
+        focusedWidgetID = ui_interaction::nextWidgetFocus(
+            visibleFocusOrder, focusedWidgetID, 1);
+        keyIntentConsumed = true;
+    } else if (pendingKeyIntent == ui_interaction::KeyIntent::FocusPrevious) {
+        focusedWidgetID = ui_interaction::nextWidgetFocus(
+            visibleFocusOrder, focusedWidgetID, -1);
+        keyIntentConsumed = true;
+    } else if (focusedWidgetID &&
+               std::find(visibleFocusOrder.begin(), visibleFocusOrder.end(),
+                         *focusedWidgetID) == visibleFocusOrder.end()) {
+        focusedWidgetID.reset();
+    }
+    pendingKeyIntent.reset();
+    keyboardTargetWidgetID.reset();
+    keyIntentConsumed = false;
+}
+
+void SimpleUI::registerFocusable(
+    ui_design::WidgetId id, const ui_design::Rect& rect) {
+    const ui_design::Rect visibleBounds = clipStack.empty()
+        ? ui_design::Rect{0.0f, 0.0f, static_cast<float>(viewportWidth),
+                          static_cast<float>(viewportHeight)}
+        : clipStack.back();
+    ui_interaction::appendVisibleFocus(visibleFocusOrder, id, rect, visibleBounds);
+}
+
+bool SimpleUI::keyboardTriggers(
+    ui_design::WidgetId id, ui_interaction::KeyIntent intent, bool disabled) {
+    if (keyIntentConsumed || pendingKeyIntent != intent ||
+        !keyboardTargetWidgetID || !(*keyboardTargetWidgetID == id) ||
+        !ui_interaction::allowsKeyboardMutation(intent, disabled, inputLocked)) {
+        return false;
+    }
+    keyIntentConsumed = true;
+    return true;
+}
+
+void SimpleUI::drawFocusRing(
+    ui_design::WidgetId id, const ui_design::Rect& rect, float radius) {
+    if (!focusedWidgetID || !(*focusedWidgetID == id)) {
+        return;
+    }
+    drawRoundedRect(
+        {rect.x - 3.0f, rect.y - 3.0f, rect.w + 6.0f, rect.h + 6.0f},
+        radius + 3.0f,
+        themeColor(ui_design::ColorToken::SystemBlue, 0.24f));
 }
 
 void SimpleUI::drawRect(float x, float y, float w, float h, glm::vec3 color) {
@@ -223,6 +306,7 @@ bool SimpleUI::button(
 bool SimpleUI::button(
     ui_design::WidgetId id, std::string_view label, const ui_design::Rect& rect,
     ui_design::ControlRole role, bool selected, bool disabled) {
+    registerFocusable(id, rect);
     disabled = disabled || inputLocked;
     if (!mousePressed) {
         activeWidgetID.reset();
@@ -240,6 +324,9 @@ bool SimpleUI::button(
         focusedWidgetID = id;
         clicked = true;
     }
+    if (keyboardTriggers(id, ui_interaction::KeyIntent::Activate, disabled)) {
+        clicked = true;
+    }
     if (clicked) {
         mouseClickLatch = false;
     }
@@ -252,13 +339,7 @@ bool SimpleUI::button(
                                : (hovered ? ui_design::ControlState::Hover
                                           : ui_design::ControlState::Rest)));
     const auto visual = ui_design::resolveControlVisual(role, state);
-    if (focusedWidgetID && *focusedWidgetID == id) {
-        const float focusOpacity = ui_design::resolveControlVisual(
-            role, ui_design::ControlState::Focused).focusOpacity;
-        drawRoundedRect(
-            {rect.x - 3.0f, rect.y - 3.0f, rect.w + 6.0f, rect.h + 6.0f},
-            11.0f, themeColor(ui_design::ColorToken::SystemBlue, focusOpacity));
-    }
+    drawFocusRing(id, rect, 8.0f);
     drawRoundedRect(rect, 8.0f, themeColor(visual.fill, visual.fillOpacity));
 
     const float pixelSize = std::clamp(rect.h * 0.38f, 12.0f, 16.0f);
@@ -280,17 +361,140 @@ bool SimpleUI::segmentedControl(
         return false;
     }
 
+    selectedIndex = std::clamp(selectedIndex, 0, static_cast<int>(count) - 1);
     bool changed = false;
+    const bool effectiveDisabled = disabled || inputLocked;
     const float segmentWidth = rect.w / static_cast<float>(count);
+    if (!mousePressed) {
+        activeWidgetID.reset();
+    }
     for (std::size_t index = 0; index < count; ++index) {
         const ui_design::Rect segment{
             rect.x + segmentWidth * static_cast<float>(index), rect.y,
             segmentWidth, rect.h};
-        if (button(ids[index], labels[index], segment, ui_design::ControlRole::Secondary,
-                   selectedIndex == static_cast<int>(index), disabled)) {
+        registerFocusable(ids[index], segment);
+        const bool hovered = ui_design::containsPoint(segment, mouseX, mouseY) &&
+                             pointerInsideActiveClip(mouseX, mouseY);
+        bool activated = false;
+        if (!effectiveDisabled && hovered && mousePressed && !prevMousePressed) {
+            activeWidgetID = ids[index];
+            focusedWidgetID = ids[index];
+            activated = true;
+        } else if (!effectiveDisabled && mouseClickLatch &&
+                   ui_design::containsPoint(
+                       segment, mouseClickLatchX, mouseClickLatchY) &&
+                   pointerInsideActiveClip(mouseClickLatchX, mouseClickLatchY)) {
+            focusedWidgetID = ids[index];
+            activated = true;
+        }
+        if (keyboardTriggers(
+                ids[index], ui_interaction::KeyIntent::Activate,
+                effectiveDisabled)) {
+            activated = true;
+        }
+        if (activated) {
+            mouseClickLatch = false;
             selectedIndex = static_cast<int>(index);
             changed = true;
         }
+    }
+    if (!changed && !keyIntentConsumed && pendingKeyIntent &&
+        keyboardTargetWidgetID &&
+        (*pendingKeyIntent == ui_interaction::KeyIntent::Decrease ||
+         *pendingKeyIntent == ui_interaction::KeyIntent::Increase) &&
+        ui_interaction::allowsKeyboardMutation(
+            *pendingKeyIntent, effectiveDisabled, inputLocked)) {
+        const auto focused = std::find(ids.begin(), ids.begin() + count,
+                                       *keyboardTargetWidgetID);
+        if (focused != ids.begin() + count) {
+            const int focusedIndex = static_cast<int>(focused - ids.begin());
+            const int direction = *pendingKeyIntent ==
+                ui_interaction::KeyIntent::Decrease ? -1 : 1;
+            const int next = ui_interaction::adjustSegmentIndex(
+                focusedIndex, static_cast<int>(count), direction);
+            focusedWidgetID = ids[static_cast<std::size_t>(next)];
+            keyIntentConsumed = true;
+            if (next != selectedIndex) {
+                selectedIndex = next;
+                changed = true;
+            }
+        }
+    }
+
+
+    const double now = monotonicSeconds();
+    const auto durations = ui_interaction::motionDurations(reducedMotion);
+    auto motion = std::find_if(
+        segmentMotions.begin(), segmentMotions.end(), [&](const SegmentMotion& candidate) {
+            return candidate.group == ids.front().control;
+        });
+    if (motion == segmentMotions.end()) {
+        segmentMotions.push_back(
+            {ids.front().control, static_cast<float>(selectedIndex), selectedIndex, now});
+        motion = segmentMotions.end() - 1;
+    }
+    const auto animatedIndex = [&](const SegmentMotion& state) {
+        if (durations.selectionMs == 0) {
+            return static_cast<float>(state.targetIndex);
+        }
+        const float elapsed = static_cast<float>(
+            (now - state.startSeconds) * 1000.0 /
+            static_cast<double>(durations.selectionMs));
+        const float t = std::clamp(elapsed, 0.0f, 1.0f);
+        const float eased = 1.0f - (1.0f - t) * (1.0f - t);
+        return state.fromIndex +
+               (static_cast<float>(state.targetIndex) - state.fromIndex) * eased;
+    };
+    if (motion->targetIndex != selectedIndex) {
+        motion->fromIndex = animatedIndex(*motion);
+        motion->targetIndex = selectedIndex;
+        motion->startSeconds = now;
+    }
+    const float thumbIndex = animatedIndex(*motion);
+
+    const float opacity = effectiveDisabled ? 0.38f : 1.0f;
+    drawRoundedRect(rect, 10.0f,
+                    themeColor(ui_design::ColorToken::PrimaryInk,
+                               0.08f * opacity));
+    const ui_design::Rect thumb{
+        rect.x + thumbIndex * segmentWidth + 2.0f, rect.y + 2.0f,
+        segmentWidth - 4.0f, rect.h - 4.0f};
+    drawShadow(thumb, 8.0f, opacity);
+    drawRoundedRect(thumb, 8.0f,
+                    themeColor(ui_design::ColorToken::SnowSurface, opacity));
+
+    for (std::size_t index = 0; index < count; ++index) {
+        const ui_design::Rect segment{
+            rect.x + segmentWidth * static_cast<float>(index), rect.y,
+            segmentWidth, rect.h};
+        const bool hovered = ui_design::containsPoint(segment, mouseX, mouseY) &&
+                             pointerInsideActiveClip(mouseX, mouseY);
+        const bool pressed = activeWidgetID && *activeWidgetID == ids[index] &&
+                             mousePressed;
+        drawFocusRing(ids[index], segment, 10.0f);
+        if (!effectiveDisabled && (hovered || pressed)) {
+            drawRoundedRect(
+                {segment.x + 2.0f, segment.y + 2.0f,
+                 segment.w - 4.0f, segment.h - 4.0f},
+                8.0f,
+                themeColor(ui_design::ColorToken::PrimaryInk,
+                           pressed ? 0.12f : 0.06f));
+        }
+        const float pixelSize = std::clamp(rect.h * 0.36f, 12.0f, 15.0f);
+        float textWidth = fontRenderer.measure(
+            labels[index], pixelSize, ui_design::FontRole::Interface);
+        if (textWidth <= 0.0f) {
+            textWidth = static_cast<float>(labels[index].size()) *
+                        pixelSize * 1.2f;
+        }
+        const auto token = selectedIndex == static_cast<int>(index)
+            ? ui_design::ColorToken::PrimaryInk
+            : ui_design::ColorToken::Graphite;
+        drawText(labels[index],
+                 segment.x + std::max(6.0f, (segment.w - textWidth) * 0.5f),
+                 segment.y + (segment.h + pixelSize * 0.7f) * 0.5f,
+                 pixelSize, themeColor(token, opacity),
+                 ui_design::FontRole::Interface);
     }
     return changed;
 }
@@ -298,8 +502,9 @@ bool SimpleUI::segmentedControl(
 bool SimpleUI::toggle(
     ui_design::ControlId control, std::string_view label, const ui_design::Rect& rect,
     bool& value, bool disabled) {
-    disabled = disabled || inputLocked;
     const ui_design::WidgetId id{control, 0};
+    registerFocusable(id, rect);
+    disabled = disabled || inputLocked;
     if (!mousePressed) {
         activeWidgetID.reset();
     }
@@ -319,8 +524,14 @@ bool SimpleUI::toggle(
         value = !value;
         changed = true;
     }
+    if (!changed && keyboardTriggers(
+            id, ui_interaction::KeyIntent::Activate, disabled)) {
+        value = !value;
+        changed = true;
+    }
 
     const float opacity = disabled ? 0.38f : 1.0f;
+    drawFocusRing(id, rect, 10.0f);
     const float pixelSize = std::clamp(rect.h * 0.36f, 12.0f, 15.0f);
     drawText(label, rect.x, rect.y + (rect.h + pixelSize * 0.7f) * 0.5f, pixelSize,
              themeColor(ui_design::ColorToken::PrimaryInk, opacity),
@@ -341,8 +552,9 @@ bool SimpleUI::sliderField(
     ui_design::ControlId control, std::string_view label, float& value, float min,
     float max, const ui_design::Rect& rect, const ui_design::FormattedValue& display,
     bool exponential, bool disabled) {
-    disabled = disabled || inputLocked;
     const ui_design::WidgetId id{control, 0};
+    registerFocusable(id, rect);
+    disabled = disabled || inputLocked;
     if (!mousePressed) {
         activeWidgetID.reset();
     }
@@ -367,6 +579,19 @@ bool SimpleUI::sliderField(
         }
         changed = true;
     }
+    if (!changed && !keyIntentConsumed && pendingKeyIntent &&
+        (*pendingKeyIntent == ui_interaction::KeyIntent::Decrease ||
+         *pendingKeyIntent == ui_interaction::KeyIntent::Increase) &&
+        keyboardTargetWidgetID && *keyboardTargetWidgetID == id &&
+        ui_interaction::allowsKeyboardMutation(
+            *pendingKeyIntent, disabled, inputLocked)) {
+        const int direction = *pendingKeyIntent ==
+            ui_interaction::KeyIntent::Decrease ? -1 : 1;
+        value = ui_interaction::adjustSlider(
+            value, min, max, exponential, direction);
+        keyIntentConsumed = true;
+        changed = true;
+    }
 
     float position = 0.0f;
     if (max > min) {
@@ -378,6 +603,7 @@ bool SimpleUI::sliderField(
     }
     position = std::clamp(position, 0.0f, 1.0f);
     const float opacity = disabled ? 0.38f : 1.0f;
+    drawFocusRing(id, rect, 10.0f);
     drawText(label, rect.x, rect.y + 14.0f, 13.0f,
              themeColor(ui_design::ColorToken::Graphite, opacity),
              ui_design::FontRole::Interface);
@@ -478,8 +704,9 @@ bool SimpleUI::slider(std::string label, float& value, float min, float max, flo
 bool SimpleUI::vslider(
     ui_design::ControlId control, float& value, float min, float max,
     const ui_design::Rect& rect, bool disabled) {
-    disabled = disabled || inputLocked;
     const ui_design::WidgetId id{control, 0};
+    registerFocusable(id, rect);
+    disabled = disabled || inputLocked;
     if (!mousePressed) {
         activeWidgetID.reset();
     }
@@ -499,10 +726,23 @@ bool SimpleUI::vslider(
         value = min + position * (max - min);
         changed = true;
     }
+    if (!changed && !keyIntentConsumed && pendingKeyIntent &&
+        (*pendingKeyIntent == ui_interaction::KeyIntent::Decrease ||
+         *pendingKeyIntent == ui_interaction::KeyIntent::Increase) &&
+        keyboardTargetWidgetID && *keyboardTargetWidgetID == id &&
+        ui_interaction::allowsKeyboardMutation(
+            *pendingKeyIntent, disabled, inputLocked)) {
+        const int direction = *pendingKeyIntent ==
+            ui_interaction::KeyIntent::Decrease ? -1 : 1;
+        value = ui_interaction::adjustSlider(value, min, max, false, direction);
+        keyIntentConsumed = true;
+        changed = true;
+    }
 
     float position = max > min ? (value - min) / (max - min) : 0.0f;
     position = std::clamp(position, 0.0f, 1.0f);
     const float opacity = disabled ? 0.38f : 1.0f;
+    drawFocusRing(id, rect, 8.0f);
     const ui_design::Rect track{
         rect.x + (rect.w - 4.0f) * 0.5f, rect.y, 4.0f, rect.h};
     drawRoundedRect(track, 2.0f,
@@ -575,10 +815,12 @@ glm::vec4 SimpleUI::themeColor(ui_design::ColorToken token, float opacity) const
 
 void SimpleUI::shutdown() {
     clipStack.clear();
+    segmentMotions.clear();
     activeWidgetID.reset();
     focusedWidgetID.reset();
     glDisable(GL_SCISSOR_TEST);
     fontRenderer.shutdown();
+    fontInitialized = false;
     if (roundedVBO != 0) {
         glDeleteBuffers(1, &roundedVBO);
         roundedVBO = 0;

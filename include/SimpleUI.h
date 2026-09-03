@@ -1,6 +1,7 @@
 #pragma once
 #include "UIDesign.h"
 #include "UIFontRenderer.h"
+#include "UIInteraction.h"
 
 #include <optional>
 #include <string>
@@ -25,18 +26,45 @@ private:
     int viewportWidth = 0;
     int viewportHeight = 0;
     float contentScale = 1.0f;
+    bool fontInitialized = false;
     bool inputLocked = false;   // true while a compute job runs: widgets render but ignore input
+    std::vector<ui_design::WidgetId> visibleFocusOrder;
+    std::optional<ui_interaction::KeyIntent> pendingKeyIntent;
+    std::optional<ui_design::WidgetId> keyboardTargetWidgetID;
+    bool keyIntentConsumed = false;
+    bool reducedMotion = false;
+    struct SegmentMotion {
+        ui_design::ControlId group;
+        float fromIndex;
+        int targetIndex;
+        double startSeconds;
+    };
+    std::vector<SegmentMotion> segmentMotions;
 
     void drawStrokeText(std::string_view text, float x, float y, float size,
                         const glm::vec4& color);
     void applyClip();
     bool pointerInsideActiveClip(float x, float y) const;
+    void registerFocusable(ui_design::WidgetId id, const ui_design::Rect& rect);
+    bool keyboardTriggers(ui_design::WidgetId id,
+                          ui_interaction::KeyIntent intent,
+                          bool disabled);
+    void drawFocusRing(ui_design::WidgetId id, const ui_design::Rect& rect,
+                       float radius);
 public:
     unsigned int programID = 0;
 
     void init(int width, int height);
+    void init(int width, int height, float contentScale);
     void resize(int width, int height);
     void resize(int width, int height, float contentScale);
+    void beginInteractionFrame(std::optional<ui_interaction::KeyIntent> intent);
+    void endInteractionFrame();
+    std::optional<ui_design::WidgetId> focusedWidget() const {
+        return focusedWidgetID;
+    }
+    void clearFocus() { focusedWidgetID.reset(); }
+    void setReducedMotion(bool reduced) { reducedMotion = reduced; }
     // Blocks clicks/drags for widgets drawn while locked (compute in progress).
     void setInputLocked(bool locked) { inputLocked = locked; }
     void drawRect(float x, float y, float w, float h, glm::vec3 color);

@@ -1,6 +1,7 @@
 #include "UIInteraction.h"
 
 #include <algorithm>
+#include <cmath>
 
 namespace ui_interaction {
 
@@ -45,6 +46,29 @@ std::optional<ui_design::ControlId> nextFocus(
     return currentIt == last ? *first : *(currentIt + 1);
 }
 
+std::optional<ui_design::WidgetId> nextWidgetFocus(
+    const std::vector<ui_design::WidgetId>& visible,
+    std::optional<ui_design::WidgetId> current,
+    int direction) {
+    if (visible.empty()) {
+        return std::nullopt;
+    }
+
+    const bool backwards = direction < 0;
+    const auto first = visible.begin();
+    const auto last = visible.end() - 1;
+    const auto currentIt = current
+        ? std::find(first, visible.end(), *current)
+        : visible.end();
+    if (currentIt == visible.end()) {
+        return backwards ? *last : *first;
+    }
+    if (backwards) {
+        return currentIt == first ? *last : *(currentIt - 1);
+    }
+    return currentIt == last ? *first : *(currentIt + 1);
+}
+
 KeyIntent translateKey(Key key, bool pressed, bool shift) {
     if (!pressed) {
         return KeyIntent::None;
@@ -68,6 +92,85 @@ KeyIntent translateKey(Key key, bool pressed, bool shift) {
         return KeyIntent::None;
     }
     return KeyIntent::None;
+}
+
+bool queueKeyIntent(std::optional<KeyIntent>& pending, KeyIntent candidate) {
+    if (candidate == KeyIntent::None || pending.has_value()) {
+        return false;
+    }
+    pending = candidate;
+    return true;
+}
+
+void appendVisibleFocus(
+    std::vector<ui_design::WidgetId>& visible,
+    ui_design::WidgetId widget,
+    const ui_design::Rect& bounds,
+    const ui_design::Rect& visibleBounds) {
+    const float right = std::min(bounds.x + bounds.w,
+                                 visibleBounds.x + visibleBounds.w);
+    const float bottom = std::min(bounds.y + bounds.h,
+                                  visibleBounds.y + visibleBounds.h);
+    const bool intersects = right > std::max(bounds.x, visibleBounds.x) &&
+                            bottom > std::max(bounds.y, visibleBounds.y);
+    if (!intersects || std::find(visible.begin(), visible.end(), widget) != visible.end()) {
+        return;
+    }
+    visible.push_back(widget);
+}
+
+bool allowsKeyboardMutation(KeyIntent intent, bool disabled, bool inputLocked) {
+    if (disabled || inputLocked) {
+        return false;
+    }
+    return intent == KeyIntent::Activate || intent == KeyIntent::Decrease ||
+           intent == KeyIntent::Increase;
+}
+
+float adjustSlider(float value, float min, float max,
+                   bool exponential, int direction) {
+    if (!(max > min) || direction == 0) {
+        return std::clamp(value, min, max);
+    }
+
+    const float stepDirection = direction < 0 ? -1.0f : 1.0f;
+    if (exponential && min > 0.0f && max > 0.0f) {
+        const float clamped = std::clamp(value, min, max);
+        const float logMin = std::log(min);
+        const float logMax = std::log(max);
+        const float logValue = std::log(clamped) +
+                               stepDirection * 0.01f * (logMax - logMin);
+        return std::clamp(std::exp(logValue), min, max);
+    }
+    return std::clamp(value + stepDirection * 0.01f * (max - min), min, max);
+}
+
+int adjustSegmentIndex(int current, int count, int direction) {
+    if (count <= 0) {
+        return 0;
+    }
+    const int delta = direction < 0 ? -1 : direction > 0 ? 1 : 0;
+    return std::clamp(current + delta, 0, count - 1);
+}
+
+EscapeAction resolveEscape(bool jobRunning, bool cancellable, bool helpOpen) {
+    if (jobRunning && cancellable) {
+        return EscapeAction::CancelJob;
+    }
+    return helpOpen ? EscapeAction::CloseHelp : EscapeAction::None;
+}
+
+float effectiveContentScale(float xScale, float yScale) {
+    const float scale = std::max(xScale, yScale);
+    return scale > 0.0f ? scale : 1.0f;
+}
+
+bool contentScaleChanged(float previous, float current) {
+    return std::abs(previous - current) > 0.001f;
+}
+
+MotionDurations motionDurations(bool reducedMotion) {
+    return reducedMotion ? MotionDurations{0, 0} : MotionDurations{160, 220};
 }
 
 }  // namespace ui_interaction

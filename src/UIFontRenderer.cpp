@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <filesystem>
 #include <iostream>
 #include <iterator>
@@ -97,6 +98,7 @@ struct UIFontRenderer::Impl {
     struct Atlas {
         unsigned int texture = 0;
         std::array<Glyph, 128> glyphs{};
+        int pixelSize = kAtlasPixelSize;
         bool loaded = false;
     };
 
@@ -132,7 +134,9 @@ struct UIFontRenderer::Impl {
             return false;
         }
 
-        if (FT_Set_Pixel_Sizes(face, 0, kAtlasPixelSize) != 0) {
+        const int atlasPixelSize = std::max(
+            1, static_cast<int>(std::lround(kAtlasPixelSize * contentScale)));
+        if (FT_Set_Pixel_Sizes(face, 0, atlasPixelSize) != 0) {
             FT_Done_Face(face);
             return false;
         }
@@ -147,8 +151,11 @@ struct UIFontRenderer::Impl {
         }
 
         Atlas& atlas = atlases[roleIndex(role)];
+        atlas.pixelSize = atlasPixelSize;
         glGenTextures(1, &atlas.texture);
         glBindTexture(GL_TEXTURE_2D, atlas.texture);
+        GLint previousUnpackAlignment = 4;
+        glGetIntegerv(GL_UNPACK_ALIGNMENT, &previousUnpackAlignment);
         glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, atlasWidth, atlasHeight, 0,
                      GL_RED, GL_UNSIGNED_BYTE, nullptr);
@@ -183,6 +190,7 @@ struct UIFontRenderer::Impl {
             cursorX += width + 1;
         }
         glBindTexture(GL_TEXTURE_2D, 0);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, previousUnpackAlignment);
         FT_Done_Face(face);
         atlas.loaded = true;
         return true;
@@ -256,9 +264,10 @@ float UIFontRenderer::measure(
     if (!ready(role)) {
         return 0.0f;
     }
-    const float scale = pixelSize / static_cast<float>(kAtlasPixelSize);
+    const auto& atlas = impl_->atlases[roleIndex(role)];
+    const float scale = pixelSize / static_cast<float>(atlas.pixelSize);
     float width = 0.0f;
-    const auto& glyphs = impl_->atlases[roleIndex(role)].glyphs;
+    const auto& glyphs = atlas.glyphs;
     for (const unsigned char raw : text) {
         const unsigned char code = raw < glyphs.size() ? raw : static_cast<unsigned char>('?');
         width += static_cast<float>(glyphs[code].advance >> 6) * scale;
@@ -274,7 +283,7 @@ void UIFontRenderer::draw(
     }
 
     const auto& atlas = impl_->atlases[roleIndex(role)];
-    const float scale = pixelSize / static_cast<float>(kAtlasPixelSize);
+    const float scale = pixelSize / static_cast<float>(atlas.pixelSize);
     std::vector<float> vertices;
     vertices.reserve(text.size() * 6 * 4);
 

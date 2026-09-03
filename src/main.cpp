@@ -34,6 +34,7 @@
 #include <memory>
 #include <sstream>
 #include <thread>
+#include <utility>
 
 #include <omp.h>
 
@@ -67,6 +68,9 @@ AppMode currentMode = MODE_CUBE;
 std::vector<std::string> modelFiles;  // replaces stlFiles: holds .stl + .3mf
 float panelWidth = 600.0f;
 float pendingInspectorWheel = 0.0f;
+static std::optional<ui_interaction::KeyIntent> g_pendingKeyIntent;
+static float g_contentScale = 1.0f;
+static bool g_reducedMotion = false;
 int modelListPage = 0;          // current page index for the model file list
 static constexpr int kModelsPerPage = 6;
 
@@ -221,7 +225,34 @@ void scroll_callback(GLFWwindow* window, double xoffset, double yoffset);
 void mouse_button_callback(GLFWwindow* window, int button, int action, int mods);
 void char_callback(GLFWwindow* window, unsigned int codepoint);
 void key_callback(GLFWwindow* window, int key, int scancode, int action, int mods);
+void content_scale_callback(GLFWwindow* window, float xscale, float yscale);
 void processInput(GLFWwindow* window);
+
+static ui_interaction::Key mapGlfwKey(int key) {
+    switch (key) {
+    case GLFW_KEY_TAB: return ui_interaction::Key::Tab;
+    case GLFW_KEY_ENTER:
+    case GLFW_KEY_KP_ENTER: return ui_interaction::Key::Enter;
+    case GLFW_KEY_SPACE: return ui_interaction::Key::Space;
+    case GLFW_KEY_LEFT: return ui_interaction::Key::Left;
+    case GLFW_KEY_RIGHT: return ui_interaction::Key::Right;
+    case GLFW_KEY_UP: return ui_interaction::Key::Up;
+    case GLFW_KEY_DOWN: return ui_interaction::Key::Down;
+    case GLFW_KEY_ESCAPE: return ui_interaction::Key::Escape;
+    default: return ui_interaction::Key::Other;
+    }
+}
+
+static bool systemPrefersReducedMotion() {
+#if defined(_WIN32) && defined(SPI_GETCLIENTAREAANIMATION)
+    BOOL animationsEnabled = TRUE;
+    if (SystemParametersInfoW(
+            SPI_GETCLIENTAREAANIMATION, 0, &animationsEnabled, 0) != FALSE) {
+        return animationsEnabled == FALSE;
+    }
+#endif
+    return false;
+}
 
 // =============================================================================
 // Async compute jobs. One background worker at a time runs the heavy stages
@@ -733,6 +764,7 @@ int runInteractive() {
     glfwSetMouseButtonCallback(window, mouse_button_callback);
     glfwSetCharCallback(window, char_callback);   // magnitude field
     glfwSetKeyCallback(window, key_callback);
+    glfwSetWindowContentScaleCallback(window, content_scale_callback);
     glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
 
     if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) { return -1; }
@@ -745,10 +777,17 @@ int runInteractive() {
 
     // Boot with a visible progress bar: the UI shader comes up first so every
     // remaining init stage can render a frame into the bottom-left panel.
+    float xScale = 1.0f;
+    float yScale = 1.0f;
+    glfwGetWindowContentScale(window, &xScale, &yScale);
+    g_contentScale = ui_interaction::effectiveContentScale(xScale, yScale);
+    g_reducedMotion = systemPrefersReducedMotion();
     SimpleUI ui;
-    ui.init(scrWidth, scrHeight);
+    ui.init(scrWidth, scrHeight, g_contentScale);
+    ui.setReducedMotion(g_reducedMotion);
     ui_interaction::InspectorState inspectorState;
     std::array<float, 3> inspectorContentHeights{0.0f, 0.0f, 0.0f};
+    bool showHelp = false;
     drawBootFrame(window, ui, "STARTING: COMPILING SHADERS", 0.15f);
 
     BuiltInShader schematicShader(modelVS, modelFS);
@@ -796,7 +835,8 @@ int runInteractive() {
             glfwWaitEvents();
             continue;
         }
-        scrWidth = w; scrHeight = h; ui.resize(scrWidth, scrHeight);
+        scrWidth = w; scrHeight = h;
+        ui.resize(scrWidth, scrHeight, g_contentScale);
         processInput(window);
 
         // Async job completion: join the worker here and run the finalize step
@@ -883,13 +923,34 @@ int runInteractive() {
         drawAxisLabel(glm::vec3(0.0f, axisLengths.y, 0.0f), "Y", axisLengths.y, glm::vec3(0.35f, 1.0f, 0.35f));
         drawAxisLabel(glm::vec3(0.0f, 0.0f, axisLengths.z), "Z", axisLengths.z, glm::vec3(0.35f, 0.7f, 1.0f));
 
+        auto frameKeyIntent = std::exchange(g_pendingKeyIntent, std::nullopt);
+        if (frameKeyIntent == ui_interaction::KeyIntent::Cancel) {
+            switch (ui_interaction::resolveEscape(
+                computeBusy(), g_job.cancellable, showHelp)) {
+            case ui_interaction::EscapeAction::CancelJob:
+                dispatchInspectorAction<
+                    ui_action_wiring::InspectorAction::CancelJob>(
+                    {ui_design::ControlId::CancelJob, 0}, [&](const auto&) {
+                        g_job.cancel = true;
+                        std::cout << "[JOB] cancel requested by keyboard."
+                                  << std::endl;
+                    });
+                break;
+            case ui_interaction::EscapeAction::CloseHelp:
+                showHelp = false;
+                break;
+            case ui_interaction::EscapeAction::None:
+                break;
+            }
+            frameKeyIntent.reset();
+        }
+        ui.beginInteractionFrame(frameKeyIntent);
         ui.setInputLocked(false);
         ui.drawRoundedRect(uiLayout.titleBar, 0.0f,
                            ui.themeColor(ui_design::ColorToken::SnowSurface, 0.96f));
         ui.drawText(documentTitle, 54.0f, 28.0f, 15.0f,
                     ui.themeColor(ui_design::ColorToken::PrimaryInk),
                     ui_design::FontRole::Display);
-        static bool showHelp = false;
         const float resetWidth = 112.0f;
         const float helpWidth = showHelp ? 104.0f : 76.0f;
         const float resetX = static_cast<float>(scrWidth) - resetWidth - 12.0f;
@@ -1640,7 +1701,7 @@ int runInteractive() {
                         });
                 }
                 rY += 42.0f;
-                if (showcaseMagFocused) {
+                if (showcaseMagFocused && !busy) {
                     for (char c : g_charInput)
                         if (std::isdigit(static_cast<unsigned char>(c)) || c == '.' || c == '-')
                             if (showcaseMagText.size() < 12) showcaseMagText.push_back(c);
@@ -1649,7 +1710,11 @@ int runInteractive() {
                         if (!showcaseMagText.empty()) showcaseMagText.pop_back();
                         g_backspace = false;
                     }
-                    if (g_enter) { showcaseMagFocused = false; g_enter = false; }
+                    if (g_enter) {
+                        showcaseMagFocused = false;
+                        g_enter = false;
+                        ui.clearFocus();
+                    }
                 } else {
                     g_charInput.clear(); g_backspace = false; g_enter = false;
                 }
@@ -2364,7 +2429,8 @@ int runInteractive() {
         if (busy)
             ui.drawRectA(uiLayout.inspector.x, uiLayout.inspector.y,
                          uiLayout.inspector.w, uiLayout.inspector.h,
-                         glm::vec3(0.06f, 0.06f, 0.07f), 0.55f);
+                         glm::vec3(ui.themeColor(
+                             ui_design::ColorToken::Graphite)), 0.22f);
 
         auto drawHelpSurface = [&]() {
             if (!showHelp) return;
@@ -2519,7 +2585,11 @@ int runInteractive() {
         // panel for one whole frame after the click that started the work.
         const bool showComputeProgress = computeBusy();
         auto drawComputeProgressSurface = [&]() {
-            const float slideT = static_cast<float>((glfwGetTime() - g_job.startTime) / 0.22);
+            const auto motion = ui_interaction::motionDurations(g_reducedMotion);
+            const float slideT = motion.progressMs == 0
+                ? 1.0f
+                : static_cast<float>((glfwGetTime() - g_job.startTime) /
+                                     (static_cast<double>(motion.progressMs) / 1000.0));
             const std::string title = g_job.cancel.load()
                                           ? g_job.title + "  - CANCELLING..."
                                           : g_job.title;
@@ -2551,6 +2621,17 @@ int runInteractive() {
             }
         }
 
+        ui.endInteractionFrame();
+        if (const auto focused = ui.focusedWidget()) {
+            inspectorState.focused = focused->control;
+            if (focused->control != ui_design::ControlId::EditShowcaseMagnitude) {
+                showcaseMagFocused = false;
+            }
+        } else {
+            inspectorState.focused.reset();
+            showcaseMagFocused = false;
+        }
+
         prevMousePressed = mousePressed;
         // The latch lives exactly one frame: set by the callback during the
         // poll below, consumed by a widget on the next pass, dropped here.
@@ -2575,6 +2656,7 @@ int runInteractive() {
     std::cout.flush();
     fflush(nullptr);
     drawBootFrame(window, ui, "CLOSING: RELEASING WINDOW", 0.85f);
+    ui.shutdown();
     glfwDestroyWindow(window);
     glfwTerminate();
     // The seconds-long exit was static-destructor + DLL-unload teardown
@@ -2585,8 +2667,6 @@ int runInteractive() {
 }
 
 void processInput(GLFWwindow* window) {
-    if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) glfwSetWindowShouldClose(window, true);
-
     static bool mPressed = false;
     if (glfwGetKey(window, GLFW_KEY_M) == GLFW_PRESS) {
         if (!mPressed) { showWireframe = !showWireframe; mPressed = true; }
@@ -2649,11 +2729,26 @@ void scroll_callback(GLFWwindow* window, double xoffset, double yoffset) {
 void char_callback(GLFWwindow*, unsigned int codepoint) {
     if (codepoint < 128) g_charInput.push_back(static_cast<char>(codepoint));
 }
-void key_callback(GLFWwindow*, int key, int, int action, int) {
+void key_callback(GLFWwindow*, int key, int, int action, int mods) {
     if (action == GLFW_PRESS || action == GLFW_REPEAT) {
-        if (key == GLFW_KEY_BACKSPACE) g_backspace = true;
-        if (key == GLFW_KEY_ENTER || key == GLFW_KEY_KP_ENTER) g_enter = true;
+        if (key == GLFW_KEY_BACKSPACE) {
+            g_backspace = true;
+            return;
+        }
+        if ((key == GLFW_KEY_ENTER || key == GLFW_KEY_KP_ENTER) &&
+            showcaseMagFocused) {
+            g_enter = true;
+            return;
+        }
+        const bool shift = (mods & GLFW_MOD_SHIFT) != 0;
+        ui_interaction::queueKeyIntent(
+            g_pendingKeyIntent,
+            ui_interaction::translateKey(mapGlfwKey(key), true, shift));
     }
+}
+
+void content_scale_callback(GLFWwindow*, float xscale, float yscale) {
+    g_contentScale = ui_interaction::effectiveContentScale(xscale, yscale);
 }
 
 // =============================================================================
