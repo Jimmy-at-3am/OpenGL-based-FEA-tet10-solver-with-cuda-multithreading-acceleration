@@ -132,6 +132,17 @@ const std::vector<ExpectedBinding> expectedProductionBindings{
      ui_action_wiring::InspectorAction::ToggleForceMap},
 };
 
+const std::vector<ExpectedBinding> expectedOverlayBindings{
+    {ui_design::ControlId::CancelJob,
+     ui_action_wiring::InspectorAction::CancelJob},
+    {ui_design::ControlId::EditSectionPosition,
+     ui_action_wiring::InspectorAction::EditSectionPosition},
+    {ui_design::ControlId::OpenHelp,
+     ui_action_wiring::InspectorAction::OpenHelp},
+    {ui_design::ControlId::ResetView,
+     ui_action_wiring::InspectorAction::ResetView},
+};
+
 void testEveryProductionControlReachesItsIntendedNamedActionExactlyOnce() {
     RecordingActionHandler actions;
     const auto bindings = ui_action_wiring::makeInspectorBindings(actions);
@@ -153,6 +164,29 @@ void testEveryProductionControlReachesItsIntendedNamedActionExactlyOnce() {
                    "activation must preserve its stable widget identity");
         expectTrue(actions.activationCount == previousCount + 1,
                    "one control event must invoke exactly one action");
+    }
+}
+
+void testEveryOverlayControlReachesItsIntendedNamedActionExactlyOnce() {
+    RecordingActionHandler actions;
+    const auto bindings = ui_action_wiring::makeInspectorBindings(actions);
+    const auto& overlayControls = ui_design::requiredOverlayControls();
+
+    expectTrue(expectedOverlayBindings.size() == overlayControls.size(),
+               "literal production bindings must cover the overlay manifest");
+    for (std::size_t index = 0; index < expectedOverlayBindings.size(); ++index) {
+        const auto& expected = expectedOverlayBindings[index];
+        expectTrue(overlayControls[index] == expected.control,
+                   "production overlay manifest must retain every intended control");
+        const std::size_t previousCount = actions.activationCount;
+        expectTrue(bindings.activate({expected.control, 0}),
+                   "production overlay control must activate");
+        expectTrue(actions.lastAction == expected.action,
+                   "overlay control must reach its independently expected named action");
+        expectTrue(actions.lastWidget == ui_design::WidgetId{expected.control, 0},
+                   "overlay activation must preserve its stable widget identity");
+        expectTrue(actions.activationCount == previousCount + 1,
+                   "one overlay event must invoke exactly one action");
     }
 }
 
@@ -289,6 +323,7 @@ void testRetainedInspectorContentExtendsScrollRange() {
 
 int main() {
     testEveryProductionControlReachesItsIntendedNamedActionExactlyOnce();
+    testEveryOverlayControlReachesItsIntendedNamedActionExactlyOnce();
     testLinearAndNonlinearControlsCannotBeSwapped();
     testProductionInvocationRejectsMismatchedNamedAction();
     testProductionValueInvocationPreservesEmittedValue();

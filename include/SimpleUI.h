@@ -69,7 +69,8 @@ public:
                      bool exponential = false, bool disabled = false);
     bool slider(std::string label, float& value, float min, float max, float x, float y, float w, float h, bool exponential = false);
     // Vertical slider: value = min at the BOTTOM of the track, max at the TOP.
-    bool vslider(std::string id, float& value, float min, float max, float x, float y, float w, float h);
+    bool vslider(ui_design::ControlId id, float& value, float min, float max,
+                 const ui_design::Rect& rect, bool disabled = false);
     void pushClip(const ui_design::Rect& rect);
     void popClip();
     glm::vec4 themeColor(ui_design::ColorToken token, float opacity = 1.0f) const;

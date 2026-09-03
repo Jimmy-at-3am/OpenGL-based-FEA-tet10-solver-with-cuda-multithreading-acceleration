@@ -55,6 +55,10 @@ enum class InspectorAction {
     SelectFractureView,
     SelectDeadElementView,
     ToggleForceMap,
+    CancelJob,
+    EditSectionPosition,
+    OpenHelp,
+    ResetView,
 };
 
 inline std::optional<InspectorAction> actionFor(ui_design::ControlId control) {
@@ -108,11 +112,11 @@ inline std::optional<InspectorAction> actionFor(ui_design::ControlId control) {
     case ControlId::SelectFractureView: return InspectorAction::SelectFractureView;
     case ControlId::SelectDeadElementView: return InspectorAction::SelectDeadElementView;
     case ControlId::ToggleForceMap: return InspectorAction::ToggleForceMap;
+    case ControlId::CancelJob: return InspectorAction::CancelJob;
+    case ControlId::EditSectionPosition: return InspectorAction::EditSectionPosition;
+    case ControlId::OpenHelp: return InspectorAction::OpenHelp;
+    case ControlId::ResetView: return InspectorAction::ResetView;
     case ControlId::None:
-    case ControlId::CancelJob:
-    case ControlId::EditSectionPosition:
-    case ControlId::OpenHelp:
-    case ControlId::ResetView:
         return std::nullopt;
     }
     return std::nullopt;

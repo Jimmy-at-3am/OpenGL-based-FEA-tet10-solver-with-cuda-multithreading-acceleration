@@ -310,37 +310,49 @@ static void startComputeJob(FEAModel& model, const std::string& title, bool canc
     });
 }
 
-// Bottom-left sliding progress panel — shared by compute jobs, startup and
+// Bottom-left sliding progress surface — shared by compute jobs, startup and
 // shutdown. progress < 0 renders an animated indeterminate stripe. Returns
-// true when the cancel X was clicked.
+// true when the labeled cancel action was clicked.
 static bool drawProgressPanel(SimpleUI& ui, const std::string& title, float progress,
                               bool showCancel, float slideT, double now) {
-    const float w = 360.0f, h = 62.0f, xBase = 12.0f;
-    const float yShown = static_cast<float>(scrHeight) - h - 12.0f;
+    const float w = std::min(380.0f, static_cast<float>(scrWidth) - panelWidth - 32.0f);
+    const float h = 82.0f, xBase = 16.0f;
+    const float yShown = static_cast<float>(scrHeight) - h - 16.0f;
     float t = slideT < 0.0f ? 0.0f : (slideT > 1.0f ? 1.0f : slideT);
-    t = 1.0f - (1.0f - t) * (1.0f - t);                       // ease-out slide
+    t = 1.0f - (1.0f - t) * (1.0f - t);                       // 220 ms ease-out
     const float yHidden = static_cast<float>(scrHeight) + 8.0f;
     const float y = yHidden - (yHidden - yShown) * t;
 
-    ui.drawRectA(xBase, y, w, h, glm::vec3(0.10f, 0.11f, 0.13f), 0.92f);
-    ui.drawRect(xBase, y, w, 2.0f, glm::vec3(0.3f, 0.6f, 0.9f));
-    ui.drawText(title, xBase + 12.0f, y + 9.0f, 8.0f, glm::vec3(0.85f, 0.9f, 1.0f));
+    const ui_design::Rect surface{xBase, y, w, h};
+    ui.drawShadow(surface, 14.0f, 1.0f);
+    ui.drawRoundedRect(surface, 14.0f,
+                       ui.themeColor(ui_design::ColorToken::SnowSurface, 0.94f));
+    ui.drawText(title, xBase + 16.0f, y + 25.0f, 13.0f,
+                ui.themeColor(ui_design::ColorToken::PrimaryInk),
+                ui_design::FontRole::Interface);
 
     bool cancelClicked = false;
-    if (showCancel &&
-        ui.button("X", xBase + w - 27.0f, y + 6.0f, 20.0f, 20.0f))
-        cancelClicked = true;
+    if (showCancel) {
+        cancelClicked = ui.button(
+            ui_design::ControlId::CancelJob, "Cancel",
+            {xBase + w - 88.0f, y + 9.0f, 72.0f, 34.0f},
+            ui_design::ControlRole::Destructive);
+    }
 
-    const float barX = xBase + 12.0f, barW = w - 24.0f;
-    const float barY = y + 34.0f,     barH = 16.0f;
-    ui.drawRect(barX, barY, barW, barH, glm::vec3(0.20f, 0.21f, 0.24f));
+    const float barX = xBase + 16.0f, barW = w - 32.0f;
+    const float barY = y + 57.0f,     barH = 6.0f;
+    ui.drawRoundedRect({barX, barY, barW, barH}, 3.0f,
+                       ui.themeColor(ui_design::ColorToken::PrimaryInk, 0.12f));
     if (progress >= 0.0f) {
-        const float p = progress > 1.0f ? 1.0f : progress;
+        const float p = std::clamp(progress, 0.0f, 1.0f);
         if (p > 0.0f)
-            ui.drawRect(barX, barY, barW * p, barH, glm::vec3(0.30f, 0.70f, 0.90f));
+            ui.drawRoundedRect({barX, barY, barW * p, barH}, 3.0f,
+                               ui.themeColor(ui_design::ColorToken::SystemBlue));
         char pct[16];
-        snprintf(pct, sizeof(pct), "%d", static_cast<int>(p * 100.0f + 0.5f));
-        ui.drawText(pct, barX + barW - 34.0f, barY + 4.0f, 7.5f, glm::vec3(0.95f));
+        snprintf(pct, sizeof(pct), "%d%%", static_cast<int>(p * 100.0f + 0.5f));
+        ui.drawText(pct, barX + barW - 42.0f, barY + 17.0f, 11.0f,
+                    ui.themeColor(ui_design::ColorToken::Graphite),
+                    ui_design::FontRole::Data);
     } else {
         // Indeterminate: a stripe sweeping the bar.
         const float stripeW = barW * 0.25f;
@@ -349,7 +361,8 @@ static bool drawProgressPanel(SimpleUI& ui, const std::string& title, float prog
         const float s0 = std::max(sx, barX);
         const float s1 = std::min(sx + stripeW, barX + barW);
         if (s1 > s0)
-            ui.drawRect(s0, barY, s1 - s0, barH, glm::vec3(0.30f, 0.70f, 0.90f));
+            ui.drawRoundedRect({s0, barY, s1 - s0, barH}, 3.0f,
+                               ui.themeColor(ui_design::ColorToken::SystemBlue));
     }
     return cancelClicked;
 }
@@ -406,13 +419,13 @@ static void drawSolverStatusOverlay(SimpleUI& ui, float viewportRight) {
             stages.erase(stages.begin(), stages.end() - kMaxRows);
     }
 
-    const float fs   = 7.5f;              // glyph size
-    const float cw   = fs * 1.2f;         // SimpleUI's fixed advance per char
-    const float lh   = 15.0f;             // line height
+    const float fs   = 11.0f;
+    const float cw   = fs * 0.58f;
+    const float lh   = 18.0f;
     const float rowN = static_cast<float>(stages.size()) + 1.0f;   // + header
 
     // Build every row's text first so the block can be right-aligned as a unit.
-    struct Row { std::string text; glm::vec3 col; float bar; };
+    struct Row { std::string text; ui_design::ColorToken color; float opacity; float bar; };
     std::vector<Row> rows;
     rows.reserve(stages.size() + 1);
 
@@ -420,7 +433,7 @@ static void drawSolverStatusOverlay(SimpleUI& ui, float viewportRight) {
         char hb[128];
         snprintf(hb, sizeof(hb), "%s   %.1fS",
                  runLabel.empty() ? "SOLVER" : runLabel.c_str(), runElapsed);
-        rows.push_back({hb, glm::vec3(0.05f, 0.12f, 0.30f), -1.0f});
+        rows.push_back({hb, ui_design::ColorToken::PrimaryInk, 1.0f, -1.0f});
     }
 
     for (const auto& s : stages) {
@@ -459,15 +472,26 @@ static void drawSolverStatusOverlay(SimpleUI& ui, float viewportRight) {
                  indent, "", running ? '>' : ' ',
                  s.label.c_str(), devBuf, stat, span, s.detail.c_str());
 
-        glm::vec3 col;
+        ui_design::ColorToken color = ui_design::ColorToken::Graphite;
+        float opacity = 0.88f;
         switch (s.state) {
-            case SolverStatus::State::Active:    col = glm::vec3(0.07f, 0.21f, 0.50f); break;
-            case SolverStatus::State::Queued:    col = glm::vec3(0.56f, 0.59f, 0.63f); break;
+            case SolverStatus::State::Active:
+                color = ui_design::ColorToken::SystemBlue;
+                opacity = 1.0f;
+                break;
+            case SolverStatus::State::Queued:
+                color = ui_design::ColorToken::Graphite;
+                opacity = 0.66f;
+                break;
             case SolverStatus::State::Failed:
-            case SolverStatus::State::Cancelled: col = glm::vec3(0.55f, 0.16f, 0.14f); break;
-            default:                             col = glm::vec3(0.34f, 0.39f, 0.46f); break;
+            case SolverStatus::State::Cancelled:
+                color = ui_design::ColorToken::BlockedRed;
+                opacity = 1.0f;
+                break;
+            default:
+                break;
         }
-        rows.push_back({line, col, running ? s.progress : -1.0f});
+        rows.push_back({line, color, opacity, running ? s.progress : -1.0f});
     }
 
     size_t maxLen = 0;
@@ -477,11 +501,13 @@ static void drawSolverStatusOverlay(SimpleUI& ui, float viewportRight) {
     float       y      = static_cast<float>(scrHeight) - 14.0f - rowN * lh;
 
     for (const auto& r : rows) {
-        ui.drawText(r.text, x0, y, fs, r.col);
+        ui.drawText(r.text, x0, y + fs, fs, ui.themeColor(r.color, r.opacity),
+                    ui_design::FontRole::Data);
         if (r.bar >= 0.0f) {
             // Hairline progress rule under the active row — a line, not a box.
             const float bw = blockW * std::min(1.0f, r.bar);
-            ui.drawRect(x0, y + fs + 3.0f, bw, 1.5f, glm::vec3(0.15f, 0.40f, 0.72f));
+            ui.drawRoundedRect({x0, y + fs + 4.0f, bw, 2.0f}, 1.0f,
+                               ui.themeColor(ui_design::ColorToken::SystemBlue));
         }
         y += lh;
     }
@@ -836,7 +862,7 @@ int runInteractive() {
         const float panelX = uiLayout.inspector.x;
         const std::string documentTitle = model.loadedFileName.empty()
             ? "PolyFEA"
-            : "PolyFEA · " + fs::path(model.loadedFileName).filename().string();
+            : "PolyFEA | " + fs::path(model.loadedFileName).filename().string();
         const ui_design::Rect inspectorContentRect{
             uiLayout.inspector.x + 16.0f,
             uiLayout.inspector.y + 60.0f,
@@ -857,15 +883,39 @@ int runInteractive() {
         drawAxisLabel(glm::vec3(0.0f, axisLengths.y, 0.0f), "Y", axisLengths.y, glm::vec3(0.35f, 1.0f, 0.35f));
         drawAxisLabel(glm::vec3(0.0f, 0.0f, axisLengths.z), "Z", axisLengths.z, glm::vec3(0.35f, 0.7f, 1.0f));
 
-        // While a compute job runs the whole control panel is render-only:
-        // widgets ignore input and a dim overlay signals "computation running".
-        ui.setInputLocked(busy);
-
+        ui.setInputLocked(false);
         ui.drawRoundedRect(uiLayout.titleBar, 0.0f,
                            ui.themeColor(ui_design::ColorToken::SnowSurface, 0.96f));
         ui.drawText(documentTitle, 54.0f, 28.0f, 15.0f,
                     ui.themeColor(ui_design::ColorToken::PrimaryInk),
                     ui_design::FontRole::Display);
+        static bool showHelp = false;
+        const float resetWidth = 112.0f;
+        const float helpWidth = showHelp ? 104.0f : 76.0f;
+        const float resetX = static_cast<float>(scrWidth) - resetWidth - 12.0f;
+        const float helpX = resetX - helpWidth - 8.0f;
+        if (ui.button(ui_design::ControlId::OpenHelp,
+                      showHelp ? "Close help" : "Help",
+                      {helpX, 5.0f, helpWidth, 34.0f},
+                      ui_design::ControlRole::Ghost, showHelp)) {
+            dispatchInspectorAction<ui_action_wiring::InspectorAction::OpenHelp>(
+                {ui_design::ControlId::OpenHelp, 0},
+                [&](const auto&) { showHelp = !showHelp; });
+        }
+        if (ui.button(ui_design::ControlId::ResetView, "Reset view",
+                      {resetX, 5.0f, resetWidth, 34.0f},
+                      ui_design::ControlRole::Secondary)) {
+            dispatchInspectorAction<ui_action_wiring::InspectorAction::ResetView>(
+                {ui_design::ControlId::ResetView, 0}, [&](const auto&) {
+                    camera.OrbitTarget = glm::vec3(0.0f);
+                    camera.OrbitRadius = 5.0f;
+                    camera.UpdatePosition();
+                });
+        }
+
+        // While a compute job runs the inspector is render-only: widgets
+        // ignore input and a dim overlay signals "computation running".
+        ui.setInputLocked(busy);
         ui.drawRoundedRect(uiLayout.inspector, 0.0f,
                            ui.themeColor(ui_design::ColorToken::SnowSurface, 0.96f));
         drawInspectorTabs(ui, inspectorState, uiLayout.inspector);
@@ -2308,37 +2358,42 @@ int runInteractive() {
 
         ui.popClip();
 
-        // End of the control panel: re-enable input for the left-side widgets
-        // (README, section slider, progress panel) and dim the locked panel.
+        // End of the inspector: re-enable input for Help, the section control,
+        // solver status and the cancellable progress surface.
         ui.setInputLocked(false);
         if (busy)
-            ui.drawRectA(panelX, 0, panelW, scrHeight, glm::vec3(0.06f, 0.06f, 0.07f), 0.55f);
+            ui.drawRectA(uiLayout.inspector.x, uiLayout.inspector.y,
+                         uiLayout.inspector.w, uiLayout.inspector.h,
+                         glm::vec3(0.06f, 0.06f, 0.07f), 0.55f);
 
-        static bool showReadme = false;
-        if (ui.button("README", 10.0f, 10.0f, 80.0f, 30.0f, showReadme)) {
-            showReadme = !showReadme;
-        }
+        if (showHelp) {
+            const float rw = std::min(540.0f, uiLayout.viewport.w - 32.0f);
+            const float rh = std::min(600.0f, static_cast<float>(scrHeight) - 64.0f);
+            const float rx = 16.0f;
+            const float ry = 52.0f;
+            const ui_design::Rect helpSurface{rx, ry, rw, rh};
+            ui.drawShadow(helpSurface, 14.0f, 1.0f);
+            ui.drawRoundedRect(helpSurface, 14.0f,
+                               ui.themeColor(ui_design::ColorToken::SnowSurface, 0.96f));
 
-        if (showReadme) {
-            float rw = 520.0f;
-            float rh = 540.0f;
-            float rx = 10.0f;
-            float ry = 50.0f;
-            ui.drawRect(rx, ry, rw, rh, glm::vec3(0.12f, 0.12f, 0.15f));
-            ui.drawRect(rx, ry, 2.0f, rh, glm::vec3(0.3f, 0.6f, 0.9f));
-
-            float textY = ry + 20.0f;
-            float textX = rx + 20.0f;
-            ui.drawText("FUNCTIONALITY README", textX, textY, 12.0f, glm::vec3(0.5f, 0.8f, 1.0f)); textY += 30.0f;
+            float textY = ry + 34.0f;
+            const float textX = rx + 20.0f;
+            ui.drawText("PolyFEA help", textX, textY, 18.0f,
+                        ui.themeColor(ui_design::ColorToken::PrimaryInk),
+                        ui_design::FontRole::Display);
+            textY += 30.0f;
 
             auto drawHelp = [&](const std::string& name, const std::string& desc) {
-                ui.drawText(name, textX, textY, 9.5f, glm::vec3(0.9f, 0.9f, 0.6f)); textY += 18.0f;
-                
-                std::string currentLine = "";
-                float maxW = rw - 40.0f;
-                float charW = 8.5f * 1.2f;
-                int charsPerLine = static_cast<int>(maxW / charW);
-                
+                ui.drawText(name, textX, textY, 12.0f,
+                            ui.themeColor(ui_design::ColorToken::PrimaryInk),
+                            ui_design::FontRole::Interface);
+                textY += 16.0f;
+
+                std::string currentLine;
+                const float maxW = rw - 40.0f;
+                const int charsPerLine = std::max(
+                    1, static_cast<int>(maxW / (11.0f * 0.62f)));
+
                 std::vector<std::string> words;
                 size_t pos = 0, found;
                 while((found = desc.find_first_of(' ', pos)) != std::string::npos) {
@@ -2353,14 +2408,18 @@ int runInteractive() {
                     } else if ((currentLine.length() + 1 + w.length()) <= charsPerLine) {
                         currentLine += " " + w;
                     } else {
-                        ui.drawText(currentLine, textX + 12.0f, textY, 8.5f, glm::vec3(0.8f, 0.8f, 0.8f));
-                        textY += 15.0f;
+                        ui.drawText(currentLine, textX, textY, 11.0f,
+                                    ui.themeColor(ui_design::ColorToken::Graphite),
+                                    ui_design::FontRole::Interface);
+                        textY += 14.0f;
                         currentLine = w;
                     }
                 }
                 if (!currentLine.empty()) {
-                    ui.drawText(currentLine, textX + 12.0f, textY, 8.5f, glm::vec3(0.8f, 0.8f, 0.8f));
-                    textY += 22.0f;
+                    ui.drawText(currentLine, textX, textY, 11.0f,
+                                ui.themeColor(ui_design::ColorToken::Graphite),
+                                ui_design::FontRole::Interface);
+                    textY += 21.0f;
                 }
             };
 
@@ -2376,7 +2435,7 @@ int runInteractive() {
             drawHelp("SECTION SLIDER (LEFT)", "Drag up to cut the model with a horizontal XY plane; everything below the grey plane is hidden. Zero disables the cut.");
         }
 
-        // ===== Sectional view slider (left edge, README down to mid-screen) =====
+        // ===== Sectional view slider (left edge, Help down to mid-screen) =====
         // Bottom = 0 (no cut), top = the part's real Z height in mm (from the
         // loaded file's physical bbox). Dragging up raises a translucent grey
         // XY plane; the volume below it is clipped in the shader, so it works
@@ -2394,20 +2453,38 @@ int runInteractive() {
             const float sx    = 26.0f;
             const float syTop = 96.0f;
             const float syBot = static_cast<float>(scrHeight) * 0.5f;
-            // The open README overlay occupies this exact strip; drawing the
+            // The open Help overlay occupies this exact strip; drawing the
             // slider then would paint it over the help text AND steal its
             // clicks (immediate-mode widgets hit-test regardless of draw
             // order). Keep the current cut state, just hide the control.
-            if (showReadme) {
+            if (showHelp) {
                 // no slider this frame; the active cut (if any) stays as-is
             } else if (syBot - syTop > 60.0f) {
-                char zb[64];
-                snprintf(zb, sizeof(zb), "%.1f MM", zSpanMM);
-                ui.drawText("SECTION", sx - 12.0f, syTop - 28.0f, 7.0f, glm::vec3(0.35f, 0.40f, 0.45f));
-                ui.drawText(zb, sx - 12.0f, syTop - 15.0f, 6.5f, glm::vec3(0.45f, 0.50f, 0.55f));
-                ui.vslider("SECTION_Z", sectionHeightMM, 0.0f, zSpanMM,
-                           sx, syTop, 14.0f, syBot - syTop);
-                ui.drawText("0", sx + 3.0f, syBot + 8.0f, 7.5f, glm::vec3(0.45f, 0.50f, 0.55f));
+                char maximum[32];
+                snprintf(maximum, sizeof(maximum), "%.1f", zSpanMM);
+                ui.drawText("Section", sx - 12.0f, syTop - 28.0f, 11.0f,
+                            ui.themeColor(ui_design::ColorToken::PrimaryInk),
+                            ui_design::FontRole::Interface);
+                ui.drawText(maximum, sx + 18.0f, syTop - 14.0f, 11.0f,
+                            ui.themeColor(ui_design::ColorToken::PrimaryInk),
+                            ui_design::FontRole::Data);
+                ui.drawText("mm max", sx + 58.0f, syTop - 14.0f, 11.0f,
+                            ui.themeColor(ui_design::ColorToken::Graphite),
+                            ui_design::FontRole::Interface);
+                if (ui.vslider(ui_design::ControlId::EditSectionPosition,
+                               sectionHeightMM, 0.0f, zSpanMM,
+                               {sx - 12.0f, syTop, 24.0f, syBot - syTop})) {
+                    dispatchInspectorValue<
+                        ui_action_wiring::InspectorAction::EditSectionPosition>(
+                        {ui_design::ControlId::EditSectionPosition, 0},
+                        sectionHeightMM, [](const auto&) {});
+                }
+                ui.drawText("0.0", sx + 18.0f, syBot + 10.0f, 11.0f,
+                            ui.themeColor(ui_design::ColorToken::PrimaryInk),
+                            ui_design::FontRole::Data);
+                ui.drawText("mm", sx + 44.0f, syBot + 10.0f, 11.0f,
+                            ui.themeColor(ui_design::ColorToken::Graphite),
+                            ui_design::FontRole::Interface);
 
                 const bool cut = sectionHeightMM > 0.002f * zSpanMM;
                 model.sectionEnabled = cut;
@@ -2417,12 +2494,17 @@ int runInteractive() {
                     const float centerZ = 0.5f * (model.physicalMinMM.z + model.physicalMaxMM.z);
                     const float cutMM   = model.physicalMinMM.z + sectionHeightMM;
                     model.sectionZModel = (cutMM - centerZ) / std::max(1e-9f, model.modelToMM);
-                    char vb[64];
-                    snprintf(vb, sizeof(vb), "Z %.1f", sectionHeightMM);
+                    char vb[32];
+                    snprintf(vb, sizeof(vb), "%.1f", sectionHeightMM);
                     const float tFill = sectionHeightMM / zSpanMM;
-                    ui.drawText(vb, sx + 24.0f,
-                                syTop + (syBot - syTop) * (1.0f - tFill) - 5.0f,
-                                7.5f, glm::vec3(0.20f, 0.45f, 0.70f));
+                    const float currentY = syTop +
+                        (syBot - syTop) * (1.0f - tFill) + 4.0f;
+                    ui.drawText(vb, sx + 18.0f, currentY, 11.0f,
+                                ui.themeColor(ui_design::ColorToken::SystemBlue),
+                                ui_design::FontRole::Data);
+                    ui.drawText("mm", sx + 58.0f, currentY, 11.0f,
+                                ui.themeColor(ui_design::ColorToken::Graphite),
+                                ui_design::FontRole::Interface);
                 }
             } else {
                 model.sectionEnabled = false;
@@ -2438,15 +2520,18 @@ int runInteractive() {
         // already started its job, and the top-of-frame value would hide the
         // panel for one whole frame after the click that started the work.
         if (computeBusy()) {
-            const float slideT = static_cast<float>((glfwGetTime() - g_job.startTime) / 0.25);
+            const float slideT = static_cast<float>((glfwGetTime() - g_job.startTime) / 0.22);
             const std::string title = g_job.cancel.load()
                                           ? g_job.title + "  - CANCELLING..."
                                           : g_job.title;
             if (drawProgressPanel(ui, title, g_job.progress.load(),
                                   g_job.cancellable && !g_job.cancel.load(),
                                   slideT, glfwGetTime())) {
-                g_job.cancel = true;
-                std::cout << "[JOB] cancel requested by user." << std::endl;
+                dispatchInspectorAction<ui_action_wiring::InspectorAction::CancelJob>(
+                    {ui_design::ControlId::CancelJob, 0}, [&](const auto&) {
+                        g_job.cancel = true;
+                        std::cout << "[JOB] cancel requested by user." << std::endl;
+                    });
             }
         }
 

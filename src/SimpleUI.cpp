@@ -473,32 +473,54 @@ bool SimpleUI::slider(std::string label, float& value, float min, float max, flo
     return changed;
 }
 
-// Vertical slider: track runs from y (top, value = max) down to y+h (bottom,
-// value = min). Fill grows upward from the bottom; a bright thumb bar marks
-// the current level. Same activeUIID capture pattern as the horizontal slider
-// so a drag that leaves the track keeps control until the button is released.
-bool SimpleUI::vslider(std::string id, float& value, float min, float max, float x, float y, float w, float h) {
+// Vertical slider: the containing rect is the hit target, while the visible
+// track stays at the approved 4 px and the thumb at 16 px.
+bool SimpleUI::vslider(
+    ui_design::ControlId control, float& value, float min, float max,
+    const ui_design::Rect& rect, bool disabled) {
+    disabled = disabled || inputLocked;
+    const ui_design::WidgetId id{control, 0};
+    if (!mousePressed) {
+        activeWidgetID.reset();
+    }
+
+    const bool hovered = ui_design::containsPoint(rect, mouseX, mouseY) &&
+                         pointerInsideActiveClip(mouseX, mouseY);
+    if (!disabled && hovered && mousePressed && !prevMousePressed) {
+        activeWidgetID = id;
+        focusedWidgetID = id;
+    }
+
     bool changed = false;
-    if (!mousePressed) activeUIID = "";
-    // A few px of horizontal padding makes the thin track easy to grab.
-    bool hovered = !inputLocked &&
-                   (mouseX >= x - 6.0f && mouseX <= x + w + 6.0f &&
-                    mouseY >= y && mouseY <= y + h);
-    if (hovered && mousePressed && activeUIID == "") activeUIID = id;
-    if (activeUIID == id && mousePressed) {
-        float t = (y + h - mouseY) / h;          // 0 at bottom, 1 at top
-        if (t < 0.0f) t = 0.0f; if (t > 1.0f) t = 1.0f;
-        value = min + t * (max - min);
+    const bool active = activeWidgetID && *activeWidgetID == id && mousePressed;
+    if (active && max > min) {
+        const float position = std::clamp(
+            (rect.y + rect.h - mouseY) / rect.h, 0.0f, 1.0f);
+        value = min + position * (max - min);
         changed = true;
     }
-    drawRect(x, y, w, h, glm::vec3(0.16f, 0.17f, 0.19f));
-    drawRect(x + 1, y + 1, w - 2, h - 2, glm::vec3(0.22f, 0.23f, 0.26f));
-    float t = (max > min) ? (value - min) / (max - min) : 0.0f;
-    if (t < 0.0f) t = 0.0f; if (t > 1.0f) t = 1.0f;
-    glm::vec3 fillColor = (activeUIID == id) ? glm::vec3(0.5f, 0.8f, 1.0f) : glm::vec3(0.3f, 0.7f, 0.9f);
-    if (t > 0.0f) drawRect(x + 2, y + h * (1.0f - t), w - 4, h * t - 2.0f > 0.0f ? h * t - 2.0f : h * t, fillColor);
-    // Thumb bar
-    drawRect(x - 4, y + h * (1.0f - t) - 2.0f, w + 8, 4.0f, glm::vec3(0.9f, 0.95f, 1.0f));
+
+    float position = max > min ? (value - min) / (max - min) : 0.0f;
+    position = std::clamp(position, 0.0f, 1.0f);
+    const float opacity = disabled ? 0.38f : 1.0f;
+    const ui_design::Rect track{
+        rect.x + (rect.w - 4.0f) * 0.5f, rect.y, 4.0f, rect.h};
+    drawRoundedRect(track, 2.0f,
+                    themeColor(ui_design::ColorToken::PrimaryInk, 0.14f * opacity));
+    if (position > 0.0f) {
+        drawRoundedRect(
+            {track.x, track.y + track.h * (1.0f - position),
+             track.w, track.h * position},
+            2.0f, themeColor(ui_design::ColorToken::SystemBlue, opacity));
+    }
+
+    const ui_design::Rect thumb{
+        track.x + track.w * 0.5f - 8.0f,
+        track.y + track.h * (1.0f - position) - 8.0f,
+        16.0f, 16.0f};
+    drawShadow(thumb, 8.0f, opacity);
+    drawRoundedRect(thumb, 8.0f,
+                    themeColor(ui_design::ColorToken::SnowSurface, opacity));
     return changed;
 }
 
