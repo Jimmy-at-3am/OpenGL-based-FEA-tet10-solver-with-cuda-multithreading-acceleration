@@ -526,7 +526,8 @@ add_test(NAME load_physics_tests COMMAND load_physics_tests)
 # --- Focused UI-design contract tests (GL-free) ---
 add_executable(ui_design_tests
     tests/ui_design_tests.cpp
-    src/UIDesign.cpp)
+    src/UIDesign.cpp
+    src/UIInteraction.cpp)
 target_include_directories(ui_design_tests PRIVATE ${CMAKE_SOURCE_DIR}/include)
 if(MSVC)
     target_compile_options(ui_design_tests PRIVATE /W4 /WX)

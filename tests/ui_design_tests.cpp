@@ -1,4 +1,5 @@
 #include "UIDesign.h"
+#include "UIInteraction.h"
 
 #include <algorithm>
 #include <cmath>
@@ -25,6 +26,10 @@ void expectTrue(bool condition, const char* message) {
     if (!condition) {
         throw std::runtime_error(message);
     }
+}
+
+void expectFalse(bool condition, const char* message) {
+    expectTrue(!condition, message);
 }
 
 void expectEqual(const std::string& actual, const std::string& expected) {
@@ -233,6 +238,63 @@ void testStrokeFallbackPreservesRequestedOpacity() {
     expectNear(fallback.color.a, 0.38f);
 }
 
+void testInspectorScrollOwnership() {
+    const auto layout = ui_design::computeWindowLayout(1280, 800);
+    expectTrue(ui_interaction::ownsPoint(layout, 1270.0f, 400.0f),
+               "inspector must own pointer inside its bounds");
+    expectFalse(ui_interaction::ownsPoint(layout, 200.0f, 400.0f),
+                "viewport must retain its pointer input");
+    expectNear(ui_interaction::applyScroll(20.0f, -1.0f, 900.0f, 600.0f), 56.0f);
+    expectNear(ui_interaction::applyScroll(290.0f, -1.0f, 900.0f, 600.0f), 300.0f);
+    expectNear(ui_interaction::applyScroll(10.0f, 1.0f, 900.0f, 600.0f), 0.0f);
+}
+
+void testFocusOrderSkipsHiddenControls() {
+    const std::vector<ui_design::ControlId> visible = {
+        ui_design::ControlId::SelectSurfaceView,
+        ui_design::ControlId::SelectVolumeView,
+        ui_design::ControlId::GenerateVolumeMesh,
+    };
+    expectEqual(*ui_interaction::nextFocus(visible, std::nullopt, 1), visible.front());
+    expectEqual(*ui_interaction::nextFocus(visible, visible.back(), 1), visible.front());
+    expectEqual(*ui_interaction::nextFocus(visible, visible.front(), -1), visible.back());
+}
+
+void testSelectingInspectorTabClearsFocus() {
+    ui_interaction::InspectorState state;
+    state.focused = ui_design::ControlId::EditSizeX;
+
+    ui_interaction::selectTab(state, ui_design::InspectorTab::Solve);
+
+    expectEqual(state.activeTab, ui_design::InspectorTab::Solve);
+    expectTrue(!state.focused.has_value(), "switching tabs must clear focused controls");
+}
+
+void testKeyboardNavigationMapsPressedKeysToIntents() {
+    expectEqual(ui_interaction::translateKey(ui_interaction::Key::Tab, true, false),
+                ui_interaction::KeyIntent::FocusNext);
+    expectEqual(ui_interaction::translateKey(ui_interaction::Key::Tab, true, true),
+                ui_interaction::KeyIntent::FocusPrevious);
+    expectEqual(ui_interaction::translateKey(ui_interaction::Key::Enter, true, false),
+                ui_interaction::KeyIntent::Activate);
+    expectEqual(ui_interaction::translateKey(ui_interaction::Key::Space, true, false),
+                ui_interaction::KeyIntent::Activate);
+    expectEqual(ui_interaction::translateKey(ui_interaction::Key::Left, true, false),
+                ui_interaction::KeyIntent::Decrease);
+    expectEqual(ui_interaction::translateKey(ui_interaction::Key::Down, true, false),
+                ui_interaction::KeyIntent::Decrease);
+    expectEqual(ui_interaction::translateKey(ui_interaction::Key::Right, true, false),
+                ui_interaction::KeyIntent::Increase);
+    expectEqual(ui_interaction::translateKey(ui_interaction::Key::Up, true, false),
+                ui_interaction::KeyIntent::Increase);
+    expectEqual(ui_interaction::translateKey(ui_interaction::Key::Escape, true, false),
+                ui_interaction::KeyIntent::Cancel);
+    expectEqual(ui_interaction::translateKey(ui_interaction::Key::Tab, false, false),
+                ui_interaction::KeyIntent::None);
+    expectEqual(ui_interaction::translateKey(ui_interaction::Key::Other, true, false),
+                ui_interaction::KeyIntent::None);
+}
+
 }  // namespace
 
 int main() {
@@ -247,6 +309,10 @@ int main() {
         {"theme color conversion", testThemeColorConversion},
         {"formatted value separates number and unit", testFormattedValueLayoutSeparatesNumberAndUnit},
         {"stroke fallback preserves requested opacity", testStrokeFallbackPreservesRequestedOpacity},
+        {"inspector scroll ownership", testInspectorScrollOwnership},
+        {"focus order skips hidden controls", testFocusOrderSkipsHiddenControls},
+        {"selecting inspector tab clears focus", testSelectingInspectorTabClearsFocus},
+        {"keyboard navigation maps pressed keys to intents", testKeyboardNavigationMapsPressedKeysToIntents},
     };
 
     int failures = 0;
