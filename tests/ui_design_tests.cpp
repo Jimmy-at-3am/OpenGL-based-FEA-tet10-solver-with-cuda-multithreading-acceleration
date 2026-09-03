@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <functional>
+#include <filesystem>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -36,6 +37,24 @@ void expectEqual(std::string_view actual, std::string_view expected) {
     if (actual != expected) {
         throw std::runtime_error(
             "expected " + std::string(expected) + ", got " + std::string(actual));
+    }
+}
+
+template <typename T>
+void expectEqual(T actual, T expected) {
+    if (actual != expected) {
+        throw std::runtime_error("values are not equal");
+    }
+}
+
+void expectContainsFilename(
+    const std::vector<std::filesystem::path>& paths,
+    std::string_view expected) {
+    const auto found = std::find_if(paths.begin(), paths.end(), [&](const auto& path) {
+        return path.filename().string() == expected;
+    });
+    if (found == paths.end()) {
+        throw std::runtime_error("font fallback list omits " + std::string(expected));
     }
 }
 
@@ -157,6 +176,34 @@ void testControlManifestPartitionsAndWidgetIdentity() {
     expectTrue(!(firstMaterial == secondMaterial), "repeated controls need distinct identities");
 }
 
+void testControlVisualStates() {
+    const auto primary = ui_design::resolveControlVisual(
+        ui_design::ControlRole::Primary, ui_design::ControlState::Rest);
+    expectEqual(primary.fill, ui_design::ColorToken::SystemBlue);
+    expectEqual(primary.text, ui_design::ColorToken::SnowSurface);
+
+    const auto blocked = ui_design::resolveControlVisual(
+        ui_design::ControlRole::Secondary, ui_design::ControlState::Disabled);
+    expectNear(blocked.contentOpacity, 0.38f);
+}
+
+void testFontCandidateOrder() {
+    const auto interfaceFonts = ui_design::fontCandidates(ui_design::FontRole::Interface);
+    const auto dataFonts = ui_design::fontCandidates(ui_design::FontRole::Data);
+    expectTrue(!interfaceFonts.empty(), "interface font fallback list must not be empty");
+    expectTrue(!dataFonts.empty(), "data font fallback list must not be empty");
+    expectContainsFilename(interfaceFonts, "SegUIVar.ttf");
+    expectContainsFilename(dataFonts, "CascadiaMono.ttf");
+}
+
+void testThemeColorConversion() {
+    const auto blue = ui_design::rgba(ui_design::ColorToken::SystemBlue, 0.5f);
+    expectNear(blue.r, 0.0f);
+    expectNear(blue.g, 122.0f / 255.0f);
+    expectNear(blue.b, 1.0f);
+    expectNear(blue.a, 0.5f);
+}
+
 }  // namespace
 
 int main() {
@@ -166,6 +213,9 @@ int main() {
         {"numeric formatting", testNumericFormatting},
         {"palette and control manifest", testPaletteAndControlManifest},
         {"control partitions and widget identity", testControlManifestPartitionsAndWidgetIdentity},
+        {"control visual states", testControlVisualStates},
+        {"font candidate order", testFontCandidateOrder},
+        {"theme color conversion", testThemeColorConversion},
     };
 
     int failures = 0;

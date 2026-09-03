@@ -1,5 +1,6 @@
 #pragma once
 
+#include <filesystem>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -21,6 +22,10 @@ struct WindowLayout {
 
 enum class InspectorTab { Model, Mesh, Solve };
 
+enum class FontRole { Display, Interface, Data };
+enum class ControlRole { Primary, Secondary, Ghost, Destructive };
+enum class ControlState { Rest, Hover, Pressed, Selected, Disabled, Focused };
+
 enum class ColorToken {
     FrostCanvas,
     SnowSurface,
@@ -28,6 +33,21 @@ enum class ColorToken {
     Graphite,
     SystemBlue,
     BlockedRed,
+};
+
+struct ControlVisual {
+    ColorToken fill;
+    ColorToken text;
+    float fillOpacity;
+    float contentOpacity;
+    float focusOpacity;
+};
+
+struct Rgba {
+    float r;
+    float g;
+    float b;
+    float a;
 };
 
 enum class ControlId {
@@ -99,6 +119,9 @@ struct FormattedValue {
 WindowLayout computeWindowLayout(int widthPx, int heightPx);
 FormattedValue formatValue(double value, int decimals, bool scientific, std::string_view unit);
 std::string_view hex(ColorToken token);
+ControlVisual resolveControlVisual(ControlRole role, ControlState state);
+Rgba rgba(ColorToken token, float opacity = 1.0f);
+std::vector<std::filesystem::path> fontCandidates(FontRole role);
 const std::vector<ControlId>& requiredControls();
 const std::vector<ControlId>& requiredInspectorControls();
 const std::vector<ControlId>& requiredOverlayControls();

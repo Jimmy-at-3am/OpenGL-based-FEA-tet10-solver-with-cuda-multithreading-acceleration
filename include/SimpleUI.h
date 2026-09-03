@@ -1,18 +1,40 @@
 #pragma once
+#include "UIDesign.h"
+#include "UIFontRenderer.h"
+
+#include <optional>
 #include <string>
+#include <string_view>
+#include <vector>
+
 #include <glm/glm.hpp>
 
 class SimpleUI {
 private:
-    unsigned int VAO, VBO;
+    unsigned int VAO = 0;
+    unsigned int VBO = 0;
+    unsigned int roundedProgramID = 0;
+    unsigned int roundedVAO = 0;
+    unsigned int roundedVBO = 0;
     glm::mat4 projection;
     std::string activeUIID = "";
+    std::optional<ui_design::WidgetId> activeWidgetID;
+    std::optional<ui_design::WidgetId> focusedWidgetID;
+    std::vector<ui_design::Rect> clipStack;
+    UIFontRenderer fontRenderer;
+    int viewportWidth = 0;
+    int viewportHeight = 0;
+    float contentScale = 1.0f;
     bool inputLocked = false;   // true while a compute job runs: widgets render but ignore input
+
+    void drawStrokeText(std::string_view text, float x, float y, float size, glm::vec3 color);
+    void applyClip();
 public:
-    unsigned int programID;
+    unsigned int programID = 0;
 
     void init(int width, int height);
     void resize(int width, int height);
+    void resize(int width, int height, float contentScale);
     // Blocks clicks/drags for widgets drawn while locked (compute in progress).
     void setInputLocked(bool locked) { inputLocked = locked; }
     void drawRect(float x, float y, float w, float h, glm::vec3 color);
@@ -20,8 +42,34 @@ public:
     void drawRectA(float x, float y, float w, float h, glm::vec3 color, float alpha);
     void drawLine(float x1, float y1, float x2, float y2, glm::vec3 color, float thickness = 1.0f);
     void drawText(std::string text, float x, float y, float size, glm::vec3 color);
+    void drawRoundedRect(const ui_design::Rect& rect, float radius,
+                         const glm::vec4& color);
+    void drawShadow(const ui_design::Rect& rect, float radius, float opacity);
+    void drawText(std::string_view text, float x, float baselineY, float pixelSize,
+                  const glm::vec4& color, ui_design::FontRole role);
     bool button(std::string label, float x, float y, float w, float h, bool active = false, bool disabled = false);
+    bool button(ui_design::ControlId id, std::string_view label,
+                const ui_design::Rect& rect, ui_design::ControlRole role,
+                bool selected = false, bool disabled = false);
+    bool button(ui_design::WidgetId id, std::string_view label,
+                const ui_design::Rect& rect, ui_design::ControlRole role,
+                bool selected = false, bool disabled = false);
+    bool segmentedControl(const std::vector<ui_design::WidgetId>& ids,
+                          const ui_design::Rect& rect,
+                          const std::vector<std::string>& labels, int& selectedIndex,
+                          bool disabled = false);
+    bool toggle(ui_design::ControlId id, std::string_view label,
+                const ui_design::Rect& rect, bool& value, bool disabled = false);
+    bool sliderField(ui_design::ControlId id, std::string_view label,
+                     float& value, float min, float max,
+                     const ui_design::Rect& rect,
+                     const ui_design::FormattedValue& display,
+                     bool exponential = false, bool disabled = false);
     bool slider(std::string label, float& value, float min, float max, float x, float y, float w, float h, bool exponential = false);
     // Vertical slider: value = min at the BOTTOM of the track, max at the TOP.
     bool vslider(std::string id, float& value, float min, float max, float x, float y, float w, float h);
+    void pushClip(const ui_design::Rect& rect);
+    void popClip();
+    glm::vec4 themeColor(ui_design::ColorToken token, float opacity = 1.0f) const;
+    void shutdown();
 };

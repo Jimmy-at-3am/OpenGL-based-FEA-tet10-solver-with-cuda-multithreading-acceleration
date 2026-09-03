@@ -1,6 +1,7 @@
 #include "UIDesign.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <iomanip>
 #include <sstream>
 #include <stdexcept>
@@ -45,6 +46,103 @@ std::string_view hex(ColorToken token) {
     case ColorToken::BlockedRed:
         return "#C9342E";
     }
+    return {};
+}
+
+ControlVisual resolveControlVisual(ControlRole role, ControlState state) {
+    ControlVisual visual{};
+    switch (role) {
+    case ControlRole::Primary:
+        visual = {ColorToken::SystemBlue, ColorToken::SnowSurface, 1.0f, 1.0f, 0.0f};
+        break;
+    case ControlRole::Secondary:
+        visual = {ColorToken::PrimaryInk, ColorToken::PrimaryInk, 0.08f, 1.0f, 0.0f};
+        break;
+    case ControlRole::Ghost:
+        visual = {ColorToken::SystemBlue, ColorToken::SystemBlue, 0.0f, 1.0f, 0.0f};
+        break;
+    case ControlRole::Destructive:
+        visual = {ColorToken::BlockedRed, ColorToken::SnowSurface, 1.0f, 1.0f, 0.0f};
+        break;
+    }
+
+    switch (state) {
+    case ControlState::Rest:
+        break;
+    case ControlState::Hover:
+        visual.fillOpacity = std::min(1.0f, visual.fillOpacity + 0.08f);
+        break;
+    case ControlState::Pressed:
+        visual.fillOpacity = std::min(1.0f, visual.fillOpacity + 0.16f);
+        visual.contentOpacity = 0.88f;
+        break;
+    case ControlState::Selected:
+        visual.fill = ColorToken::SystemBlue;
+        visual.text = ColorToken::SnowSurface;
+        visual.fillOpacity = 1.0f;
+        break;
+    case ControlState::Disabled:
+        visual.contentOpacity = 0.38f;
+        visual.fillOpacity *= 0.5f;
+        break;
+    case ControlState::Focused:
+        visual.focusOpacity = 0.24f;
+        break;
+    }
+    return visual;
+}
+
+Rgba rgba(ColorToken token, float opacity) {
+    const std::string_view value = hex(token);
+    const auto nibble = [](char digit) {
+        if (digit >= '0' && digit <= '9') {
+            return digit - '0';
+        }
+        if (digit >= 'A' && digit <= 'F') {
+            return digit - 'A' + 10;
+        }
+        return digit - 'a' + 10;
+    };
+    const auto channel = [&](std::size_t offset) {
+        return static_cast<float>(nibble(value[offset]) * 16 + nibble(value[offset + 1])) / 255.0f;
+    };
+    return {channel(1), channel(3), channel(5), opacity};
+}
+
+std::vector<std::filesystem::path> fontCandidates(FontRole role) {
+#ifdef _WIN32
+    std::filesystem::path windowsDirectory = "C:\\Windows";
+    if (const char* windir = std::getenv("WINDIR")) {
+        windowsDirectory = windir;
+    }
+    const auto fonts = windowsDirectory / "Fonts";
+    switch (role) {
+    case FontRole::Display:
+        return {fonts / "SegUIVar.ttf", fonts / "segoeuib.ttf", fonts / "segoeui.ttf"};
+    case FontRole::Interface:
+        return {fonts / "SegUIVar.ttf", fonts / "segoeui.ttf"};
+    case FontRole::Data:
+        return {fonts / "CascadiaMono.ttf", fonts / "consola.ttf", fonts / "SegUIVar.ttf"};
+    }
+#else
+    switch (role) {
+    case FontRole::Display:
+        return {
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+            "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
+        };
+    case FontRole::Interface:
+        return {
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+        };
+    case FontRole::Data:
+        return {
+            "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+            "/usr/share/fonts/truetype/liberation2/LiberationMono-Regular.ttf",
+        };
+    }
+#endif
     return {};
 }
 
