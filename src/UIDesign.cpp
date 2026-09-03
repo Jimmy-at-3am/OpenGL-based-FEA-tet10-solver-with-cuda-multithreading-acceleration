@@ -8,6 +8,18 @@
 
 namespace ui_design {
 
+std::vector<ViewportSurface> viewportSurfacePaintOrder(
+    bool showHelp, bool showProgress) {
+    std::vector<ViewportSurface> order{ViewportSurface::SolverStatus};
+    if (showHelp) {
+        order.push_back(ViewportSurface::Help);
+    }
+    if (showProgress) {
+        order.push_back(ViewportSurface::Progress);
+    }
+    return order;
+}
+
 namespace {
 
 std::string groupDigits(std::uint64_t value) {

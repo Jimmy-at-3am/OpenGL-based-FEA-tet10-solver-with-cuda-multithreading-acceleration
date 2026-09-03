@@ -2366,7 +2366,8 @@ int runInteractive() {
                          uiLayout.inspector.w, uiLayout.inspector.h,
                          glm::vec3(0.06f, 0.06f, 0.07f), 0.55f);
 
-        if (showHelp) {
+        auto drawHelpSurface = [&]() {
+            if (!showHelp) return;
             const float rw = std::min(540.0f, uiLayout.viewport.w - 32.0f);
             const float rh = std::min(600.0f, static_cast<float>(scrHeight) - 64.0f);
             const float rx = 16.0f;
@@ -2433,7 +2434,7 @@ int runInteractive() {
             drawHelp("SHOWING: DEFORMED", "Toggles visualization of the post-simulation deformed structure.");
             drawHelp("FORCE MAP / REF CUBE", "Visualizes applied external force vectors and value contours.");
             drawHelp("SECTION SLIDER (LEFT)", "Drag up to cut the model with a horizontal XY plane; everything below the grey plane is hidden. Zero disables the cut.");
-        }
+        };
 
         // ===== Sectional view slider (left edge, Help down to mid-screen) =====
         // Bottom = 0 (no cut), top = the part's real Z height in mm (from the
@@ -2511,15 +2512,13 @@ int runInteractive() {
             }
         }
 
-        // ===== Solver stage overlay (bottom-right of the 3-D viewport) =====
-        drawSolverStatusOverlay(ui, panelX);
-
         // ===== Compute-progress panel (bottom-left, slides in) =====
         // Re-read `busy` here rather than reusing the value latched at the top
         // of the frame: a solver button pressed earlier in THIS frame has
         // already started its job, and the top-of-frame value would hide the
         // panel for one whole frame after the click that started the work.
-        if (computeBusy()) {
+        const bool showComputeProgress = computeBusy();
+        auto drawComputeProgressSurface = [&]() {
             const float slideT = static_cast<float>((glfwGetTime() - g_job.startTime) / 0.22);
             const std::string title = g_job.cancel.load()
                                           ? g_job.title + "  - CANCELLING..."
@@ -2532,6 +2531,23 @@ int runInteractive() {
                         g_job.cancel = true;
                         std::cout << "[JOB] cancel requested by user." << std::endl;
                     });
+            }
+        };
+
+        // The layer contract keeps solver history behind Help while retaining
+        // the progress/Cancel surface as the topmost, actionable overlay.
+        for (const auto surface : ui_design::viewportSurfacePaintOrder(
+                 showHelp, showComputeProgress)) {
+            switch (surface) {
+            case ui_design::ViewportSurface::SolverStatus:
+                drawSolverStatusOverlay(ui, panelX);
+                break;
+            case ui_design::ViewportSurface::Help:
+                drawHelpSurface();
+                break;
+            case ui_design::ViewportSurface::Progress:
+                drawComputeProgressSurface();
+                break;
             }
         }
 

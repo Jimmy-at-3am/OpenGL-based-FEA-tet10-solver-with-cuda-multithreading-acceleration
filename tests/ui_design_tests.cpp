@@ -394,6 +394,30 @@ void testKeyboardNavigationMapsPressedKeysToIntents() {
                 ui_interaction::KeyIntent::None);
 }
 
+void testViewportSurfacePaintOrderKeepsHelpAboveStatusAndProgressAboveHelp() {
+    const auto allSurfaces = ui_design::viewportSurfacePaintOrder(true, true);
+    const std::vector<ui_design::ViewportSurface> expectedAll = {
+        ui_design::ViewportSurface::SolverStatus,
+        ui_design::ViewportSurface::Help,
+        ui_design::ViewportSurface::Progress,
+    };
+    expectEqual(allSurfaces, expectedAll);
+
+    const auto helpOnly = ui_design::viewportSurfacePaintOrder(true, false);
+    const std::vector<ui_design::ViewportSurface> expectedHelpOnly = {
+        ui_design::ViewportSurface::SolverStatus,
+        ui_design::ViewportSurface::Help,
+    };
+    expectEqual(helpOnly, expectedHelpOnly);
+
+    const auto progressOnly = ui_design::viewportSurfacePaintOrder(false, true);
+    const std::vector<ui_design::ViewportSurface> expectedProgressOnly = {
+        ui_design::ViewportSurface::SolverStatus,
+        ui_design::ViewportSurface::Progress,
+    };
+    expectEqual(progressOnly, expectedProgressOnly);
+}
+
 }  // namespace
 
 int main() {
@@ -416,6 +440,7 @@ int main() {
         {"focus order skips hidden controls", testFocusOrderSkipsHiddenControls},
         {"selecting inspector tab clears focus", testSelectingInspectorTabClearsFocus},
         {"keyboard navigation maps pressed keys to intents", testKeyboardNavigationMapsPressedKeysToIntents},
+        {"viewport surface paint order", testViewportSurfacePaintOrderKeepsHelpAboveStatusAndProgressAboveHelp},
     };
 
     int failures = 0;

@@ -23,6 +23,8 @@ struct WindowLayout {
 
 enum class InspectorTab { Model, Mesh, Solve };
 
+enum class ViewportSurface { SolverStatus, Help, Progress };
+
 enum class FontRole { Display, Interface, Data };
 enum class ControlRole { Primary, Secondary, Ghost, Destructive };
 enum class ControlState { Rest, Hover, Pressed, Selected, Disabled, Focused };
@@ -155,6 +157,8 @@ struct SolvePresentationPolicy {
 };
 
 WindowLayout computeWindowLayout(int widthPx, int heightPx);
+std::vector<ViewportSurface> viewportSurfacePaintOrder(
+    bool showHelp, bool showProgress);
 bool containsPoint(const Rect& rect, float x, float y);
 float extendContentBottom(float currentBottom, const Rect& drawnRect);
 FormattedValue formatValue(double value, int decimals, bool scientific, std::string_view unit);
