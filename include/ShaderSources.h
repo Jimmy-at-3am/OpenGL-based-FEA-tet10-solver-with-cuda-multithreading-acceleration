@@ -136,6 +136,9 @@ out vec4 FragColor;
 uniform vec2 halfSize;
 uniform float radius;
 uniform vec4 color;
+uniform bool outlineOnly;
+uniform vec2 innerHalfSize;
+uniform float innerRadius;
 
 float roundedBoxSdf(vec2 p, vec2 halfSize, float radius) {
     vec2 q = abs(p) - halfSize + vec2(radius);
@@ -145,6 +148,13 @@ float roundedBoxSdf(vec2 p, vec2 halfSize, float radius) {
 void main() {
     float distanceToEdge = roundedBoxSdf(localPos, halfSize, radius);
     float coverage = 1.0 - smoothstep(-1.0, 1.0, distanceToEdge);
+    if (outlineOnly) {
+        float distanceToInnerEdge = roundedBoxSdf(
+            localPos, innerHalfSize, innerRadius);
+        float innerCoverage = 1.0 - smoothstep(
+            -1.0, 1.0, distanceToInnerEdge);
+        coverage = max(0.0, coverage - innerCoverage);
+    }
     FragColor = vec4(color.rgb, color.a * coverage);
 }
 )";

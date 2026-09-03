@@ -468,6 +468,61 @@ void testKeyboardSliderAdjustmentUsesLinearAndLogarithmicRanges() {
                0.00001f, 1e-8f);
 }
 
+void testFocusRingPresentationIsAThreePixelOutlineWithClearInterior() {
+    const ui_design::Rect target{20.0f, 30.0f, 120.0f, 44.0f};
+    const auto ring = ui_interaction::focusRingPresentation(target, 8.0f);
+
+    expectNear(ring.outerBounds.x, 17.0f);
+    expectNear(ring.outerBounds.y, 27.0f);
+    expectNear(ring.outerBounds.w, 126.0f);
+    expectNear(ring.outerBounds.h, 50.0f);
+    expectNear(ring.innerBounds.x, target.x);
+    expectNear(ring.innerBounds.y, target.y);
+    expectNear(ring.innerBounds.w, target.w);
+    expectNear(ring.innerBounds.h, target.h);
+    expectNear(ring.outerRadius, 11.0f);
+    expectNear(ring.innerRadius, 8.0f);
+    expectNear(ring.thickness, 3.0f);
+    expectEqual(ring.color, ui_design::ColorToken::SystemBlue);
+    expectNear(ring.opacity, 0.24f);
+}
+
+void testDiscreteSliderAccumulatorRetainsSubIntegerKeyboardSteps() {
+    ui_interaction::DiscreteSliderAccumulator accumulator;
+    accumulator.synchronize(0, 50);
+
+    float adjusted = ui_interaction::adjustSlider(
+        accumulator.position, 0.0f, 49.0f, false, 1);
+    expectEqual(accumulator.commit(
+                    adjusted, 50,
+                    ui_interaction::SliderChangeSource::Keyboard),
+                0);
+    expectNear(accumulator.position, 0.49f);
+
+    adjusted = ui_interaction::adjustSlider(
+        accumulator.position, 0.0f, 49.0f, false, 1);
+    expectEqual(accumulator.commit(
+                    adjusted, 50,
+                    ui_interaction::SliderChangeSource::Keyboard),
+                1);
+    expectNear(accumulator.position, 0.98f);
+
+    accumulator.synchronize(49, 50);
+    adjusted = ui_interaction::adjustSlider(
+        accumulator.position, 0.0f, 49.0f, false, 1);
+    expectEqual(accumulator.commit(
+                    adjusted, 50,
+                    ui_interaction::SliderChangeSource::Keyboard),
+                49);
+    expectNear(accumulator.position, 49.0f);
+
+    expectEqual(accumulator.commit(
+                    12.6f, 50,
+                    ui_interaction::SliderChangeSource::Pointer),
+                13);
+    expectNear(accumulator.position, 13.0f);
+}
+
 void testSegmentAdjustmentMovesToAdjacentClampedOption() {
     expectEqual(ui_interaction::adjustSegmentIndex(1, 3, -1), 0);
     expectEqual(ui_interaction::adjustSegmentIndex(1, 3, 1), 2);
@@ -553,6 +608,8 @@ int main() {
         {"visible focus order uses stable widgets", testVisibleFocusOrderUsesStableWidgetsAndIncludesDisabledControls},
         {"keyboard mutation honors gates", testKeyboardMutationHonorsDisabledAndBusyGates},
         {"keyboard slider adjustment", testKeyboardSliderAdjustmentUsesLinearAndLogarithmicRanges},
+        {"focus ring is outline only", testFocusRingPresentationIsAThreePixelOutlineWithClearInterior},
+        {"discrete slider retains fractional steps", testDiscreteSliderAccumulatorRetainsSubIntegerKeyboardSteps},
         {"segment adjustment", testSegmentAdjustmentMovesToAdjacentClampedOption},
         {"escape routing", testEscapePrefersCancellableJobThenHelp},
         {"DPI and reduced motion", testDpiScaleChangesRebuildOnlyWhenEffectiveScaleChanges},

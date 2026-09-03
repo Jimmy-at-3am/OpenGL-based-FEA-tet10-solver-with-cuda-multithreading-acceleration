@@ -1319,11 +1319,19 @@ int runInteractive() {
         static LayerSlicer::SliceResult sliceResult; // UI-local cache (decoupled)
         static LayerSlicer::SliceGrouping sliceGrp;   // physical readout
         static int   slicePreviewLayer = 0;
+        static ui_interaction::DiscreteSliderAccumulator slicePreviewPosition;
         static float sliceMaxSlabsF    = 40.0f;
-        auto rebuildSlicePreview = [&](int layer) {
+        auto rebuildSlicePreview = [&](int layer, bool synchronizePosition = true) {
             int nL = static_cast<int>(sliceResult.sections.size());
-            if (nL == 0) { model.showSlicePreview = false; return; }
+            if (nL == 0) {
+                model.showSlicePreview = false;
+                slicePreviewPosition.synchronize(0, 0);
+                return;
+            }
             slicePreviewLayer = std::max(0, std::min(layer, nL - 1));
+            if (synchronizePosition) {
+                slicePreviewPosition.synchronize(slicePreviewLayer, nL);
+            }
             auto segs = LayerSlicer::sectionToSegments(
                 sliceResult.sections[slicePreviewLayer], sliceResult.buildAxis,
                 sliceResult.planeCoords[slicePreviewLayer]);
@@ -1453,17 +1461,23 @@ int runInteractive() {
 
             int nL = static_cast<int>(sliceResult.sections.size());
             if (model.showSlicePreview && nL > 0) {
-                float layerF = static_cast<float>(slicePreviewLayer);
+                float layerF = slicePreviewPosition.position;
+                ui_interaction::SliderChangeSource layerChangeSource =
+                    ui_interaction::SliderChangeSource::None;
                 if (ui.sliderField(ui_design::ControlId::SelectPreviewLayer,
                                    "Preview layer", layerF, 0.0f,
                                    static_cast<float>(nL - 1), {x, y, w, 48.0f},
-                                   ui_design::formatValue(layerF, 0, false, ""))) {
+                                   ui_design::formatValue(layerF, 0, false, ""),
+                                   false, false, &layerChangeSource)) {
+                    const int selectedLayer =
+                        slicePreviewPosition.commit(
+                            layerF, nL, layerChangeSource);
                     dispatchInspectorValue<
                         ui_action_wiring::InspectorAction::SelectPreviewLayer>(
-                        {ui_design::ControlId::SelectPreviewLayer, 0}, layerF,
-                        [&](const auto&) {
-                            rebuildSlicePreview(static_cast<int>(layerF + 0.5f));
-                        });
+                         {ui_design::ControlId::SelectPreviewLayer, 0}, layerF,
+                         [&](const auto&) {
+                            rebuildSlicePreview(selectedLayer, false);
+                         });
                 }
                 y += 60.0f;
                 char sbuf[96];

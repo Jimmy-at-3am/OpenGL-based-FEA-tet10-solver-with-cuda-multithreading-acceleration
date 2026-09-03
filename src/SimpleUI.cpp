@@ -126,10 +126,7 @@ void SimpleUI::drawFocusRing(
     if (!focusedWidgetID || !(*focusedWidgetID == id)) {
         return;
     }
-    drawRoundedRect(
-        {rect.x - 3.0f, rect.y - 3.0f, rect.w + 6.0f, rect.h + 6.0f},
-        radius + 3.0f,
-        themeColor(ui_design::ColorToken::SystemBlue, 0.24f));
+    drawRoundedOutline(ui_interaction::focusRingPresentation(rect, radius));
 }
 
 void SimpleUI::drawRect(float x, float y, float w, float h, glm::vec3 color) {
@@ -268,9 +265,56 @@ void SimpleUI::drawRoundedRect(
     glUniform2f(glGetUniformLocation(roundedProgramID, "halfSize"), halfWidth, halfHeight);
     glUniform1f(glGetUniformLocation(roundedProgramID, "radius"), clampedRadius);
     glUniform4fv(glGetUniformLocation(roundedProgramID, "color"), 1, &color[0]);
+    glUniform1i(glGetUniformLocation(roundedProgramID, "outlineOnly"), GL_FALSE);
     glBindVertexArray(roundedVAO); glBindBuffer(GL_ARRAY_BUFFER, roundedVBO);
     glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(vertices), vertices);
     glDrawArrays(GL_TRIANGLES, 0, 6); glBindVertexArray(0);
+}
+
+void SimpleUI::drawRoundedOutline(
+    const ui_interaction::FocusRingPresentation& presentation) {
+    const auto& outer = presentation.outerBounds;
+    const auto& inner = presentation.innerBounds;
+    if (outer.w <= 0.0f || outer.h <= 0.0f || presentation.opacity <= 0.0f) {
+        return;
+    }
+    const float outerHalfWidth = outer.w * 0.5f;
+    const float outerHalfHeight = outer.h * 0.5f;
+    const float innerHalfWidth = std::max(0.0f, inner.w * 0.5f);
+    const float innerHalfHeight = std::max(0.0f, inner.h * 0.5f);
+    const float outerRadius = std::clamp(
+        presentation.outerRadius, 0.0f,
+        std::min(outerHalfWidth, outerHalfHeight));
+    const float innerRadius = std::clamp(
+        presentation.innerRadius, 0.0f,
+        std::min(innerHalfWidth, innerHalfHeight));
+    const float vertices[] = {
+        outer.x,           outer.y,           -outerHalfWidth, -outerHalfHeight,
+        outer.x + outer.w, outer.y,            outerHalfWidth, -outerHalfHeight,
+        outer.x,           outer.y + outer.h, -outerHalfWidth,  outerHalfHeight,
+        outer.x + outer.w, outer.y,            outerHalfWidth, -outerHalfHeight,
+        outer.x + outer.w, outer.y + outer.h,  outerHalfWidth,  outerHalfHeight,
+        outer.x,           outer.y + outer.h, -outerHalfWidth,  outerHalfHeight,
+    };
+    const glm::vec4 color = themeColor(
+        presentation.color, presentation.opacity);
+
+    glUseProgram(roundedProgramID);
+    glUniformMatrix4fv(glGetUniformLocation(roundedProgramID, "projection"), 1,
+                       GL_FALSE, glm::value_ptr(projection));
+    glUniform2f(glGetUniformLocation(roundedProgramID, "halfSize"),
+                outerHalfWidth, outerHalfHeight);
+    glUniform1f(glGetUniformLocation(roundedProgramID, "radius"), outerRadius);
+    glUniform4fv(glGetUniformLocation(roundedProgramID, "color"), 1, &color[0]);
+    glUniform1i(glGetUniformLocation(roundedProgramID, "outlineOnly"), GL_TRUE);
+    glUniform2f(glGetUniformLocation(roundedProgramID, "innerHalfSize"),
+                innerHalfWidth, innerHalfHeight);
+    glUniform1f(glGetUniformLocation(roundedProgramID, "innerRadius"), innerRadius);
+    glBindVertexArray(roundedVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, roundedVBO);
+    glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(vertices), vertices);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+    glBindVertexArray(0);
 }
 
 void SimpleUI::drawShadow(const ui_design::Rect& rect, float radius, float opacity) {
@@ -551,7 +595,11 @@ bool SimpleUI::toggle(
 bool SimpleUI::sliderField(
     ui_design::ControlId control, std::string_view label, float& value, float min,
     float max, const ui_design::Rect& rect, const ui_design::FormattedValue& display,
-    bool exponential, bool disabled) {
+    bool exponential, bool disabled,
+    ui_interaction::SliderChangeSource* changeSource) {
+    if (changeSource) {
+        *changeSource = ui_interaction::SliderChangeSource::None;
+    }
     const ui_design::WidgetId id{control, 0};
     registerFocusable(id, rect);
     disabled = disabled || inputLocked;
@@ -577,6 +625,9 @@ bool SimpleUI::sliderField(
         } else {
             value = min + position * (max - min);
         }
+        if (changeSource) {
+            *changeSource = ui_interaction::SliderChangeSource::Pointer;
+        }
         changed = true;
     }
     if (!changed && !keyIntentConsumed && pendingKeyIntent &&
@@ -589,6 +640,9 @@ bool SimpleUI::sliderField(
             ui_interaction::KeyIntent::Decrease ? -1 : 1;
         value = ui_interaction::adjustSlider(
             value, min, max, exponential, direction);
+        if (changeSource) {
+            *changeSource = ui_interaction::SliderChangeSource::Keyboard;
+        }
         keyIntentConsumed = true;
         changed = true;
     }

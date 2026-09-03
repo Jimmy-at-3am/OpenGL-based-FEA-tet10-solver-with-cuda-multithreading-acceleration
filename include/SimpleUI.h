@@ -49,6 +49,8 @@ private:
     bool keyboardTriggers(ui_design::WidgetId id,
                           ui_interaction::KeyIntent intent,
                           bool disabled);
+    void drawRoundedOutline(
+        const ui_interaction::FocusRingPresentation& presentation);
     void drawFocusRing(ui_design::WidgetId id, const ui_design::Rect& rect,
                        float radius);
 public:
@@ -94,7 +96,8 @@ public:
                      float& value, float min, float max,
                      const ui_design::Rect& rect,
                      const ui_design::FormattedValue& display,
-                     bool exponential = false, bool disabled = false);
+                     bool exponential = false, bool disabled = false,
+                     ui_interaction::SliderChangeSource* changeSource = nullptr);
     bool slider(std::string label, float& value, float min, float max, float x, float y, float w, float h, bool exponential = false);
     // Vertical slider: value = min at the BOTTOM of the track, max at the TOP.
     bool vslider(ui_design::ControlId id, float& value, float min, float max,

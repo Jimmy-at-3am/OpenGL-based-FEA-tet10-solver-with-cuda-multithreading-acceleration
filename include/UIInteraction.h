@@ -11,10 +11,29 @@ namespace ui_interaction {
 enum class Key { Tab, Enter, Space, Left, Right, Up, Down, Escape, Other };
 enum class KeyIntent { None, FocusNext, FocusPrevious, Activate, Decrease, Increase, Cancel };
 enum class EscapeAction { None, CancelJob, CloseHelp };
+enum class SliderChangeSource { None, Pointer, Keyboard };
 
 struct MotionDurations {
     int selectionMs;
     int progressMs;
+};
+
+struct FocusRingPresentation {
+    ui_design::Rect outerBounds;
+    ui_design::Rect innerBounds;
+    float outerRadius;
+    float innerRadius;
+    float thickness;
+    ui_design::ColorToken color;
+    float opacity;
+};
+
+struct DiscreteSliderAccumulator {
+    float position = 0.0f;
+    int selected = 0;
+
+    void synchronize(int selection, int count);
+    int commit(float continuousPosition, int count, SliderChangeSource source);
 };
 
 struct InspectorState {
@@ -50,5 +69,7 @@ EscapeAction resolveEscape(bool jobRunning, bool cancellable, bool helpOpen);
 float effectiveContentScale(float xScale, float yScale);
 bool contentScaleChanged(float previous, float current);
 MotionDurations motionDurations(bool reducedMotion);
+FocusRingPresentation focusRingPresentation(
+    const ui_design::Rect& targetBounds, float targetRadius);
 
 }  // namespace ui_interaction

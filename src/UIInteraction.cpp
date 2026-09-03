@@ -173,4 +173,48 @@ MotionDurations motionDurations(bool reducedMotion) {
     return reducedMotion ? MotionDurations{0, 0} : MotionDurations{160, 220};
 }
 
+FocusRingPresentation focusRingPresentation(
+    const ui_design::Rect& targetBounds, float targetRadius) {
+    constexpr float thickness = 3.0f;
+    return {
+        {targetBounds.x - thickness, targetBounds.y - thickness,
+         targetBounds.w + 2.0f * thickness,
+         targetBounds.h + 2.0f * thickness},
+        targetBounds,
+        std::max(0.0f, targetRadius) + thickness,
+        std::max(0.0f, targetRadius),
+        thickness,
+        ui_design::ColorToken::SystemBlue,
+        0.24f,
+    };
+}
+
+void DiscreteSliderAccumulator::synchronize(int selection, int count) {
+    if (count <= 0) {
+        position = 0.0f;
+        selected = 0;
+        return;
+    }
+    selected = std::clamp(selection, 0, count - 1);
+    position = static_cast<float>(selected);
+}
+
+int DiscreteSliderAccumulator::commit(
+    float continuousPosition, int count, SliderChangeSource source) {
+    if (count <= 0) {
+        synchronize(0, 0);
+        return selected;
+    }
+    const float maximum = static_cast<float>(count - 1);
+    position = std::isfinite(continuousPosition)
+        ? std::clamp(continuousPosition, 0.0f, maximum)
+        : std::clamp(position, 0.0f, maximum);
+    selected = std::clamp(
+        static_cast<int>(std::floor(position + 0.5f)), 0, count - 1);
+    if (source != SliderChangeSource::Keyboard) {
+        position = static_cast<float>(selected);
+    }
+    return selected;
+}
+
 }  // namespace ui_interaction
