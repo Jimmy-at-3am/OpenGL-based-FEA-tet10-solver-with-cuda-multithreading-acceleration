@@ -41,7 +41,7 @@ std::string describeTone(ReceiptTone tone, std::string_view detail) {
     if (detail.empty()) {
         return label;
     }
-    return label + " \u00b7 " + std::string(detail);
+    return label + " - " + std::string(detail);
 }
 
 }  // namespace
@@ -106,18 +106,54 @@ std::vector<ReceiptLine> makeMeshReceipt(
     int layersPerSlab) {
     std::vector<ReceiptLine> lines{
         {"Path", std::string(source)},
-        {"Elements", std::string(elementType) + " \u00b7 " +
+        {"Elements", std::string(elementType) + " / " +
                          groupDigits(elementCount) + " elements"},
     };
     if (printLayers > 0 || slabs > 0) {
         lines.push_back({
             "Layer mapping",
-            std::to_string(printLayers) + " print layers \u00b7 " +
-                std::to_string(slabs) + " FE slabs \u00b7 k=" +
+            std::to_string(printLayers) + " print layers / " +
+                std::to_string(slabs) + " FE slabs / k=" +
                 std::to_string(layersPerSlab),
         });
     }
     return lines;
+}
+
+std::string meshReceiptSource(
+    bool cubeMode, bool hasSelectedSource, bool hasToolpath,
+    bool brepRetained) {
+    if (cubeMode) {
+        return "Cube / TetGen";
+    }
+    if (!hasSelectedSource) {
+        return "No model selected";
+    }
+    if (hasToolpath) {
+        return "Toolpath / slab mesher";
+    }
+    if (brepRetained) {
+        return "STEP B-rep / TetGen";
+    }
+    return "Surface / TetGen";
+}
+
+SolvePresentationPolicy solvePresentationPolicy(
+    bool cubeMode, bool hasToolpath) {
+    const bool showToolpathWorkflow = !cubeMode && hasToolpath;
+    return {!showToolpathWorkflow, showToolpathWorkflow};
+}
+
+std::string makeSolveCapabilitySummary(
+    std::string_view linear, std::string_view nonlinear,
+    std::string_view fracture, std::string_view blockedReason) {
+    std::string summary =
+        "Linear " + std::string(linear) + " / Nonlinear " +
+        std::string(nonlinear) + " / Fracture " + std::string(fracture);
+    if (!blockedReason.empty()) {
+        summary += " / Reason: " + std::string(blockedReason);
+    }
+    return summary;
 }
 
 std::vector<ReceiptLine> makeSolveReceipt(

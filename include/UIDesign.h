@@ -149,6 +149,11 @@ struct ReceiptLine {
     ReceiptTone tone = ReceiptTone::Neutral;
 };
 
+struct SolvePresentationPolicy {
+    bool showGenericWorkflow;
+    bool showToolpathWorkflow;
+};
+
 WindowLayout computeWindowLayout(int widthPx, int heightPx);
 bool containsPoint(const Rect& rect, float x, float y);
 float extendContentBottom(float currentBottom, const Rect& drawnRect);
@@ -163,6 +168,14 @@ std::vector<ReceiptLine> makeMeshReceipt(
     std::string_view source, std::string_view elementType,
     std::uint64_t elementCount, int printLayers, int slabs,
     int layersPerSlab);
+std::string meshReceiptSource(
+    bool cubeMode, bool hasSelectedSource, bool hasToolpath,
+    bool brepRetained);
+SolvePresentationPolicy solvePresentationPolicy(
+    bool cubeMode, bool hasToolpath);
+std::string makeSolveCapabilitySummary(
+    std::string_view linear, std::string_view nonlinear,
+    std::string_view fracture, std::string_view blockedReason);
 std::vector<ReceiptLine> makeSolveReceipt(
     std::string_view load, std::string_view scope,
     std::string_view distribution, std::string_view support,

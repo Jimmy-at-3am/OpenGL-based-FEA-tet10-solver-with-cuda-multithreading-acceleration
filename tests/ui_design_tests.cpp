@@ -93,6 +93,19 @@ void expectReceiptContains(
     }
 }
 
+void expectReceiptIsAscii(const std::vector<ui_design::ReceiptLine>& lines) {
+    for (const auto& line : lines) {
+        for (const auto* text : {&line.label, &line.value}) {
+            const auto nonAscii = std::find_if(
+                text->begin(), text->end(),
+                [](unsigned char character) { return character > 0x7f; });
+            if (nonAscii != text->end()) {
+                throw std::runtime_error("receipt contains a non-ASCII separator");
+            }
+        }
+    }
+}
+
 template <typename Fn>
 void expectInvalidArgument(Fn&& fn) {
     try {
@@ -247,6 +260,7 @@ void testReceiptPresentation() {
     expectReceiptContains(blocked, "Linear facet tributary");
     expectReceiptContains(blocked, "NONLINEAR BLOCKED");
     expectEqual(blocked.back().tone, ui_design::ReceiptTone::Blocked);
+    expectReceiptIsAscii(blocked);
 
     const auto available = ui_design::makeSolveReceipt(
         "Tension X", "BBox face", "Nodal", "X-min fixed", "LINEAR EXACT",
@@ -259,15 +273,56 @@ void testReceiptPresentation() {
     expectReceiptContains(approximate, "Approximate");
 
     const auto mesh = ui_design::makeMeshReceipt(
-        "STEP · B-rep retained", "Tet10", 48216, 0, 0, 0);
+        "STEP / B-rep retained", "Tet10", 48216, 0, 0, 0);
     expectReceiptContains(mesh, "48,216");
     expectReceiptContains(mesh, "Tet10");
+    expectReceiptIsAscii(mesh);
 
     const auto model = ui_design::makeModelReceipt(
         "STEP", true, 3, "20.0 x 10.0 x 5.0 mm");
     expectReceiptContains(model, "STEP");
     expectReceiptContains(model, "Retained");
     expectReceiptContains(model, "3");
+}
+
+void testSolvePresentationRoutesCubeToGenericWorkflow() {
+    const auto cube = ui_design::solvePresentationPolicy(true, false);
+    expectTrue(cube.showGenericWorkflow,
+               "cube mode must expose the generic solve workflow");
+    expectFalse(cube.showToolpathWorkflow,
+                "cube mode must not expose the toolpath workflow");
+
+    const auto toolpath = ui_design::solvePresentationPolicy(false, true);
+    expectFalse(toolpath.showGenericWorkflow,
+                "toolpath imports must not expose generic solver controls");
+    expectTrue(toolpath.showToolpathWorkflow,
+               "toolpath imports must retain their showcase workflow");
+
+    const auto surface = ui_design::solvePresentationPolicy(false, false);
+    expectTrue(surface.showGenericWorkflow,
+               "non-toolpath imports must expose the generic solve workflow");
+}
+
+void testEmptyImportHasNoMeshSourceClaim() {
+    expectEqual(
+        ui_design::meshReceiptSource(false, false, false, false),
+        "No model selected");
+    expectEqual(
+        ui_design::meshReceiptSource(false, true, false, false),
+        "Surface / TetGen");
+}
+
+void testSolveCapabilitySummaryOmitsUnassessedAdaptiveMode() {
+    const auto summary = ui_design::makeSolveCapabilitySummary(
+        "Available (LINEAR EXACT)", "Blocked (NONLINEAR BLOCKED)",
+        "Approximate (MESH-DEP/LINEAR APPROX)", "NR -> Y COMPRESSION");
+    expectEqual(
+        summary,
+        "Linear Available (LINEAR EXACT) / Nonlinear Blocked "
+        "(NONLINEAR BLOCKED) / Fracture Approximate "
+        "(MESH-DEP/LINEAR APPROX) / Reason: NR -> Y COMPRESSION");
+    expectTrue(summary.find("Adaptive") == std::string::npos,
+               "receipt must not invent an Adaptive capability result");
 }
 
 void testStrokeFallbackPreservesRequestedOpacity() {
@@ -353,6 +408,9 @@ int main() {
         {"theme color conversion", testThemeColorConversion},
         {"formatted value separates number and unit", testFormattedValueLayoutSeparatesNumberAndUnit},
         {"receipt presentation", testReceiptPresentation},
+        {"cube routes to generic solve workflow", testSolvePresentationRoutesCubeToGenericWorkflow},
+        {"empty import has no mesh source claim", testEmptyImportHasNoMeshSourceClaim},
+        {"solve capability omits adaptive", testSolveCapabilitySummaryOmitsUnassessedAdaptiveMode},
         {"stroke fallback preserves requested opacity", testStrokeFallbackPreservesRequestedOpacity},
         {"inspector scroll ownership", testInspectorScrollOwnership},
         {"focus order skips hidden controls", testFocusOrderSkipsHiddenControls},

@@ -1165,11 +1165,9 @@ int runInteractive() {
                     ui_design::FontRole::Display);
         rY += 34.0f;
 
-        const std::string meshPath = currentMode == MODE_CUBE
-            ? "Cube \u00b7 TetGen"
-            : model.hasToolpath() ? "Toolpath \u00b7 slab mesher"
-                                  : model.hasBRep() ? "STEP B-rep \u00b7 TetGen"
-                                                    : "Surface \u00b7 TetGen";
+        const std::string meshPath = ui_design::meshReceiptSource(
+            currentMode == MODE_CUBE, !model.loadedFileName.empty(),
+            model.hasToolpath(), model.hasBRep());
         const std::string elementType = !model.hasVolumetricMesh
             ? "Not generated"
             : model.hasQuadraticMesh ? "Tet10" : "Tet4";
@@ -1543,12 +1541,13 @@ int runInteractive() {
                         ui.themeColor(ui_design::ColorToken::PrimaryInk),
                         ui_design::FontRole::Display);
             rY += 34.0f;
-            if (currentMode == MODE_IMPORT) {
+            const auto solvePresentation = ui_design::solvePresentationPolicy(
+                currentMode == MODE_CUBE, model.hasToolpath());
 
             // ===== GCODE SHOWCASE panel =====
             // Workflow: pick gcode model -> GENERATE 3D MESH -> type/accept the
             // magnitude -> RUN -> color-spectrum result + 3-D load arrows.
-            if (model.hasToolpath()) {
+            if (solvePresentation.showToolpathWorkflow) {
                 ui.drawRect(rX, rY, rW, 1.5f, glm::vec3(0.35f, 0.2f, 0.4f)); rY += 8.0f;
                 ui.drawText("GCODE SHOWCASE", rX, rY, 9.5f,
                             ui.themeColor(ui_design::ColorToken::PrimaryInk),
@@ -1732,7 +1731,7 @@ int runInteractive() {
                 // buttons are unused there, so they are hidden rather than
                 // shown dead. MULTITHREADING and GPU stay: the showcase run
                 // consumes both.
-                if (!model.hasToolpath()) {
+                if (solvePresentation.showGenericWorkflow) {
                 ui.drawText("BUILD AXIS", rX, rY + 12.0f, 12.0f,
                             ui.themeColor(ui_design::ColorToken::Graphite),
                             ui_design::FontRole::Interface);
@@ -1824,22 +1823,24 @@ int runInteractive() {
                     }
                     return "Blocked";
                 };
-                std::string capabilityReceipt =
-                    std::string("Linear ") + capabilityWord(linearCapability.status) +
-                    " (" + load_physics::capabilityName(linearCapability.status) + ") \u00b7 " +
-                    "Nonlinear " + capabilityWord(nonlinearCapability.status) +
-                    " (" + load_physics::capabilityName(nonlinearCapability.status) + ") \u00b7 " +
-                    "Adaptive " + capabilityWord(linearCapability.status) +
-                    " (" + load_physics::capabilityName(linearCapability.status) + ") \u00b7 " +
-                    "Fracture " + capabilityWord(fractureCapability.status) +
+                const std::string linearReceipt =
+                    std::string(capabilityWord(linearCapability.status)) +
+                    " (" + load_physics::capabilityName(linearCapability.status) + ")";
+                const std::string nonlinearReceipt =
+                    std::string(capabilityWord(nonlinearCapability.status)) +
+                    " (" + load_physics::capabilityName(nonlinearCapability.status) + ")";
+                const std::string fractureReceipt =
+                    std::string(capabilityWord(fractureCapability.status)) +
                     " (" + (fractureCapability.canRun()
                                 ? std::string("MESH-DEP/") +
                                       load_physics::capabilityName(fractureCapability.status)
                                 : load_physics::capabilityName(fractureCapability.status)) + ")";
-                if (blockedCapability != nullptr) {
-                    capabilityReceipt += std::string(" \u00b7 Reason: ") +
-                                         blockedCapability->reason;
-                }
+                const std::string capabilityReceipt =
+                    ui_design::makeSolveCapabilitySummary(
+                        linearReceipt, nonlinearReceipt, fractureReceipt,
+                        blockedCapability == nullptr
+                            ? std::string_view{}
+                            : std::string_view(blockedCapability->reason));
                 const ui_design::ReceiptTone capabilityTone = anyModeBlocked
                     ? ui_design::ReceiptTone::Blocked
                     : anyModeApproximate ? ui_design::ReceiptTone::Approximate
@@ -2035,7 +2036,8 @@ int runInteractive() {
                 } // end !hasToolpath (generic load/solver controls)
             }
 
-            if (!model.hasVolumetricMesh && !model.hasToolpath()) {
+            if (!model.hasVolumetricMesh &&
+                solvePresentation.showGenericWorkflow) {
                 rY = drawReceipt(
                     ui,
                     ui_design::makeSolveReceipt(
@@ -2299,13 +2301,6 @@ int runInteractive() {
                         rY += 16.0f;
                     }
                 }
-            }
-            } else {
-                ui.drawText("Import a model and generate a volume mesh to solve.",
-                            rX, rY + 14.0f, 12.0f,
-                            ui.themeColor(ui_design::ColorToken::Graphite),
-                            ui_design::FontRole::Interface);
-                rY += 28.0f;
             }
             inspectorContentHeights[static_cast<std::size_t>(ui_design::InspectorTab::Solve)] =
                 std::max(inspectorContentRect.h, rY - inspectorContentY + 16.0f);
