@@ -49,43 +49,18 @@ std::string_view hex(ColorToken token) {
 }
 
 const std::vector<ControlId>& requiredControls() {
-    static const std::vector<ControlId> controls = {
-        ControlId::CancelJob,
-        ControlId::SelectCubeMode,
-        ControlId::SelectImportMode,
-        ControlId::SelectModelFile,
-        ControlId::PreviousModelPage,
-        ControlId::NextModelPage,
-        ControlId::SelectMaterial,
-        ControlId::ToggleVertexSmoothing,
-        ControlId::SelectSurfaceView,
-        ControlId::SelectVolumeView,
-        ControlId::GenerateVolumeMesh,
-        ControlId::ToggleSlicing,
-        ControlId::SelectSliceAxisX,
-        ControlId::SelectSliceAxisY,
-        ControlId::SelectSliceAxisZ,
-        ControlId::PreviewSlice,
-        ControlId::EditShowcaseMagnitude,
-        ControlId::ResetShowcaseMagnitude,
-        ControlId::RunShowcaseFracture,
-        ControlId::ToggleMultithreading,
-        ControlId::ToggleGpuAcceleration,
-        ControlId::SelectBuildAxis,
-        ControlId::SelectLoadPreset,
-        ControlId::RunLinearAnalysis,
-        ControlId::RunNonlinearAnalysis,
-        ControlId::RunAdaptiveAnalysis,
-        ControlId::ToggleFdmAnisotropy,
-        ControlId::RunBrittleFracture,
-        ControlId::SelectOriginalResult,
-        ControlId::SelectDeformedResult,
-        ControlId::SelectFractureView,
-        ControlId::SelectDeadElementView,
-        ControlId::ToggleForceMap,
-        ControlId::OpenHelp,
-        ControlId::ResetView,
-    };
+    static const std::vector<ControlId> controls = [] {
+        std::vector<ControlId> result;
+        for (const auto id : requiredInspectorControls()) {
+            result.push_back(id);
+        }
+        for (const auto id : requiredOverlayControls()) {
+            if (std::find(result.begin(), result.end(), id) == result.end()) {
+                result.push_back(id);
+            }
+        }
+        return result;
+    }();
     return controls;
 }
 
@@ -101,11 +76,21 @@ const std::vector<ControlId>& requiredInspectorControls() {
         ControlId::SelectSurfaceView,
         ControlId::SelectVolumeView,
         ControlId::GenerateVolumeMesh,
+        ControlId::EditSizeX,
+        ControlId::EditSizeY,
+        ControlId::EditSizeZ,
+        ControlId::EditSubdivisions,
+        ControlId::EditMeshQuality,
+        ControlId::EditMaxVolumePercent,
         ControlId::ToggleSlicing,
+        ControlId::EditLayerThickness,
         ControlId::SelectSliceAxisX,
         ControlId::SelectSliceAxisY,
         ControlId::SelectSliceAxisZ,
+        ControlId::EditMaxSlabs,
+        ControlId::EditWallWidth,
         ControlId::PreviewSlice,
+        ControlId::SelectPreviewLayer,
         ControlId::EditShowcaseMagnitude,
         ControlId::ResetShowcaseMagnitude,
         ControlId::RunShowcaseFracture,
@@ -113,8 +98,11 @@ const std::vector<ControlId>& requiredInspectorControls() {
         ControlId::ToggleGpuAcceleration,
         ControlId::SelectBuildAxis,
         ControlId::SelectLoadPreset,
+        ControlId::EditLoadMagnitude,
         ControlId::RunLinearAnalysis,
         ControlId::RunNonlinearAnalysis,
+        ControlId::EditCurvatureAngle,
+        ControlId::EditCurvatureFraction,
         ControlId::RunAdaptiveAnalysis,
         ControlId::ToggleFdmAnisotropy,
         ControlId::RunBrittleFracture,
@@ -130,6 +118,7 @@ const std::vector<ControlId>& requiredInspectorControls() {
 const std::vector<ControlId>& requiredOverlayControls() {
     static const std::vector<ControlId> controls = {
         ControlId::CancelJob,
+        ControlId::EditSectionPosition,
         ControlId::OpenHelp,
         ControlId::ResetView,
     };
@@ -160,16 +149,36 @@ std::string_view controlToken(ControlId id) {
         return "select-volume-view";
     case ControlId::GenerateVolumeMesh:
         return "generate-volume-mesh";
+    case ControlId::EditSizeX:
+        return "edit-size-x";
+    case ControlId::EditSizeY:
+        return "edit-size-y";
+    case ControlId::EditSizeZ:
+        return "edit-size-z";
+    case ControlId::EditSubdivisions:
+        return "edit-subdivisions";
+    case ControlId::EditMeshQuality:
+        return "edit-mesh-quality";
+    case ControlId::EditMaxVolumePercent:
+        return "edit-max-volume-percent";
     case ControlId::ToggleSlicing:
         return "toggle-slicing";
+    case ControlId::EditLayerThickness:
+        return "edit-layer-thickness";
     case ControlId::SelectSliceAxisX:
         return "select-slice-axis-x";
     case ControlId::SelectSliceAxisY:
         return "select-slice-axis-y";
     case ControlId::SelectSliceAxisZ:
         return "select-slice-axis-z";
+    case ControlId::EditMaxSlabs:
+        return "edit-max-slabs";
+    case ControlId::EditWallWidth:
+        return "edit-wall-width";
     case ControlId::PreviewSlice:
         return "preview-slice";
+    case ControlId::SelectPreviewLayer:
+        return "select-preview-layer";
     case ControlId::EditShowcaseMagnitude:
         return "edit-showcase-magnitude";
     case ControlId::ResetShowcaseMagnitude:
@@ -184,10 +193,16 @@ std::string_view controlToken(ControlId id) {
         return "select-build-axis";
     case ControlId::SelectLoadPreset:
         return "select-load-preset";
+    case ControlId::EditLoadMagnitude:
+        return "edit-load-magnitude";
     case ControlId::RunLinearAnalysis:
         return "run-linear-analysis";
     case ControlId::RunNonlinearAnalysis:
         return "run-nonlinear-analysis";
+    case ControlId::EditCurvatureAngle:
+        return "edit-curvature-angle";
+    case ControlId::EditCurvatureFraction:
+        return "edit-curvature-fraction";
     case ControlId::RunAdaptiveAnalysis:
         return "run-adaptive-analysis";
     case ControlId::ToggleFdmAnisotropy:
@@ -204,6 +219,8 @@ std::string_view controlToken(ControlId id) {
         return "select-dead-element-view";
     case ControlId::ToggleForceMap:
         return "toggle-force-map";
+    case ControlId::EditSectionPosition:
+        return "edit-section-position";
     case ControlId::OpenHelp:
         return "open-help";
     case ControlId::ResetView:

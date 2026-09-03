@@ -114,6 +114,33 @@ void testControlManifestPartitionsAndWidgetIdentity() {
     const auto& inspector = ui_design::requiredInspectorControls();
     const auto& overlay = ui_design::requiredOverlayControls();
 
+    const std::vector<std::pair<ui_design::ControlId, std::string_view>> inspectorSliders = {
+        {ui_design::ControlId::EditSizeX, "edit-size-x"},
+        {ui_design::ControlId::EditSizeY, "edit-size-y"},
+        {ui_design::ControlId::EditSizeZ, "edit-size-z"},
+        {ui_design::ControlId::EditSubdivisions, "edit-subdivisions"},
+        {ui_design::ControlId::EditMeshQuality, "edit-mesh-quality"},
+        {ui_design::ControlId::EditMaxVolumePercent, "edit-max-volume-percent"},
+        {ui_design::ControlId::EditLayerThickness, "edit-layer-thickness"},
+        {ui_design::ControlId::EditMaxSlabs, "edit-max-slabs"},
+        {ui_design::ControlId::EditWallWidth, "edit-wall-width"},
+        {ui_design::ControlId::SelectPreviewLayer, "select-preview-layer"},
+        {ui_design::ControlId::EditLoadMagnitude, "edit-load-magnitude"},
+        {ui_design::ControlId::EditCurvatureAngle, "edit-curvature-angle"},
+        {ui_design::ControlId::EditCurvatureFraction, "edit-curvature-fraction"},
+    };
+    for (const auto& slider : inspectorSliders) {
+        expectContains(inspector, slider.first);
+        expectContains(all, slider.first);
+        expectEqual(ui_design::controlToken(slider.first), slider.second);
+    }
+
+    expectContains(overlay, ui_design::ControlId::EditSectionPosition);
+    expectContains(all, ui_design::ControlId::EditSectionPosition);
+    expectEqual(
+        ui_design::controlToken(ui_design::ControlId::EditSectionPosition),
+        "edit-section-position");
+
     std::vector<ui_design::ControlId> partitioned = inspector;
     partitioned.insert(partitioned.end(), overlay.begin(), overlay.end());
     expectAllUnique(partitioned);
