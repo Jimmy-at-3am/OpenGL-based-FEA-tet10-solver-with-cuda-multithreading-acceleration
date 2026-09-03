@@ -178,14 +178,19 @@ enum class ControlId {
     CancelJob, SelectCubeMode, SelectImportMode, SelectModelFile,
     PreviousModelPage, NextModelPage, SelectMaterial,
     ToggleVertexSmoothing, SelectSurfaceView, SelectVolumeView,
-    GenerateVolumeMesh, ToggleSlicing, SelectSliceAxisX,
-    SelectSliceAxisY, SelectSliceAxisZ, PreviewSlice,
+    GenerateVolumeMesh, EditSizeX, EditSizeY, EditSizeZ,
+    EditSubdivisions, EditMeshQuality, EditMaxVolumePercent,
+    ToggleSlicing, EditLayerThickness, SelectSliceAxisX,
+    SelectSliceAxisY, SelectSliceAxisZ, EditMaxSlabs,
+    EditWallWidth, PreviewSlice, SelectPreviewLayer,
     EditShowcaseMagnitude, ResetShowcaseMagnitude, RunShowcaseFracture,
     ToggleMultithreading, ToggleGpuAcceleration, SelectBuildAxis,
-    SelectLoadPreset, RunLinearAnalysis, RunNonlinearAnalysis,
+    SelectLoadPreset, EditLoadMagnitude, RunLinearAnalysis,
+    RunNonlinearAnalysis, EditCurvatureAngle, EditCurvatureFraction,
     RunAdaptiveAnalysis, ToggleFdmAnisotropy, RunBrittleFracture,
     SelectOriginalResult, SelectDeformedResult, SelectFractureView,
-    SelectDeadElementView, ToggleForceMap, OpenHelp, ResetView
+    SelectDeadElementView, ToggleForceMap, EditSectionPosition,
+    OpenHelp, ResetView
 };
 
 struct WidgetId {
@@ -207,6 +212,8 @@ std::string_view controlToken(ControlId id);
 
 }
 ```
+
+Every existing slider must use its dedicated stable identity above. Repeated renderings of the same physical parameter, such as mesh quality in Cube and Import modes, share the same `ControlId`; repeated list rows use `WidgetId::instance` to remain distinct.
 
 In `computeWindowLayout`, reject non-positive dimensions with `std::invalid_argument`, compute `panelW = std::clamp(widthPx * 0.28f, 320.0f, 380.0f)`, use a 44 px title bar, and make viewport plus inspector equal the full width without overlap.
 
