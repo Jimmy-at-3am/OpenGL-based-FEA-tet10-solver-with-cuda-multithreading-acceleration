@@ -25,6 +25,15 @@ WindowLayout computeWindowLayout(int widthPx, int heightPx) {
     };
 }
 
+bool containsPoint(const Rect& rect, float x, float y) {
+    return x >= rect.x && x < rect.x + rect.w &&
+           y >= rect.y && y < rect.y + rect.h;
+}
+
+float extendContentBottom(float currentBottom, const Rect& drawnRect) {
+    return std::max(currentBottom, drawnRect.y + drawnRect.h);
+}
+
 FormattedValue formatValue(double value, int decimals, bool scientific, std::string_view unit) {
     std::ostringstream number;
     number << (scientific ? std::scientific : std::fixed) << std::setprecision(decimals) << value;
@@ -240,6 +249,8 @@ const std::vector<ControlId>& requiredOverlayControls() {
 
 std::string_view controlToken(ControlId id) {
     switch (id) {
+    case ControlId::None:
+        return {};
     case ControlId::CancelJob:
         return "cancel-job";
     case ControlId::SelectCubeMode:

@@ -224,6 +224,7 @@ set(SOURCES
     src/SimpleUI.cpp
     src/UIFontRenderer.cpp
     src/UIDesign.cpp
+    src/UIInteraction.cpp
     src/GeometryUtils.cpp
     src/LoadPhysics.cpp
     src/FEAModel.cpp
@@ -535,3 +536,15 @@ else()
     target_compile_options(ui_design_tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
 endif()
 add_test(NAME ui_design_tests COMMAND ui_design_tests)
+
+# --- Behavioral inspector-action wiring contract (GL-free) ---
+add_executable(ui_action_wiring_tests
+    tests/ui_action_wiring_tests.cpp
+    src/UIDesign.cpp)
+target_include_directories(ui_action_wiring_tests PRIVATE ${CMAKE_SOURCE_DIR}/include)
+if(MSVC)
+    target_compile_options(ui_action_wiring_tests PRIVATE /W4 /WX)
+else()
+    target_compile_options(ui_action_wiring_tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
+endif()
+add_test(NAME ui_action_wiring_tests COMMAND ui_action_wiring_tests)

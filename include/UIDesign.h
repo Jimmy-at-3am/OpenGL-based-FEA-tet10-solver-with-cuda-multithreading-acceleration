@@ -59,6 +59,7 @@ struct TextDrawPolicy {
 };
 
 enum class ControlId {
+    None,
     CancelJob,
     SelectCubeMode,
     SelectImportMode,
@@ -137,6 +138,8 @@ struct FormattedValueTextLayout {
 };
 
 WindowLayout computeWindowLayout(int widthPx, int heightPx);
+bool containsPoint(const Rect& rect, float x, float y);
+float extendContentBottom(float currentBottom, const Rect& drawnRect);
 FormattedValue formatValue(double value, int decimals, bool scientific, std::string_view unit);
 FormattedValueTextLayout layoutFormattedValueText(
     const FormattedValue& display, float fieldRight, float numberWidth,

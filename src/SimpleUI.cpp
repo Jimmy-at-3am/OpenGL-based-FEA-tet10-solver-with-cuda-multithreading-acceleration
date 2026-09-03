@@ -227,16 +227,16 @@ bool SimpleUI::button(
     if (!mousePressed) {
         activeWidgetID.reset();
     }
-    const bool hovered = mouseX >= rect.x && mouseX <= rect.x + rect.w &&
-                         mouseY >= rect.y && mouseY <= rect.y + rect.h;
+    const bool hovered = ui_design::containsPoint(rect, mouseX, mouseY) &&
+                         pointerInsideActiveClip(mouseX, mouseY);
     bool clicked = false;
     if (!disabled && hovered && mousePressed && !prevMousePressed) {
         activeWidgetID = id;
         focusedWidgetID = id;
         clicked = true;
     } else if (!disabled && mouseClickLatch &&
-               mouseClickLatchX >= rect.x && mouseClickLatchX <= rect.x + rect.w &&
-               mouseClickLatchY >= rect.y && mouseClickLatchY <= rect.y + rect.h) {
+               ui_design::containsPoint(rect, mouseClickLatchX, mouseClickLatchY) &&
+               pointerInsideActiveClip(mouseClickLatchX, mouseClickLatchY)) {
         focusedWidgetID = id;
         clicked = true;
     }
@@ -303,8 +303,8 @@ bool SimpleUI::toggle(
     if (!mousePressed) {
         activeWidgetID.reset();
     }
-    const bool hovered = mouseX >= rect.x && mouseX <= rect.x + rect.w &&
-                         mouseY >= rect.y && mouseY <= rect.y + rect.h;
+    const bool hovered = ui_design::containsPoint(rect, mouseX, mouseY) &&
+                         pointerInsideActiveClip(mouseX, mouseY);
     bool changed = false;
     if (!disabled && hovered && mousePressed && !prevMousePressed) {
         activeWidgetID = id;
@@ -312,8 +312,8 @@ bool SimpleUI::toggle(
         value = !value;
         changed = true;
     } else if (!disabled && mouseClickLatch &&
-               mouseClickLatchX >= rect.x && mouseClickLatchX <= rect.x + rect.w &&
-               mouseClickLatchY >= rect.y && mouseClickLatchY <= rect.y + rect.h) {
+               ui_design::containsPoint(rect, mouseClickLatchX, mouseClickLatchY) &&
+               pointerInsideActiveClip(mouseClickLatchX, mouseClickLatchY)) {
         focusedWidgetID = id;
         mouseClickLatch = false;
         value = !value;
@@ -349,8 +349,8 @@ bool SimpleUI::sliderField(
 
     const float trackY = rect.y + rect.h - 9.0f;
     const ui_design::Rect track{rect.x, trackY, rect.w, 4.0f};
-    const bool hovered = mouseX >= rect.x && mouseX <= rect.x + rect.w &&
-                         mouseY >= rect.y && mouseY <= rect.y + rect.h;
+    const bool hovered = ui_design::containsPoint(rect, mouseX, mouseY) &&
+                         pointerInsideActiveClip(mouseX, mouseY);
     if (!disabled && hovered && mousePressed && !prevMousePressed) {
         activeWidgetID = id;
         focusedWidgetID = id;
@@ -540,6 +540,10 @@ void SimpleUI::applyClip() {
     const int height = static_cast<int>(std::lround(rect.h * contentScale));
     glEnable(GL_SCISSOR_TEST);
     glScissor(x, y, std::max(0, width), std::max(0, height));
+}
+
+bool SimpleUI::pointerInsideActiveClip(float x, float y) const {
+    return clipStack.empty() || ui_design::containsPoint(clipStack.back(), x, y);
 }
 
 glm::vec4 SimpleUI::themeColor(ui_design::ColorToken token, float opacity) const {

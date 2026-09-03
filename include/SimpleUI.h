@@ -30,6 +30,7 @@ private:
     void drawStrokeText(std::string_view text, float x, float y, float size,
                         const glm::vec4& color);
     void applyClip();
+    bool pointerInsideActiveClip(float x, float y) const;
 public:
     unsigned int programID = 0;
 
