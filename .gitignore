@@ -102,6 +102,7 @@ MinSizeRel/
 # =============================================================
 .claude/
 .superpowers/
+.worktrees/
 CLAUDE.md
 AGENTS.md
 session*.md

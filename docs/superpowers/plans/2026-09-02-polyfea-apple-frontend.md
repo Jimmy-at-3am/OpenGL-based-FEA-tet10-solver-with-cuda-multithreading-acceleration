@@ -42,7 +42,7 @@
 | `include/ShaderSources.h` | Rounded-surface and font-text shader sources |
 | `src/main.cpp` | A1 title bar, persistent inspector, three tabs, existing callbacks, receipts, overlays, and input routing |
 | `tests/ui_design_tests.cpp` | GL-free tests for layout, tokens, formatting, manifests, receipts, scrolling, and focus |
-| `tests/ui_source_contract_tests.cpp` | Source contract proving every required control ID is wired and the legacy two-column panel is removed |
+| `tests/ui_action_wiring_tests.cpp` | Behavioral contract that activates production control bindings and verifies the intended existing actions are reached |
 | `CMakeLists.txt` | New sources, optional FreeType linkage, and two focused CTest targets |
 
 ---
@@ -542,7 +542,7 @@ git commit -m "Add testable inspector interaction state"
 ### Task 4: Replace the Legacy Panel with the A1 Inspector and Preserve Every Action
 
 **Files:**
-- Create: `tests/ui_source_contract_tests.cpp`
+- Create: `tests/ui_action_wiring_tests.cpp`
 - Modify: `src/main.cpp:538-558`
 - Modify: `src/main.cpp:664-1719`
 - Modify: `src/main.cpp:1771-1820`
@@ -557,24 +557,22 @@ git commit -m "Add testable inspector interaction state"
   - `void drawInspectorTabs(SimpleUI&, ui_interaction::InspectorState&, const ui_design::Rect&)`.
   - `std::optional<AppMode> drawModeSegment(SimpleUI&, AppMode, const ui_design::Rect&)`.
   - `std::optional<int> drawSelectableRows(SimpleUI&, ui_design::ControlId family, const std::vector<std::string>& labels, int firstIndex, int activeIndex, const ui_design::Rect&)`.
-  - A source-level control-wiring contract.
+  - A GL-free behavioral control-wiring contract that exercises production bindings rather than searching source text.
 
-- [ ] **Step 1: Write a failing source contract before moving controls**
+- [ ] **Step 1: Write a failing behavioral wiring contract before moving controls**
 
-Create `tests/ui_source_contract_tests.cpp`. Pass the absolute source path with a compile definition and test for all stable control tokens:
+Create `tests/ui_action_wiring_tests.cpp`. Introduce the smallest GL-free production binding seam needed for the test: controls emit stable `WidgetId`/value events and production handlers receive them. Drive those production bindings with a recording handler and verify that activating every entry in `requiredInspectorControls()` reaches exactly its intended action, including the instance index for repeated model and material rows. Also verify that an unknown binding is rejected rather than silently succeeding. Do not read or search `src/main.cpp` as text.
 
 ```cpp
 int main() {
-    const std::string source = readWholeFile(UI_MAIN_SOURCE);
+    RecordingActionHandler actions;
+    const auto bindings = makeInspectorBindings(actions);
     for (const auto id : ui_design::requiredInspectorControls()) {
-        const std::string token = "ControlId::" + std::string(ui_design::controlToken(id));
-        expectTrue(source.find(token) != std::string::npos,
-                   ("missing frontend wiring: " + token).c_str());
+        expectTrue(bindings.activate({id, 0}), "required control must activate");
+        expectTrue(actions.lastControl == id, "activation must reach intended action");
     }
-    expectTrue(source.find("float halfW  = panelW * 0.5f") == std::string::npos,
-               "legacy two-column layout must be removed");
-    expectTrue(source.find("ui.drawRect(divX") == std::string::npos,
-               "legacy center divider must be removed");
+    expectTrue(!bindings.activate({ui_design::ControlId::None, 0}),
+               "unknown control must be rejected");
     return 0;
 }
 ```
@@ -582,18 +580,16 @@ int main() {
 Register it as:
 
 ```cmake
-add_executable(ui_source_contract_tests
-    tests/ui_source_contract_tests.cpp
+add_executable(ui_action_wiring_tests
+    tests/ui_action_wiring_tests.cpp
     src/UIDesign.cpp)
-target_include_directories(ui_source_contract_tests PRIVATE ${CMAKE_SOURCE_DIR}/include)
-target_compile_definitions(ui_source_contract_tests PRIVATE
-    UI_MAIN_SOURCE="${CMAKE_SOURCE_DIR}/src/main.cpp")
-add_test(NAME ui_source_contract_tests COMMAND ui_source_contract_tests)
+target_include_directories(ui_action_wiring_tests PRIVATE ${CMAKE_SOURCE_DIR}/include)
+add_test(NAME ui_action_wiring_tests COMMAND ui_action_wiring_tests)
 ```
 
 Apply the same `/W4 /WX` or `-Wall -Wextra -Wpedantic -Werror` policy as `ui_design_tests`.
 
-Run `ctest --test-dir build -R ui_source_contract_tests --output-on-failure` and expect failure on missing `ControlId` wiring and the legacy divider.
+Run `ctest --test-dir build -R ui_action_wiring_tests --output-on-failure` and expect failure because the production bindings do not yet exist.
 
 - [ ] **Step 2: Introduce the title bar, inspector geometry, tabs, and clipping**
 
@@ -739,11 +735,11 @@ camera.ProcessMouseScroll(static_cast<float>(yoffset));
 
 Consume and clear `pendingInspectorWheel` once per UI frame. Do not alter right-button orbit or middle-button pan outside the inspector.
 
-- [ ] **Step 8: Run source contract, build, CTest, and a startup smoke test**
+- [ ] **Step 8: Run behavioral wiring contract, build, CTest, and a startup smoke test**
 
 ```powershell
 & .\build.bat build
-ctest --test-dir build -R "ui_design_tests|ui_source_contract_tests" --output-on-failure
+ctest --test-dir build -R "ui_design_tests|ui_action_wiring_tests" --output-on-failure
 ctest --test-dir build --output-on-failure
 Push-Location build
 & .\FEAPreProcessor.exe --regress all
@@ -757,7 +753,7 @@ Expected: all commands exit `0`, and the regression count matches Task 1 exactly
 - [ ] **Step 9: Commit the active inspector**
 
 ```powershell
-git add CMakeLists.txt src/main.cpp include/SimpleUI.h src/SimpleUI.cpp tests/ui_source_contract_tests.cpp
+git add CMakeLists.txt src/main.cpp include/SimpleUI.h src/SimpleUI.cpp tests/ui_action_wiring_tests.cpp
 git commit -m "Replace legacy panel with tabbed inspector"
 ```
 
@@ -866,30 +862,17 @@ git commit -m "Add contextual analysis receipts"
 - Modify: `src/main.cpp:1583-1719`
 - Modify: `include/SimpleUI.h`
 - Modify: `src/SimpleUI.cpp`
-- Modify: `tests/ui_source_contract_tests.cpp`
+- Modify: `tests/ui_action_wiring_tests.cpp`
 
 **Interfaces:**
 - Consumes: approved SimpleUI primitives, `ControlId::OpenHelp`, `ControlId::ResetView`, `ControlId::CancelJob`, current `SolverStatus` snapshots, current section state, and current `ComputeJob` fields.
 - Produces: matching title-bar Help/Reset view actions, section control, solver status, and progress surface.
 
-- [ ] **Step 1: Extend the source contract for overlay actions**
+- [ ] **Step 1: Extend the behavioral wiring contract for overlay actions**
 
-Extend the source contract to iterate `requiredOverlayControls()` in addition to the inspector controls, then reject the legacy README label:
+Extend the production bindings and recording-handler test to activate every `requiredOverlayControls()` entry in addition to the inspector controls. Verify that Open Help, Reset View, and Cancel Job each reach their intended handler exactly once. Do not search source text or assert on labels.
 
-```cpp
-for (const auto id : ui_design::requiredOverlayControls()) {
-    const std::string token = "ControlId::" + std::string(ui_design::controlToken(id));
-    expectTrue(source.find(token) != std::string::npos,
-               ("missing overlay wiring: " + token).c_str());
-}
-expectContainsSource(source, "ControlId::OpenHelp");
-expectContainsSource(source, "ControlId::ResetView");
-expectContainsSource(source, "ControlId::CancelJob");
-expectTrue(source.find("ui.button(\"README\"") == std::string::npos,
-           "README button must be replaced by Help");
-```
-
-Run the source contract and expect the README assertion to fail.
+Run the behavioral contract and expect failure until those production bindings exist.
 
 - [ ] **Step 2: Move README content to Help without deleting content**
 
@@ -919,11 +902,11 @@ camera.UpdatePosition();
 
 This is a frontend convenience calling existing camera behavior, not a new geometry operation.
 
-- [ ] **Step 7: Run build and source contract**
+- [ ] **Step 7: Run build and behavioral wiring contract**
 
 ```powershell
 & .\build.bat build
-ctest --test-dir build -R "ui_design_tests|ui_source_contract_tests" --output-on-failure
+ctest --test-dir build -R "ui_design_tests|ui_action_wiring_tests" --output-on-failure
 ```
 
 Expected: both tests pass.
@@ -931,7 +914,7 @@ Expected: both tests pass.
 - [ ] **Step 8: Commit the viewport surfaces**
 
 ```powershell
-git add src/main.cpp include/SimpleUI.h src/SimpleUI.cpp tests/ui_source_contract_tests.cpp
+git add src/main.cpp include/SimpleUI.h src/SimpleUI.cpp tests/ui_action_wiring_tests.cpp
 git commit -m "Restyle viewport controls and progress"
 ```
 
@@ -1081,7 +1064,7 @@ Expected: every command exits `0`, with the same regression count as Task 1.
 
 ```powershell
 cmake --build build --target ui_font_fallback_compile
-ctest --test-dir build -R "ui_design_tests|ui_source_contract_tests" --output-on-failure
+ctest --test-dir build -R "ui_design_tests|ui_action_wiring_tests" --output-on-failure
 ```
 
 Expected: the no-FreeType source branch compiles and both GL-free tests pass.
@@ -1129,7 +1112,7 @@ Focus ring is visible on every control type
 
 - [ ] **Step 5: Fix only observed frontend defects and rerun the smallest relevant gate**
 
-For a layout or state defect, add or tighten a focused assertion in `ui_design_tests` or `ui_source_contract_tests`, run it to observe failure, make the smallest frontend correction, then rerun that test and the full Task 8 Step 1 gate. Do not update solver/regression baselines.
+For a layout or state defect, add or tighten a focused behavioral assertion in `ui_design_tests` or `ui_action_wiring_tests`, run it to observe failure, make the smallest frontend correction, then rerun that test and the full Task 8 Step 1 gate. Do not update solver/regression baselines.
 
 - [ ] **Step 6: Review the final diff for computation isolation**
 
@@ -1146,7 +1129,7 @@ Expected: the second command is empty.
 If Step 5 changed files:
 
 ```powershell
-git add CMakeLists.txt include/UIDesign.h include/UIInteraction.h include/UIFontRenderer.h include/SimpleUI.h src/UIDesign.cpp src/UIInteraction.cpp src/UIFontRenderer.cpp src/SimpleUI.cpp src/main.cpp tests/ui_design_tests.cpp tests/ui_source_contract_tests.cpp
+git add CMakeLists.txt include/UIDesign.h include/UIInteraction.h include/UIFontRenderer.h include/SimpleUI.h src/UIDesign.cpp src/UIInteraction.cpp src/UIFontRenderer.cpp src/SimpleUI.cpp src/main.cpp tests/ui_design_tests.cpp tests/ui_action_wiring_tests.cpp
 git commit -m "Polish and verify PolyFEA inspector"
 ```
 
