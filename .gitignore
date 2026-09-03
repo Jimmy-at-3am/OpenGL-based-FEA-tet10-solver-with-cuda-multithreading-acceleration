@@ -101,6 +101,7 @@ MinSizeRel/
 # AI assistant and local tooling files
 # =============================================================
 .claude/
+.superpowers/
 CLAUDE.md
 AGENTS.md
 session*.md
