@@ -94,6 +94,8 @@ void testNumericFormatting() {
 }
 
 void testPaletteAndControlManifest() {
+    expectEqual(ui_design::hex(ui_design::ColorToken::FrostCanvas), "#E9EEF5");
+    expectEqual(ui_design::hex(ui_design::ColorToken::SnowSurface), "#F7F7FA");
     expectEqual(ui_design::hex(ui_design::ColorToken::SystemBlue), "#007AFF");
     expectEqual(ui_design::hex(ui_design::ColorToken::BlockedRed), "#C9342E");
     const auto& ids = ui_design::requiredControls();

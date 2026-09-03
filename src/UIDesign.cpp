@@ -33,9 +33,9 @@ FormattedValue formatValue(double value, int decimals, bool scientific, std::str
 std::string_view hex(ColorToken token) {
     switch (token) {
     case ColorToken::FrostCanvas:
-        return "#F5F5F7";
+        return "#E9EEF5";
     case ColorToken::SnowSurface:
-        return "#FFFFFF";
+        return "#F7F7FA";
     case ColorToken::PrimaryInk:
         return "#1D1D1F";
     case ColorToken::Graphite:

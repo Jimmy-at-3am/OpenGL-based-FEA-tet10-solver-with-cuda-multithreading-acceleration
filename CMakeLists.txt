@@ -222,6 +222,7 @@ set(SOURCES
     src/main.cpp
     src/BuiltInShader.cpp
     src/SimpleUI.cpp
+    src/UIDesign.cpp
     src/GeometryUtils.cpp
     src/LoadPhysics.cpp
     src/FEAModel.cpp
