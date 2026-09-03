@@ -32,6 +32,7 @@
 #include <cstdlib>
 #include <functional>
 #include <memory>
+#include <sstream>
 #include <thread>
 
 #include <omp.h>
@@ -598,6 +599,79 @@ std::optional<int> drawSelectableRows(
     return std::nullopt;
 }
 
+std::vector<std::string> wrapReceiptValue(
+    std::string_view value, std::size_t maxCharacters) {
+    std::vector<std::string> lines;
+    std::string current;
+    std::istringstream words{std::string(value)};
+    std::string word;
+    while (words >> word) {
+        if (!current.empty() && current.size() + 1 + word.size() > maxCharacters) {
+            lines.push_back(current);
+            current.clear();
+        }
+        if (!current.empty()) current += ' ';
+        current += word;
+    }
+    if (!current.empty()) lines.push_back(current);
+    if (lines.empty()) lines.emplace_back();
+    return lines;
+}
+
+float drawReceipt(
+    SimpleUI& ui, const std::vector<ui_design::ReceiptLine>& lines,
+    float x, float y, float width) {
+    constexpr float horizontalInset = 14.0f;
+    constexpr float topInset = 10.0f;
+    constexpr float labelHeight = 14.0f;
+    constexpr float valueHeight = 15.0f;
+    constexpr float rowGap = 8.0f;
+    const std::size_t maxCharacters = static_cast<std::size_t>(
+        std::max(20.0f, (width - 2.0f * horizontalInset) / 5.8f));
+
+    std::vector<std::vector<std::string>> wrappedValues;
+    wrappedValues.reserve(lines.size());
+    float height = topInset * 2.0f;
+    for (const auto& line : lines) {
+        wrappedValues.push_back(wrapReceiptValue(line.value, maxCharacters));
+        height += labelHeight +
+                  valueHeight * static_cast<float>(wrappedValues.back().size()) +
+                  rowGap;
+    }
+    if (!lines.empty()) height -= rowGap;
+
+    const ui_design::Rect receiptRect{x, y, width, height};
+    ui.drawRoundedRect(receiptRect, 10.0f,
+                       ui.themeColor(ui_design::ColorToken::PrimaryInk, 0.08f));
+    ui.drawRoundedRect({x, y, 3.0f, height}, 1.5f,
+                       ui.themeColor(ui_design::ColorToken::SystemBlue));
+
+    float cursorY = y + topInset;
+    for (std::size_t index = 0; index < lines.size(); ++index) {
+        const auto& line = lines[index];
+        ui.drawText(line.label, x + horizontalInset, cursorY + 10.0f, 11.0f,
+                    ui.themeColor(ui_design::ColorToken::Graphite),
+                    ui_design::FontRole::Interface);
+        cursorY += labelHeight;
+
+        ui_design::ColorToken valueToken = ui_design::ColorToken::PrimaryInk;
+        if (line.tone == ui_design::ReceiptTone::Available) {
+            valueToken = ui_design::ColorToken::SystemBlue;
+        } else if (line.tone == ui_design::ReceiptTone::Approximate) {
+            valueToken = ui_design::ColorToken::Graphite;
+        } else if (line.tone == ui_design::ReceiptTone::Blocked) {
+            valueToken = ui_design::ColorToken::BlockedRed;
+        }
+        for (const auto& valueLine : wrappedValues[index]) {
+            ui.drawText(valueLine, x + horizontalInset, cursorY + 11.0f, 11.0f,
+                        ui.themeColor(valueToken), ui_design::FontRole::Data);
+            cursorY += valueHeight;
+        }
+        cursorY += rowGap;
+    }
+    return y + height + 12.0f;
+}
+
 template <ui_action_wiring::InspectorAction Action, typename Callback>
 bool dispatchInspectorAction(ui_design::WidgetId widget, Callback callback) {
     return ui_action_wiring::invokeInspectorAction<Action>(widget, callback);
@@ -977,34 +1051,29 @@ int runInteractive() {
                     }
                 }
 
-                if (!model.loadedFileName.empty()) {
-                    char metaBuf[128];
-                    if (!model.lastLoadedFormat.empty()) {
-                        if (model.lastLoadedFormat == "STEP" && model.hasBRep()) {
-                            snprintf(metaBuf, sizeof(metaBuf), "Source: STEP (B-rep retained)");
-                            ui.drawText(metaBuf, lX, lY + 13.0f, 12.0f,
-                                        ui.themeColor(ui_design::ColorToken::PrimaryInk),
-                                        ui_design::FontRole::Interface);
-                            lY += 20.0f;
-                        } else {
-                            snprintf(metaBuf, sizeof(metaBuf),
-                                     "FORMAT: %s", model.lastLoadedFormat.c_str());
-                            ui.drawText(metaBuf, lX, lY + 13.0f, 12.0f,
-                                        ui.themeColor(ui_design::ColorToken::PrimaryInk),
-                                        ui_design::FontRole::Interface);
-                            lY += 20.0f;
-                        }
-                        if (model.lastLoadedObjectCount > 1) {
-                            snprintf(metaBuf, sizeof(metaBuf),
-                                     "OBJECTS: %d", model.lastLoadedObjectCount);
-                            ui.drawText(metaBuf, lX, lY + 13.0f, 12.0f,
-                                        ui.themeColor(ui_design::ColorToken::PrimaryInk),
-                                        ui_design::FontRole::Interface);
-                            lY += 20.0f;
-                        }
-                    }
-                }
             }
+
+            const bool hasModelReceiptSource =
+                currentMode == MODE_CUBE || !model.loadedFileName.empty();
+            const std::string modelFormat = currentMode == MODE_CUBE
+                ? "Procedural cube"
+                : model.lastLoadedFormat.empty() ? "No model selected"
+                                                 : model.lastLoadedFormat;
+            char physicalSize[96];
+            if (hasModelReceiptSource) {
+                const glm::vec3 sizeMM = model.physicalSizeMM();
+                snprintf(physicalSize, sizeof(physicalSize),
+                         "%.1f x %.1f x %.1f mm", sizeMM.x, sizeMM.y, sizeMM.z);
+            } else {
+                snprintf(physicalSize, sizeof(physicalSize), "Not available");
+            }
+            lY = drawReceipt(
+                ui,
+                ui_design::makeModelReceipt(
+                    modelFormat, model.hasBRep(),
+                    currentMode == MODE_CUBE ? 1 : model.lastLoadedObjectCount,
+                    physicalSize),
+                lX, lY, lW);
 
             lY += 18.0f;
             ui.drawText("MATERIAL", lX, lY + 12.0f, 12.0f,
@@ -1095,6 +1164,31 @@ int runInteractive() {
                     ui.themeColor(ui_design::ColorToken::PrimaryInk),
                     ui_design::FontRole::Display);
         rY += 34.0f;
+
+        const std::string meshPath = currentMode == MODE_CUBE
+            ? "Cube \u00b7 TetGen"
+            : model.hasToolpath() ? "Toolpath \u00b7 slab mesher"
+                                  : model.hasBRep() ? "STEP B-rep \u00b7 TetGen"
+                                                    : "Surface \u00b7 TetGen";
+        const std::string elementType = !model.hasVolumetricMesh
+            ? "Not generated"
+            : model.hasQuadraticMesh ? "Tet10" : "Tet4";
+        const std::uint64_t elementCount = !model.hasVolumetricMesh
+            ? 0
+            : model.hasQuadraticMesh
+                ? static_cast<std::uint64_t>(model.tetrahedraQuadratic.size() / 10)
+                : static_cast<std::uint64_t>(model.tetrahedra.size() / 4);
+        const bool hasLayerMapping =
+            model.hasToolpath() && hasTpStats && model.hasVolumetricMesh;
+        rY = drawReceipt(
+            ui,
+            ui_design::makeMeshReceipt(
+                meshPath, elementType, elementCount,
+                hasLayerMapping ? model.toolpath->layerCount : 0,
+                hasLayerMapping ? lastTpStats.nSlabs : 0,
+                hasLayerMapping ? lastTpStats.layersPerSlab : 0),
+            rX, rY, rW);
+
         char axisBuffer[64];
         snprintf(axisBuffer, sizeof(axisBuffer), "X %.3f m", axisLengths.x);
         ui.drawText(axisBuffer, rX, rY + 13.0f, 12.0f,
@@ -1694,11 +1788,6 @@ int runInteractive() {
                 const auto fractureCapability = load_physics::assessPreset(
                     selectedPreset.physics,
                     load_physics::AnalysisMode::BrittleFracture);
-                const char* fractureReceipt =
-                    fractureCapability.status == load_physics::Capability::Unsupported
-                        ? load_physics::capabilityName(fractureCapability.status)
-                        : "MESH-DEP";
-
                 if (ui.sliderField(ui_design::ControlId::EditLoadMagnitude,
                                    presetPhysics.magnitudeLabel,
                                    forceMagnitudeMN, 1.0f, 1000.0f,
@@ -1711,25 +1800,6 @@ int runInteractive() {
                 }
                 rY += 60.0f;
 
-                ui.drawText(std::string("LOAD: ") + presetPhysics.scopeSummary,
-                            rX, rY, 6.1f,
-                            ui.themeColor(ui_design::ColorToken::Graphite),
-                            ui_design::FontRole::Interface);
-                rY += 10.0f;
-                ui.drawText(std::string("DIST: ") + presetPhysics.distributionSummary,
-                            rX, rY, 5.9f,
-                            ui.themeColor(ui_design::ColorToken::Graphite),
-                            ui_design::FontRole::Interface);
-                rY += 10.0f;
-                ui.drawText(std::string("SUPPORT: ") + presetPhysics.supportSummary,
-                            rX, rY, 5.9f,
-                            ui.themeColor(ui_design::ColorToken::Graphite),
-                            ui_design::FontRole::Interface);
-                rY += 10.0f;
-                const std::string capabilityReceipt =
-                    std::string("L ") + load_physics::capabilityName(linearCapability.status) +
-                    " | NL " + load_physics::capabilityName(nonlinearCapability.status) +
-                    " | FR " + fractureReceipt;
                 const bool anyModeBlocked = !linearCapability.canRun() ||
                                             !nonlinearCapability.canRun() ||
                                             !fractureCapability.canRun();
@@ -1737,27 +1807,51 @@ int runInteractive() {
                     linearCapability.status == load_physics::Capability::Approximate ||
                     nonlinearCapability.status == load_physics::Capability::Approximate ||
                     fractureCapability.status == load_physics::Capability::Approximate;
-                ui.drawText(capabilityReceipt, rX, rY, 5.9f,
-                            anyModeBlocked
-                                ? ui.themeColor(ui_design::ColorToken::BlockedRed)
-                                : anyModeApproximate
-                                    ? glm::vec4(0.55f, 0.32f, 0.05f, 1.0f)
-                                    : ui.themeColor(ui_design::ColorToken::Graphite),
-                            ui_design::FontRole::Data);
-                rY += 10.0f;
                 const load_physics::CapabilityResult* blockedCapability =
                     !linearCapability.canRun() ? &linearCapability
                     : !nonlinearCapability.canRun() ? &nonlinearCapability
                     : !fractureCapability.canRun() ? &fractureCapability
                     : nullptr;
+
+                const auto capabilityWord = [](load_physics::Capability status) {
+                    switch (status) {
+                    case load_physics::Capability::Exact:
+                        return "Available";
+                    case load_physics::Capability::Approximate:
+                        return "Approximate";
+                    case load_physics::Capability::Unsupported:
+                        return "Blocked";
+                    }
+                    return "Blocked";
+                };
+                std::string capabilityReceipt =
+                    std::string("Linear ") + capabilityWord(linearCapability.status) +
+                    " (" + load_physics::capabilityName(linearCapability.status) + ") \u00b7 " +
+                    "Nonlinear " + capabilityWord(nonlinearCapability.status) +
+                    " (" + load_physics::capabilityName(nonlinearCapability.status) + ") \u00b7 " +
+                    "Adaptive " + capabilityWord(linearCapability.status) +
+                    " (" + load_physics::capabilityName(linearCapability.status) + ") \u00b7 " +
+                    "Fracture " + capabilityWord(fractureCapability.status) +
+                    " (" + (fractureCapability.canRun()
+                                ? std::string("MESH-DEP/") +
+                                      load_physics::capabilityName(fractureCapability.status)
+                                : load_physics::capabilityName(fractureCapability.status)) + ")";
                 if (blockedCapability != nullptr) {
-                    ui.drawText(std::string("BLOCK: ") + blockedCapability->reason,
-                                rX, rY, 5.9f,
-                                ui.themeColor(ui_design::ColorToken::BlockedRed),
-                                ui_design::FontRole::Interface);
-                    rY += 10.0f;
+                    capabilityReceipt += std::string(" \u00b7 Reason: ") +
+                                         blockedCapability->reason;
                 }
-                rY += 4.0f;
+                const ui_design::ReceiptTone capabilityTone = anyModeBlocked
+                    ? ui_design::ReceiptTone::Blocked
+                    : anyModeApproximate ? ui_design::ReceiptTone::Approximate
+                                         : ui_design::ReceiptTone::Available;
+                rY = drawReceipt(
+                    ui,
+                    ui_design::makeSolveReceipt(
+                        selectedPreset.label, presetPhysics.scopeSummary,
+                        presetPhysics.distributionSummary,
+                        presetPhysics.supportSummary, capabilityReceipt,
+                        capabilityTone),
+                    rX, rY, rW);
 
                 if (ui.button(ui_design::ControlId::RunLinearAnalysis,
                               "Run linear analysis", {rX, rY, rW, 40.0f},
@@ -1939,6 +2033,37 @@ int runInteractive() {
                 }
                 rY += 48.0f;
                 } // end !hasToolpath (generic load/solver controls)
+            }
+
+            if (!model.hasVolumetricMesh && !model.hasToolpath()) {
+                rY = drawReceipt(
+                    ui,
+                    ui_design::makeSolveReceipt(
+                        "Not selected", "Not available", "Not available",
+                        "Not available", "Generate a volume mesh first.",
+                        ui_design::ReceiptTone::Blocked),
+                    rX, rY, rW);
+                ui.drawText("Generate a volume mesh first.", rX, rY + 11.0f,
+                            11.0f,
+                            ui.themeColor(ui_design::ColorToken::BlockedRed),
+                            ui_design::FontRole::Interface);
+                rY += 22.0f;
+                ui.button(ui_design::ControlId::RunLinearAnalysis,
+                          "Run linear analysis", {rX, rY, rW, 40.0f},
+                          ui_design::ControlRole::Primary, false, true);
+                rY += 48.0f;
+                ui.button(ui_design::ControlId::RunNonlinearAnalysis,
+                          "NONLINEAR FEA: BLOCKED", {rX, rY, rW, 40.0f},
+                          ui_design::ControlRole::Secondary, false, true);
+                rY += 48.0f;
+                ui.button(ui_design::ControlId::RunAdaptiveAnalysis,
+                          "Run adaptive analysis", {rX, rY, rW, 40.0f},
+                          ui_design::ControlRole::Secondary, false, true);
+                rY += 48.0f;
+                ui.button(ui_design::ControlId::RunBrittleFracture,
+                          "Run brittle fracture", {rX, rY, rW, 40.0f},
+                          ui_design::ControlRole::Secondary, false, true);
+                rY += 48.0f;
             }
 
             if (model.hasDeformation) {

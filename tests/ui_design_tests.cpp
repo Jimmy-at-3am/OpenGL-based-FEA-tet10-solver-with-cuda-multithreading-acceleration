@@ -81,6 +81,18 @@ void expectContains(
     }
 }
 
+void expectReceiptContains(
+    const std::vector<ui_design::ReceiptLine>& lines,
+    std::string_view expected) {
+    const auto found = std::find_if(lines.begin(), lines.end(), [&](const auto& line) {
+        return line.label.find(expected) != std::string::npos ||
+               line.value.find(expected) != std::string::npos;
+    });
+    if (found == lines.end()) {
+        throw std::runtime_error("receipt omits " + std::string(expected));
+    }
+}
+
 template <typename Fn>
 void expectInvalidArgument(Fn&& fn) {
     try {
@@ -226,6 +238,38 @@ void testFormattedValueLayoutSeparatesNumberAndUnit() {
     expectNear(longUnit.numberRight, shortUnit.numberRight);
 }
 
+void testReceiptPresentation() {
+    const auto blocked = ui_design::makeSolveReceipt(
+        "Surface compression Y", "BBox face", "Linear facet tributary",
+        "Y-min fixed", "NONLINEAR BLOCKED: NR -> Y COMPRESSION",
+        ui_design::ReceiptTone::Blocked);
+    expectReceiptContains(blocked, "Surface compression Y");
+    expectReceiptContains(blocked, "Linear facet tributary");
+    expectReceiptContains(blocked, "NONLINEAR BLOCKED");
+    expectEqual(blocked.back().tone, ui_design::ReceiptTone::Blocked);
+
+    const auto available = ui_design::makeSolveReceipt(
+        "Tension X", "BBox face", "Nodal", "X-min fixed", "LINEAR EXACT",
+        ui_design::ReceiptTone::Available);
+    expectReceiptContains(available, "Available");
+
+    const auto approximate = ui_design::makeSolveReceipt(
+        "Point force Z", "Single node", "Nearest node", "Z-min fixed",
+        "LINEAR APPROX", ui_design::ReceiptTone::Approximate);
+    expectReceiptContains(approximate, "Approximate");
+
+    const auto mesh = ui_design::makeMeshReceipt(
+        "STEP · B-rep retained", "Tet10", 48216, 0, 0, 0);
+    expectReceiptContains(mesh, "48,216");
+    expectReceiptContains(mesh, "Tet10");
+
+    const auto model = ui_design::makeModelReceipt(
+        "STEP", true, 3, "20.0 x 10.0 x 5.0 mm");
+    expectReceiptContains(model, "STEP");
+    expectReceiptContains(model, "Retained");
+    expectReceiptContains(model, "3");
+}
+
 void testStrokeFallbackPreservesRequestedOpacity() {
     const auto fallback = ui_design::resolveTextDrawPolicy(
         false, ui_design::FontRole::Interface, {0.2f, 0.3f, 0.4f, 0.38f});
@@ -308,6 +352,7 @@ int main() {
         {"font candidate order", testFontCandidateOrder},
         {"theme color conversion", testThemeColorConversion},
         {"formatted value separates number and unit", testFormattedValueLayoutSeparatesNumberAndUnit},
+        {"receipt presentation", testReceiptPresentation},
         {"stroke fallback preserves requested opacity", testStrokeFallbackPreservesRequestedOpacity},
         {"inspector scroll ownership", testInspectorScrollOwnership},
         {"focus order skips hidden controls", testFocusOrderSkipsHiddenControls},

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <filesystem>
 #include <string>
 #include <string_view>
@@ -140,6 +141,14 @@ struct FormattedValueTextLayout {
     float numberRight;
 };
 
+enum class ReceiptTone { Neutral, Available, Approximate, Blocked };
+
+struct ReceiptLine {
+    std::string label;
+    std::string value;
+    ReceiptTone tone = ReceiptTone::Neutral;
+};
+
 WindowLayout computeWindowLayout(int widthPx, int heightPx);
 bool containsPoint(const Rect& rect, float x, float y);
 float extendContentBottom(float currentBottom, const Rect& drawnRect);
@@ -147,6 +156,17 @@ FormattedValue formatValue(double value, int decimals, bool scientific, std::str
 FormattedValueTextLayout layoutFormattedValueText(
     const FormattedValue& display, float fieldRight, float numberWidth,
     float unitColumnWidth, float gap);
+std::vector<ReceiptLine> makeModelReceipt(
+    std::string_view format, bool brepRetained, int objectCount,
+    std::string_view physicalSize);
+std::vector<ReceiptLine> makeMeshReceipt(
+    std::string_view source, std::string_view elementType,
+    std::uint64_t elementCount, int printLayers, int slabs,
+    int layersPerSlab);
+std::vector<ReceiptLine> makeSolveReceipt(
+    std::string_view load, std::string_view scope,
+    std::string_view distribution, std::string_view support,
+    std::string_view capability, ReceiptTone capabilityTone);
 std::string_view hex(ColorToken token);
 ControlVisual resolveControlVisual(ControlRole role, ControlState state);
 Rgba rgba(ColorToken token, float opacity = 1.0f);

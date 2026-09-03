@@ -8,6 +8,44 @@
 
 namespace ui_design {
 
+namespace {
+
+std::string groupDigits(std::uint64_t value) {
+    std::string grouped = std::to_string(value);
+    for (std::ptrdiff_t offset = static_cast<std::ptrdiff_t>(grouped.size()) - 3;
+         offset > 0; offset -= 3) {
+        grouped.insert(static_cast<std::size_t>(offset), 1, ',');
+    }
+    return grouped;
+}
+
+std::string toneLabel(ReceiptTone tone) {
+    switch (tone) {
+    case ReceiptTone::Neutral:
+        return {};
+    case ReceiptTone::Available:
+        return "Available";
+    case ReceiptTone::Approximate:
+        return "Approximate";
+    case ReceiptTone::Blocked:
+        return "Blocked";
+    }
+    return {};
+}
+
+std::string describeTone(ReceiptTone tone, std::string_view detail) {
+    const std::string label = toneLabel(tone);
+    if (label.empty()) {
+        return std::string(detail);
+    }
+    if (detail.empty()) {
+        return label;
+    }
+    return label + " \u00b7 " + std::string(detail);
+}
+
+}  // namespace
+
 WindowLayout computeWindowLayout(int widthPx, int heightPx) {
     if (widthPx <= 0 || heightPx <= 0) {
         throw std::invalid_argument("window dimensions must be positive");
@@ -48,6 +86,50 @@ FormattedValueTextLayout layoutFormattedValueText(
         {display.number, numberRight - numberWidth, FontRole::Data},
         {display.unit, numberRight + gap, FontRole::Interface},
         numberRight,
+    };
+}
+
+std::vector<ReceiptLine> makeModelReceipt(
+    std::string_view format, bool brepRetained, int objectCount,
+    std::string_view physicalSize) {
+    return {
+        {"Source", std::string(format)},
+        {"B-rep", brepRetained ? "Retained" : "Not retained"},
+        {"Objects", std::to_string(objectCount)},
+        {"Physical size", std::string(physicalSize)},
+    };
+}
+
+std::vector<ReceiptLine> makeMeshReceipt(
+    std::string_view source, std::string_view elementType,
+    std::uint64_t elementCount, int printLayers, int slabs,
+    int layersPerSlab) {
+    std::vector<ReceiptLine> lines{
+        {"Path", std::string(source)},
+        {"Elements", std::string(elementType) + " \u00b7 " +
+                         groupDigits(elementCount) + " elements"},
+    };
+    if (printLayers > 0 || slabs > 0) {
+        lines.push_back({
+            "Layer mapping",
+            std::to_string(printLayers) + " print layers \u00b7 " +
+                std::to_string(slabs) + " FE slabs \u00b7 k=" +
+                std::to_string(layersPerSlab),
+        });
+    }
+    return lines;
+}
+
+std::vector<ReceiptLine> makeSolveReceipt(
+    std::string_view load, std::string_view scope,
+    std::string_view distribution, std::string_view support,
+    std::string_view capability, ReceiptTone capabilityTone) {
+    return {
+        {"Load", std::string(load)},
+        {"Scope", std::string(scope)},
+        {"Distribution", std::string(distribution)},
+        {"Support", std::string(support)},
+        {"Capability", describeTone(capabilityTone, capability), capabilityTone},
     };
 }
 
