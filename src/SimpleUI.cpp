@@ -84,15 +84,15 @@ void SimpleUI::drawText(std::string text, float x, float y, float size, glm::vec
                           ui_design::FontRole::Interface);
         return;
     }
-    drawStrokeText(text, x, y, size, color);
+    drawStrokeText(text, x, y, size, glm::vec4(color, 1.0f));
 }
 
 void SimpleUI::drawStrokeText(
-    std::string_view text, float x, float y, float size, glm::vec3 color) {
+    std::string_view text, float x, float y, float size, const glm::vec4& color) {
     glUseProgram(programID);
     glUniformMatrix4fv(glGetUniformLocation(programID, "projection"), 1, GL_FALSE, glm::value_ptr(projection));
     glUniform3fv(glGetUniformLocation(programID, "color"), 1, &color[0]);
-    glUniform1f(glGetUniformLocation(programID, "uiAlpha"), 1.0f);
+    glUniform1f(glGetUniformLocation(programID, "uiAlpha"), color.a);
 
     std::vector<float> lines; float cursorX = x;
 
@@ -203,11 +203,15 @@ void SimpleUI::drawShadow(const ui_design::Rect& rect, float radius, float opaci
 void SimpleUI::drawText(
     std::string_view text, float x, float baselineY, float pixelSize,
     const glm::vec4& color, ui_design::FontRole role) {
-    if (fontRenderer.ready(role)) {
-        fontRenderer.draw(text, x, baselineY, pixelSize, color, role);
+    const auto policy = ui_design::resolveTextDrawPolicy(
+        fontRenderer.ready(role), role, {color.r, color.g, color.b, color.a});
+    const glm::vec4 resolvedColor{
+        policy.color.r, policy.color.g, policy.color.b, policy.color.a};
+    if (policy.backend == ui_design::TextBackend::FontAtlas) {
+        fontRenderer.draw(text, x, baselineY, pixelSize, resolvedColor, policy.role);
         return;
     }
-    drawStrokeText(text, x, baselineY - pixelSize, pixelSize, glm::vec3(color));
+    drawStrokeText(text, x, baselineY - pixelSize, pixelSize, resolvedColor);
 }
 
 bool SimpleUI::button(
@@ -377,16 +381,23 @@ bool SimpleUI::sliderField(
     drawText(label, rect.x, rect.y + 14.0f, 13.0f,
              themeColor(ui_design::ColorToken::Graphite, opacity),
              ui_design::FontRole::Interface);
-    const std::string valueText = display.unit.empty()
-        ? display.number
-        : display.number + " " + display.unit;
-    float valueWidth = fontRenderer.measure(valueText, 13.0f, ui_design::FontRole::Data);
-    if (valueWidth <= 0.0f) {
-        valueWidth = static_cast<float>(valueText.size()) * 13.0f * 1.2f;
+    float numberWidth = fontRenderer.measure(
+        display.number, 13.0f, ui_design::FontRole::Data);
+    if (numberWidth <= 0.0f) {
+        numberWidth = static_cast<float>(display.number.size()) * 13.0f * 1.2f;
     }
-    drawText(valueText, rect.x + rect.w - valueWidth, rect.y + 14.0f, 13.0f,
+    constexpr float unitColumnWidth = 32.0f;
+    constexpr float valueUnitGap = 6.0f;
+    const auto valueLayout = ui_design::layoutFormattedValueText(
+        display, rect.x + rect.w, numberWidth, unitColumnWidth, valueUnitGap);
+    drawText(valueLayout.number.text, valueLayout.number.x, rect.y + 14.0f, 13.0f,
              themeColor(ui_design::ColorToken::PrimaryInk, opacity),
-             ui_design::FontRole::Data);
+             valueLayout.number.role);
+    if (!valueLayout.unit.text.empty()) {
+        drawText(valueLayout.unit.text, valueLayout.unit.x, rect.y + 14.0f, 13.0f,
+                 themeColor(ui_design::ColorToken::Graphite, opacity),
+                 valueLayout.unit.role);
+    }
     drawRoundedRect(track, 2.0f,
                     themeColor(ui_design::ColorToken::PrimaryInk, 0.12f * opacity));
     drawRoundedRect({track.x, track.y, track.w * position, track.h}, 2.0f,

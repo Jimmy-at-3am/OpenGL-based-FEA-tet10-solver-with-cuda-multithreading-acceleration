@@ -31,6 +31,17 @@ FormattedValue formatValue(double value, int decimals, bool scientific, std::str
     return {number.str(), std::string(unit)};
 }
 
+FormattedValueTextLayout layoutFormattedValueText(
+    const FormattedValue& display, float fieldRight, float numberWidth,
+    float unitColumnWidth, float gap) {
+    const float numberRight = fieldRight - unitColumnWidth - gap;
+    return {
+        {display.number, numberRight - numberWidth, FontRole::Data},
+        {display.unit, numberRight + gap, FontRole::Interface},
+        numberRight,
+    };
+}
+
 std::string_view hex(ColorToken token) {
     switch (token) {
     case ColorToken::FrostCanvas:
@@ -107,6 +118,10 @@ Rgba rgba(ColorToken token, float opacity) {
         return static_cast<float>(nibble(value[offset]) * 16 + nibble(value[offset + 1])) / 255.0f;
     };
     return {channel(1), channel(3), channel(5), opacity};
+}
+
+TextDrawPolicy resolveTextDrawPolicy(bool fontReady, FontRole role, Rgba color) {
+    return {fontReady ? TextBackend::FontAtlas : TextBackend::Stroke, role, color};
 }
 
 std::vector<std::filesystem::path> fontCandidates(FontRole role) {

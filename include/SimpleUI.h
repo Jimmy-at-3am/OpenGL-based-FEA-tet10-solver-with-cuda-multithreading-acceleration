@@ -27,7 +27,8 @@ private:
     float contentScale = 1.0f;
     bool inputLocked = false;   // true while a compute job runs: widgets render but ignore input
 
-    void drawStrokeText(std::string_view text, float x, float y, float size, glm::vec3 color);
+    void drawStrokeText(std::string_view text, float x, float y, float size,
+                        const glm::vec4& color);
     void applyClip();
 public:
     unsigned int programID = 0;

@@ -204,6 +204,35 @@ void testThemeColorConversion() {
     expectNear(blue.a, 0.5f);
 }
 
+void testFormattedValueLayoutSeparatesNumberAndUnit() {
+    const auto shortUnit = ui_design::layoutFormattedValueText(
+        {"12.50", "mm"}, 300.0f, 50.0f, 32.0f, 6.0f);
+    const auto longUnit = ui_design::layoutFormattedValueText(
+        {"12.50", "kilopascals"}, 300.0f, 50.0f, 32.0f, 6.0f);
+
+    expectEqual(shortUnit.number.text, "12.50");
+    expectEqual(shortUnit.number.role, ui_design::FontRole::Data);
+    expectNear(shortUnit.number.x, 212.0f);
+    expectNear(shortUnit.numberRight, 262.0f);
+    expectEqual(shortUnit.unit.text, "mm");
+    expectEqual(shortUnit.unit.role, ui_design::FontRole::Interface);
+    expectNear(shortUnit.unit.x, 268.0f);
+    expectNear(longUnit.number.x, shortUnit.number.x);
+    expectNear(longUnit.numberRight, shortUnit.numberRight);
+}
+
+void testStrokeFallbackPreservesRequestedOpacity() {
+    const auto fallback = ui_design::resolveTextDrawPolicy(
+        false, ui_design::FontRole::Interface, {0.2f, 0.3f, 0.4f, 0.38f});
+
+    expectEqual(fallback.backend, ui_design::TextBackend::Stroke);
+    expectEqual(fallback.role, ui_design::FontRole::Interface);
+    expectNear(fallback.color.r, 0.2f);
+    expectNear(fallback.color.g, 0.3f);
+    expectNear(fallback.color.b, 0.4f);
+    expectNear(fallback.color.a, 0.38f);
+}
+
 }  // namespace
 
 int main() {
@@ -216,6 +245,8 @@ int main() {
         {"control visual states", testControlVisualStates},
         {"font candidate order", testFontCandidateOrder},
         {"theme color conversion", testThemeColorConversion},
+        {"formatted value separates number and unit", testFormattedValueLayoutSeparatesNumberAndUnit},
+        {"stroke fallback preserves requested opacity", testStrokeFallbackPreservesRequestedOpacity},
     };
 
     int failures = 0;

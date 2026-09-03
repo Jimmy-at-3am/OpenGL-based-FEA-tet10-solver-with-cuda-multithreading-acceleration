@@ -50,6 +50,14 @@ struct Rgba {
     float a;
 };
 
+enum class TextBackend { FontAtlas, Stroke };
+
+struct TextDrawPolicy {
+    TextBackend backend;
+    FontRole role;
+    Rgba color;
+};
+
 enum class ControlId {
     CancelJob,
     SelectCubeMode,
@@ -116,11 +124,27 @@ struct FormattedValue {
     std::string unit;
 };
 
+struct TextRun {
+    std::string text;
+    float x;
+    FontRole role;
+};
+
+struct FormattedValueTextLayout {
+    TextRun number;
+    TextRun unit;
+    float numberRight;
+};
+
 WindowLayout computeWindowLayout(int widthPx, int heightPx);
 FormattedValue formatValue(double value, int decimals, bool scientific, std::string_view unit);
+FormattedValueTextLayout layoutFormattedValueText(
+    const FormattedValue& display, float fieldRight, float numberWidth,
+    float unitColumnWidth, float gap);
 std::string_view hex(ColorToken token);
 ControlVisual resolveControlVisual(ControlRole role, ControlState state);
 Rgba rgba(ColorToken token, float opacity = 1.0f);
+TextDrawPolicy resolveTextDrawPolicy(bool fontReady, FontRole role, Rgba color);
 std::vector<std::filesystem::path> fontCandidates(FontRole role);
 const std::vector<ControlId>& requiredControls();
 const std::vector<ControlId>& requiredInspectorControls();
