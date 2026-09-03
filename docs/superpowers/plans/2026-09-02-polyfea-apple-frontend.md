@@ -24,6 +24,7 @@
 - Keep numeric values right-aligned, use tabular figures, and display units separately from numbers.
 - Preserve the progress panel's reliable cancel path and the inspector's compute-time input lock.
 - Treat any numerical regression as a failure; frontend work does not authorize baseline updates.
+- Run project-owned CTest targets with `-R "^(load_physics_tests|ui_design_tests|ui_action_wiring_tests)$"`; the fetched Eigen project registers 915 unbuilt vendor tests in this configuration, so an unfiltered CTest run is not a valid project gate.
 
 ---
 
@@ -81,7 +82,7 @@ Run from the repository root. Persist the exact pre-implementation commit in the
 New-Item -ItemType Directory -Force build | Out-Null
 git rev-parse HEAD | Set-Content build/ui-baseline-commit.txt
 & .\build.bat build
-ctest --test-dir build --output-on-failure
+ctest --test-dir build -R "^load_physics_tests$" --output-on-failure
 Push-Location build
 & .\FEAPreProcessor.exe --regress all
 $regressionExit = $LASTEXITCODE
@@ -214,7 +215,7 @@ In `computeWindowLayout`, reject non-positive dimensions with `std::invalid_argu
 ```powershell
 & .\build.bat build
 ctest --test-dir build -R ui_design_tests --output-on-failure
-ctest --test-dir build --output-on-failure
+ctest --test-dir build -R "^(load_physics_tests|ui_design_tests)$" --output-on-failure
 ```
 
 Expected: all tests pass.
@@ -740,7 +741,7 @@ Consume and clear `pendingInspectorWheel` once per UI frame. Do not alter right-
 ```powershell
 & .\build.bat build
 ctest --test-dir build -R "ui_design_tests|ui_action_wiring_tests" --output-on-failure
-ctest --test-dir build --output-on-failure
+ctest --test-dir build -R "^(load_physics_tests|ui_design_tests|ui_action_wiring_tests)$" --output-on-failure
 Push-Location build
 & .\FEAPreProcessor.exe --regress all
 $regressionExit = $LASTEXITCODE
@@ -835,7 +836,7 @@ Render Linear, Nonlinear, Adaptive, and Brittle fracture actions even when disab
 ```powershell
 & .\build.bat build
 ctest --test-dir build -R ui_design_tests --output-on-failure
-ctest --test-dir build --output-on-failure
+ctest --test-dir build -R "^(load_physics_tests|ui_design_tests|ui_action_wiring_tests)$" --output-on-failure
 Push-Location build
 & .\FEAPreProcessor.exe --regress all
 $regressionExit = $LASTEXITCODE
@@ -1016,7 +1017,7 @@ Rebuild font atlases only when the effective content scale changes, so high-DPI 
 
 ```powershell
 & .\build.bat build
-ctest --test-dir build --output-on-failure
+ctest --test-dir build -R "^(load_physics_tests|ui_design_tests|ui_action_wiring_tests)$" --output-on-failure
 Push-Location build
 & .\FEAPreProcessor.exe --regress all
 $regressionExit = $LASTEXITCODE
@@ -1050,7 +1051,7 @@ git commit -m "Add accessible inspector interaction"
 ```powershell
 git diff --check
 & .\build.bat build
-ctest --test-dir build --output-on-failure
+ctest --test-dir build -R "^(load_physics_tests|ui_design_tests|ui_action_wiring_tests)$" --output-on-failure
 Push-Location build
 & .\FEAPreProcessor.exe --regress all
 $regressionExit = $LASTEXITCODE
