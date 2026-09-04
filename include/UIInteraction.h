@@ -10,7 +10,7 @@ namespace ui_interaction {
 
 enum class Key { Tab, Enter, Space, Left, Right, Up, Down, Escape, Other };
 enum class KeyIntent { None, FocusNext, FocusPrevious, Activate, Decrease, Increase, Cancel };
-enum class EscapeAction { None, CancelJob, CloseHelp };
+enum class EscapeAction { None, CancelJob, CloseHelp, CloseWindow };
 enum class SliderChangeSource { None, Pointer, Keyboard };
 
 struct MotionDurations {
@@ -56,11 +56,13 @@ std::optional<ui_design::WidgetId> nextWidgetFocus(
     int direction);
 KeyIntent translateKey(Key key, bool pressed, bool shift);
 bool queueKeyIntent(std::optional<KeyIntent>& pending, KeyIntent candidate);
-void appendVisibleFocus(
+void appendContextualFocus(
     std::vector<ui_design::WidgetId>& visible,
-    ui_design::WidgetId widget,
-    const ui_design::Rect& bounds,
-    const ui_design::Rect& visibleBounds);
+    ui_design::WidgetId widget);
+float revealFocusedScroll(
+    float current, const ui_design::Rect& focusedBounds,
+    const ui_design::Rect& visibleBounds, float contentHeight);
+bool allowsViewportNavigation(bool helpOpen, bool inspectorOwnsPointer);
 bool allowsKeyboardMutation(KeyIntent intent, bool disabled, bool inputLocked);
 float adjustSlider(float value, float min, float max,
                    bool exponential, int direction);

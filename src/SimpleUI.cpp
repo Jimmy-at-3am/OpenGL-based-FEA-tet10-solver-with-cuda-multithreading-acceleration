@@ -77,6 +77,8 @@ void SimpleUI::resize(int width, int height, float scale) {
 void SimpleUI::beginInteractionFrame(
     std::optional<ui_interaction::KeyIntent> intent) {
     visibleFocusOrder.clear();
+    focusableBounds.clear();
+    pendingTooltip.reset();
     pendingKeyIntent = intent;
     keyboardTargetWidgetID = focusedWidgetID;
     keyIntentConsumed = false;
@@ -103,11 +105,27 @@ void SimpleUI::endInteractionFrame() {
 
 void SimpleUI::registerFocusable(
     ui_design::WidgetId id, const ui_design::Rect& rect) {
-    const ui_design::Rect visibleBounds = clipStack.empty()
-        ? ui_design::Rect{0.0f, 0.0f, static_cast<float>(viewportWidth),
-                          static_cast<float>(viewportHeight)}
-        : clipStack.back();
-    ui_interaction::appendVisibleFocus(visibleFocusOrder, id, rect, visibleBounds);
+    ui_interaction::appendContextualFocus(visibleFocusOrder, id);
+    const auto found = std::find_if(
+        focusableBounds.begin(), focusableBounds.end(), [&](const auto& entry) {
+            return entry.first == id;
+        });
+    if (found == focusableBounds.end()) {
+        focusableBounds.push_back({id, rect});
+    }
+}
+
+std::optional<ui_design::Rect> SimpleUI::focusedWidgetBounds() const {
+    if (!focusedWidgetID) {
+        return std::nullopt;
+    }
+    const auto found = std::find_if(
+        focusableBounds.begin(), focusableBounds.end(), [&](const auto& entry) {
+            return entry.first == *focusedWidgetID;
+        });
+    return found == focusableBounds.end()
+        ? std::nullopt
+        : std::optional<ui_design::Rect>(found->second);
 }
 
 bool SimpleUI::keyboardTriggers(
@@ -159,6 +177,7 @@ void SimpleUI::drawLine(float x1, float y1, float x2, float y2, glm::vec3 color,
 }
 
 void SimpleUI::drawText(std::string text, float x, float y, float size, glm::vec3 color) {
+    size = ui_design::essentialTextPixelSize(size);
     if (fontRenderer.ready(ui_design::FontRole::Interface)) {
         fontRenderer.draw(text, x, y + size, size, glm::vec4(color, 1.0f),
                           ui_design::FontRole::Interface);
@@ -330,6 +349,7 @@ void SimpleUI::drawShadow(const ui_design::Rect& rect, float radius, float opaci
 void SimpleUI::drawText(
     std::string_view text, float x, float baselineY, float pixelSize,
     const glm::vec4& color, ui_design::FontRole role) {
+    pixelSize = ui_design::essentialTextPixelSize(pixelSize);
     const auto policy = ui_design::resolveTextDrawPolicy(
         fontRenderer.ready(role), role, {color.r, color.g, color.b, color.a});
     const glm::vec4 resolvedColor{
@@ -343,13 +363,16 @@ void SimpleUI::drawText(
 
 bool SimpleUI::button(
     ui_design::ControlId id, std::string_view label, const ui_design::Rect& rect,
-    ui_design::ControlRole role, bool selected, bool disabled) {
-    return button(ui_design::WidgetId{id, 0}, label, rect, role, selected, disabled);
+    ui_design::ControlRole role, bool selected, bool disabled,
+    float rightAccessoryWidth) {
+    return button(ui_design::WidgetId{id, 0}, label, rect, role, selected, disabled,
+                  rightAccessoryWidth);
 }
 
 bool SimpleUI::button(
     ui_design::WidgetId id, std::string_view label, const ui_design::Rect& rect,
-    ui_design::ControlRole role, bool selected, bool disabled) {
+    ui_design::ControlRole role, bool selected, bool disabled,
+    float rightAccessoryWidth) {
     registerFocusable(id, rect);
     disabled = disabled || inputLocked;
     if (!mousePressed) {
@@ -391,7 +414,8 @@ bool SimpleUI::button(
     if (textWidth <= 0.0f) {
         textWidth = static_cast<float>(label.size()) * pixelSize * 1.2f;
     }
-    drawText(label, rect.x + std::max(8.0f, (rect.w - textWidth) * 0.5f),
+    const float labelAreaWidth = std::max(0.0f, rect.w - rightAccessoryWidth);
+    drawText(label, rect.x + std::max(8.0f, (labelAreaWidth - textWidth) * 0.5f),
              rect.y + (rect.h + pixelSize * 0.7f) * 0.5f, pixelSize,
              themeColor(visual.text, visual.contentOpacity), ui_design::FontRole::Interface);
     return clicked;
@@ -399,7 +423,8 @@ bool SimpleUI::button(
 
 bool SimpleUI::segmentedControl(
     const std::vector<ui_design::WidgetId>& ids, const ui_design::Rect& rect,
-    const std::vector<std::string>& labels, int& selectedIndex, bool disabled) {
+    const std::vector<std::string>& labels, int& selectedIndex, bool disabled,
+    const std::vector<bool>& disabledSegments) {
     const std::size_t count = std::min(ids.size(), labels.size());
     if (count == 0) {
         return false;
@@ -408,6 +433,10 @@ bool SimpleUI::segmentedControl(
     selectedIndex = std::clamp(selectedIndex, 0, static_cast<int>(count) - 1);
     bool changed = false;
     const bool effectiveDisabled = disabled || inputLocked;
+    const auto segmentDisabled = [&](std::size_t index) {
+        return effectiveDisabled ||
+               (index < disabledSegments.size() && disabledSegments[index]);
+    };
     const float segmentWidth = rect.w / static_cast<float>(count);
     if (!mousePressed) {
         activeWidgetID.reset();
@@ -420,11 +449,11 @@ bool SimpleUI::segmentedControl(
         const bool hovered = ui_design::containsPoint(segment, mouseX, mouseY) &&
                              pointerInsideActiveClip(mouseX, mouseY);
         bool activated = false;
-        if (!effectiveDisabled && hovered && mousePressed && !prevMousePressed) {
+        if (!segmentDisabled(index) && hovered && mousePressed && !prevMousePressed) {
             activeWidgetID = ids[index];
             focusedWidgetID = ids[index];
             activated = true;
-        } else if (!effectiveDisabled && mouseClickLatch &&
+        } else if (!segmentDisabled(index) && mouseClickLatch &&
                    ui_design::containsPoint(
                        segment, mouseClickLatchX, mouseClickLatchY) &&
                    pointerInsideActiveClip(mouseClickLatchX, mouseClickLatchY)) {
@@ -433,7 +462,7 @@ bool SimpleUI::segmentedControl(
         }
         if (keyboardTriggers(
                 ids[index], ui_interaction::KeyIntent::Activate,
-                effectiveDisabled)) {
+                segmentDisabled(index))) {
             activated = true;
         }
         if (activated) {
@@ -447,7 +476,7 @@ bool SimpleUI::segmentedControl(
         (*pendingKeyIntent == ui_interaction::KeyIntent::Decrease ||
          *pendingKeyIntent == ui_interaction::KeyIntent::Increase) &&
         ui_interaction::allowsKeyboardMutation(
-            *pendingKeyIntent, effectiveDisabled, inputLocked)) {
+            *pendingKeyIntent, false, inputLocked)) {
         const auto focused = std::find(ids.begin(), ids.begin() + count,
                                        *keyboardTargetWidgetID);
         if (focused != ids.begin() + count) {
@@ -458,7 +487,8 @@ bool SimpleUI::segmentedControl(
                 focusedIndex, static_cast<int>(count), direction);
             focusedWidgetID = ids[static_cast<std::size_t>(next)];
             keyIntentConsumed = true;
-            if (next != selectedIndex) {
+            if (next != selectedIndex &&
+                !segmentDisabled(static_cast<std::size_t>(next))) {
                 selectedIndex = next;
                 changed = true;
             }
@@ -516,7 +546,7 @@ bool SimpleUI::segmentedControl(
         const bool pressed = activeWidgetID && *activeWidgetID == ids[index] &&
                              mousePressed;
         drawFocusRing(ids[index], segment, 10.0f);
-        if (!effectiveDisabled && (hovered || pressed)) {
+        if (!segmentDisabled(index) && (hovered || pressed)) {
             drawRoundedRect(
                 {segment.x + 2.0f, segment.y + 2.0f,
                  segment.w - 4.0f, segment.h - 4.0f},
@@ -534,10 +564,11 @@ bool SimpleUI::segmentedControl(
         const auto token = selectedIndex == static_cast<int>(index)
             ? ui_design::ColorToken::PrimaryInk
             : ui_design::ColorToken::Graphite;
+        const float segmentOpacity = segmentDisabled(index) ? 0.38f : opacity;
         drawText(labels[index],
                  segment.x + std::max(6.0f, (segment.w - textWidth) * 0.5f),
                  segment.y + (segment.h + pixelSize * 0.7f) * 0.5f,
-                 pixelSize, themeColor(token, opacity),
+                 pixelSize, themeColor(token, segmentOpacity),
                  ui_design::FontRole::Interface);
     }
     return changed;
@@ -607,8 +638,8 @@ bool SimpleUI::sliderField(
         activeWidgetID.reset();
     }
 
-    const float trackY = rect.y + rect.h - 9.0f;
-    const ui_design::Rect track{rect.x, trackY, rect.w, 4.0f};
+    const auto initialGeometry = ui_design::horizontalSliderGeometry(rect, 0.0f);
+    const ui_design::Rect track = initialGeometry.track;
     const bool hovered = ui_design::containsPoint(rect, mouseX, mouseY) &&
                          pointerInsideActiveClip(mouseX, mouseY);
     if (!disabled && hovered && mousePressed && !prevMousePressed) {
@@ -682,10 +713,10 @@ bool SimpleUI::sliderField(
                     themeColor(ui_design::ColorToken::PrimaryInk, 0.12f * opacity));
     drawRoundedRect({track.x, track.y, track.w * position, track.h}, 2.0f,
                     themeColor(ui_design::ColorToken::SystemBlue, opacity));
-    const ui_design::Rect thumb{track.x + track.w * position - 7.0f, track.y - 5.0f,
-                                14.0f, 14.0f};
-    drawShadow(thumb, 7.0f, opacity);
-    drawRoundedRect(thumb, 7.0f,
+    const ui_design::Rect thumb =
+        ui_design::horizontalSliderGeometry(rect, position).thumb;
+    drawShadow(thumb, 8.0f, opacity);
+    drawRoundedRect(thumb, 8.0f,
                     themeColor(ui_design::ColorToken::SnowSurface, opacity));
     return changed;
 }
@@ -841,6 +872,48 @@ void SimpleUI::popClip() {
         glDisable(GL_SCISSOR_TEST);
     } else {
         applyClip();
+    }
+}
+
+bool SimpleUI::pointerOver(const ui_design::Rect& rect) const {
+    return ui_design::containsPoint(rect, mouseX, mouseY) &&
+           pointerInsideActiveClip(mouseX, mouseY);
+}
+
+void SimpleUI::queueTooltip(
+    std::string_view text, const ui_design::Rect& anchor) {
+    if (!text.empty()) {
+        pendingTooltip = TooltipRequest{std::string(text), anchor};
+    }
+}
+
+void SimpleUI::drawQueuedTooltip() {
+    if (!pendingTooltip) {
+        return;
+    }
+    const float width = std::min(360.0f, std::max(220.0f,
+        static_cast<float>(viewportWidth) - 32.0f));
+    const auto lines = ui_design::wrapTextToWidth(
+        pendingTooltip->text, width - 20.0f, 11.0f);
+    if (lines.empty()) {
+        return;
+    }
+    const float height = 20.0f + static_cast<float>(lines.size()) * 15.0f;
+    const float x = std::clamp(
+        pendingTooltip->anchor.x - width - 8.0f, 8.0f,
+        std::max(8.0f, static_cast<float>(viewportWidth) - width - 8.0f));
+    const float y = std::clamp(
+        pendingTooltip->anchor.y, 8.0f,
+        std::max(8.0f, static_cast<float>(viewportHeight) - height - 8.0f));
+    const ui_design::Rect surface{x, y, width, height};
+    drawShadow(surface, 10.0f, 1.0f);
+    drawRoundedRect(surface, 10.0f,
+                    themeColor(ui_design::ColorToken::SnowSurface, 0.98f));
+    for (std::size_t index = 0; index < lines.size(); ++index) {
+        drawText(lines[index], x + 10.0f,
+                 y + 18.0f + static_cast<float>(index) * 15.0f,
+                 11.0f, themeColor(ui_design::ColorToken::PrimaryInk),
+                 ui_design::FontRole::Interface);
     }
 }
 

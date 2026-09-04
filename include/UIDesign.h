@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <array>
 #include <filesystem>
 #include <string>
 #include <string_view>
@@ -23,7 +24,9 @@ struct WindowLayout {
 
 enum class InspectorTab { Model, Mesh, Solve };
 
-enum class ViewportSurface { SolverStatus, Help, Progress };
+enum class ControlSurface { Unknown, TitleBar, TabStrip, Model, Mesh, Solve, Viewport };
+
+enum class ViewportSurface { SolverStatus, Help, Tooltip, Progress };
 
 enum class FontRole { Display, Interface, Data };
 enum class ControlRole { Primary, Secondary, Ghost, Destructive };
@@ -156,18 +159,70 @@ struct SolvePresentationPolicy {
     bool showToolpathWorkflow;
 };
 
+struct TitleReadiness {
+    std::string mesh;
+    std::string solve;
+    bool meshActive = false;
+    bool solveActive = false;
+};
+
+enum class ActiveComputation { Idle, Meshing, Solving };
+
+struct LongLabelPresentation {
+    std::string visible;
+    std::string full;
+    bool truncated;
+};
+
+struct BinarySegmentPresentation {
+    int selectedIndex;
+    std::array<bool, 2> disabled;
+};
+
+enum class SurfaceVolumeAction { None, SelectSurface, SelectVolume };
+
+struct HorizontalSliderGeometry {
+    Rect track;
+    Rect thumb;
+};
+
+struct ViewportOverlayLayout {
+    Rect solverStatus;
+    Rect progress;
+};
+
 WindowLayout computeWindowLayout(int widthPx, int heightPx);
 std::vector<ViewportSurface> viewportSurfacePaintOrder(
     bool showHelp, bool showProgress);
 bool containsPoint(const Rect& rect, float x, float y);
+bool intersects(const Rect& first, const Rect& second);
 float extendContentBottom(float currentBottom, const Rect& drawnRect);
+float essentialTextPixelSize(float requested);
+float conservativeTextWidth(std::string_view text, float pixelSize);
+LongLabelPresentation presentLongLabel(
+    std::string_view fullName, float maxWidth, float pixelSize);
+std::vector<std::string> wrapTextToWidth(
+    std::string_view text, float maxWidth, float pixelSize);
+HorizontalSliderGeometry horizontalSliderGeometry(
+    const Rect& field, float normalizedPosition);
+BinarySegmentPresentation surfaceVolumePresentation(
+    bool hasVolumetricMesh, bool showVolumetricMesh);
+SurfaceVolumeAction resolveSurfaceVolumeAction(
+    bool selectionChanged, int selectedIndex);
+ViewportOverlayLayout computeViewportOverlayLayout(
+    const Rect& viewport, float windowHeight, float solverStatusWidth,
+    int solverStatusRows, bool showProgress);
+TitleReadiness makeTitleReadiness(
+    bool hasVolumetricMesh, ActiveComputation activeComputation,
+    bool hasResults);
+ActiveComputation activeComputationForJobTitle(std::string_view title);
 FormattedValue formatValue(double value, int decimals, bool scientific, std::string_view unit);
 FormattedValueTextLayout layoutFormattedValueText(
     const FormattedValue& display, float fieldRight, float numberWidth,
     float unitColumnWidth, float gap);
 std::vector<ReceiptLine> makeModelReceipt(
     std::string_view format, bool brepRetained, int objectCount,
-    std::string_view physicalSize);
+    std::string_view physicalSize, bool proceduralCube = false);
 std::vector<ReceiptLine> makeMeshReceipt(
     std::string_view source, std::string_view elementType,
     std::uint64_t elementCount, int printLayers, int slabs,
@@ -193,5 +248,6 @@ const std::vector<ControlId>& requiredControls();
 const std::vector<ControlId>& requiredInspectorControls();
 const std::vector<ControlId>& requiredOverlayControls();
 std::string_view controlToken(ControlId id);
+ControlSurface controlSurface(ControlId id);
 
 }  // namespace ui_design

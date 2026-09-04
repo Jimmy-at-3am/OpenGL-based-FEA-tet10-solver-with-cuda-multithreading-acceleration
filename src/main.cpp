@@ -71,6 +71,7 @@ float pendingInspectorWheel = 0.0f;
 static std::optional<ui_interaction::KeyIntent> g_pendingKeyIntent;
 static float g_contentScale = 1.0f;
 static bool g_reducedMotion = false;
+static bool g_helpOpen = false;
 int modelListPage = 0;          // current page index for the model file list
 static constexpr int kModelsPerPage = 6;
 
@@ -268,6 +269,7 @@ struct ComputeJob {
     std::atomic<bool>   done{false};
     std::atomic<float>  progress{-1.0f};   // <0 = indeterminate (animated stripe)
     std::string         title;
+    ui_design::ActiveComputation activity = ui_design::ActiveComputation::Idle;
     bool                cancellable = true;
     bool                okResult    = false;
     std::function<bool()> work;                            // worker thread
@@ -277,11 +279,13 @@ struct ComputeJob {
 static ComputeJob g_job;
 static bool computeBusy() { return g_job.running.load(); }
 
-static void startComputeJob(FEAModel& model, const std::string& title, bool cancellable,
+static void startComputeJob(FEAModel& model, const std::string& title,
+                            bool cancellable,
                             std::function<bool()> work,
                             std::function<void(bool, bool)> finalize) {
     if (computeBusy()) return;
     g_job.title       = title;
+    g_job.activity    = ui_design::activeComputationForJobTitle(title);
     g_job.cancel      = false;
     g_job.done        = false;
     g_job.progress    = -1.0f;
@@ -345,10 +349,16 @@ static void startComputeJob(FEAModel& model, const std::string& title, bool canc
 // shutdown. progress < 0 renders an animated indeterminate stripe. Returns
 // true when the labeled cancel action was clicked.
 static bool drawProgressPanel(SimpleUI& ui, const std::string& title, float progress,
-                              bool showCancel, float slideT, double now) {
-    const float w = std::min(380.0f, static_cast<float>(scrWidth) - panelWidth - 32.0f);
-    const float h = 82.0f, xBase = 16.0f;
-    const float yShown = static_cast<float>(scrHeight) - h - 16.0f;
+                               bool showCancel, float slideT, double now) {
+    const ui_design::Rect viewport{
+        0.0f, 44.0f, static_cast<float>(scrWidth) - panelWidth,
+        static_cast<float>(scrHeight) - 44.0f};
+    const auto shownLayout = ui_design::computeViewportOverlayLayout(
+        viewport, static_cast<float>(scrHeight), 0.0f, 0, true);
+    const float w = shownLayout.progress.w;
+    const float h = shownLayout.progress.h;
+    const float xBase = shownLayout.progress.x;
+    const float yShown = shownLayout.progress.y;
     float t = slideT < 0.0f ? 0.0f : (slideT > 1.0f ? 1.0f : slideT);
     t = 1.0f - (1.0f - t) * (1.0f - t);                       // 220 ms ease-out
     const float yHidden = static_cast<float>(scrHeight) + 8.0f;
@@ -410,7 +420,8 @@ static bool drawProgressPanel(SimpleUI& ui, const std::string& title, float prog
 // viewport rather than another widget: dark slate/navy text straight on the
 // light background, with a hairline under the active row carrying its bar.
 // =============================================================================
-static void drawSolverStatusOverlay(SimpleUI& ui, float viewportRight) {
+static void drawSolverStatusOverlay(
+    SimpleUI& ui, const ui_design::Rect& viewport, bool showProgress) {
     std::string runLabel;
     double      runElapsed = 0.0;
     std::vector<SolverStatus::Stage> stages = SolverStatus::snapshot(&runLabel, &runElapsed);
@@ -528,8 +539,11 @@ static void drawSolverStatusOverlay(SimpleUI& ui, float viewportRight) {
     size_t maxLen = 0;
     for (const auto& r : rows) maxLen = std::max(maxLen, r.text.size());
     const float blockW = static_cast<float>(maxLen) * cw;
-    const float x0     = std::max(12.0f, viewportRight - 16.0f - blockW);
-    float       y      = static_cast<float>(scrHeight) - 14.0f - rowN * lh;
+    const auto overlayLayout = ui_design::computeViewportOverlayLayout(
+        viewport, static_cast<float>(scrHeight), blockW,
+        static_cast<int>(rowN), showProgress);
+    const float x0 = overlayLayout.solverStatus.x;
+    float y = overlayLayout.solverStatus.y;
 
     for (const auto& r : rows) {
         ui.drawText(r.text, x0, y + fs, fs, ui.themeColor(r.color, r.opacity),
@@ -635,7 +649,7 @@ std::optional<AppMode> drawModeSegment(
 std::optional<int> drawSelectableRows(
     SimpleUI& ui, ui_design::ControlId family,
     const std::vector<std::string>& labels, int firstIndex, int activeIndex,
-    const ui_design::Rect& rect) {
+    const ui_design::Rect& rect, float rightAccessoryWidth = 0.0f) {
     constexpr float rowHeight = 32.0f;
     constexpr float rowGap = 6.0f;
     const int rowCount = std::max(
@@ -648,9 +662,18 @@ std::optional<int> drawSelectableRows(
             rect.x, rect.y + static_cast<float>(row) * (rowHeight + rowGap),
             rect.w, rowHeight};
         const ui_design::WidgetId id{family, index};
-        if (ui.button(id, labels[static_cast<std::size_t>(index)], rowRect,
-                      ui_design::ControlRole::Secondary, index == activeIndex)) {
+        constexpr float rowTextSize = 12.16f;
+        const float labelWidth = std::max(
+            0.0f, rowRect.w - rightAccessoryWidth - 16.0f);
+        const auto label = ui_design::presentLongLabel(
+            labels[static_cast<std::size_t>(index)], labelWidth, rowTextSize);
+        if (ui.button(id, label.visible, rowRect,
+                      ui_design::ControlRole::Secondary, index == activeIndex,
+                      false, rightAccessoryWidth)) {
             return index;
+        }
+        if (label.truncated && ui.pointerOver(rowRect)) {
+            ui.queueTooltip(label.full, rowRect);
         }
     }
     return std::nullopt;
@@ -787,7 +810,6 @@ int runInteractive() {
     ui.setReducedMotion(g_reducedMotion);
     ui_interaction::InspectorState inspectorState;
     std::array<float, 3> inspectorContentHeights{0.0f, 0.0f, 0.0f};
-    bool showHelp = false;
     drawBootFrame(window, ui, "STARTING: COMPILING SHADERS", 0.15f);
 
     BuiltInShader schematicShader(modelVS, modelFS);
@@ -926,7 +948,7 @@ int runInteractive() {
         auto frameKeyIntent = std::exchange(g_pendingKeyIntent, std::nullopt);
         if (frameKeyIntent == ui_interaction::KeyIntent::Cancel) {
             switch (ui_interaction::resolveEscape(
-                computeBusy(), g_job.cancellable, showHelp)) {
+                computeBusy(), g_job.cancellable, g_helpOpen)) {
             case ui_interaction::EscapeAction::CancelJob:
                 dispatchInspectorAction<
                     ui_action_wiring::InspectorAction::CancelJob>(
@@ -937,7 +959,10 @@ int runInteractive() {
                     });
                 break;
             case ui_interaction::EscapeAction::CloseHelp:
-                showHelp = false;
+                g_helpOpen = false;
+                break;
+            case ui_interaction::EscapeAction::CloseWindow:
+                glfwSetWindowShouldClose(window, GLFW_TRUE);
                 break;
             case ui_interaction::EscapeAction::None:
                 break;
@@ -948,20 +973,42 @@ int runInteractive() {
         ui.setInputLocked(false);
         ui.drawRoundedRect(uiLayout.titleBar, 0.0f,
                            ui.themeColor(ui_design::ColorToken::SnowSurface, 0.96f));
-        ui.drawText(documentTitle, 54.0f, 28.0f, 15.0f,
-                    ui.themeColor(ui_design::ColorToken::PrimaryInk),
-                    ui_design::FontRole::Display);
+        const auto readiness = ui_design::makeTitleReadiness(
+            model.hasVolumetricMesh,
+            busy ? g_job.activity : ui_design::ActiveComputation::Idle,
+            model.hasDeformation);
         const float resetWidth = 112.0f;
-        const float helpWidth = showHelp ? 104.0f : 76.0f;
+        const float helpWidth = g_helpOpen ? 104.0f : 76.0f;
         const float resetX = static_cast<float>(scrWidth) - resetWidth - 12.0f;
         const float helpX = resetX - helpWidth - 8.0f;
+        const float readinessX = std::max(300.0f, helpX - 224.0f);
+        const ui_design::Rect titleBounds{
+            54.0f, 5.0f, std::max(0.0f, readinessX - 70.0f), 34.0f};
+        const auto titlePresentation = ui_design::presentLongLabel(
+            documentTitle, titleBounds.w, 15.0f);
+        ui.drawText(titlePresentation.visible, 54.0f, 28.0f, 15.0f,
+                    ui.themeColor(ui_design::ColorToken::PrimaryInk),
+                    ui_design::FontRole::Display);
+        if (titlePresentation.truncated && ui.pointerOver(titleBounds)) {
+            ui.queueTooltip(titlePresentation.full, titleBounds);
+        }
+        ui.drawText(readiness.mesh, readinessX, 18.0f, 11.0f,
+                    ui.themeColor(readiness.meshActive
+                        ? ui_design::ColorToken::SystemBlue
+                        : ui_design::ColorToken::Graphite),
+                    ui_design::FontRole::Interface);
+        ui.drawText(readiness.solve, readinessX, 34.0f, 11.0f,
+                    ui.themeColor(readiness.solveActive
+                        ? ui_design::ColorToken::SystemBlue
+                        : ui_design::ColorToken::Graphite),
+                    ui_design::FontRole::Interface);
         if (ui.button(ui_design::ControlId::OpenHelp,
-                      showHelp ? "Close help" : "Help",
+                      g_helpOpen ? "Close help" : "Help",
                       {helpX, 5.0f, helpWidth, 34.0f},
-                      ui_design::ControlRole::Ghost, showHelp)) {
+                      ui_design::ControlRole::Ghost, g_helpOpen)) {
             dispatchInspectorAction<ui_action_wiring::InspectorAction::OpenHelp>(
                 {ui_design::ControlId::OpenHelp, 0},
-                [&](const auto&) { showHelp = !showHelp; });
+                [&](const auto&) { g_helpOpen = !g_helpOpen; });
         }
         if (ui.button(ui_design::ControlId::ResetView, "Reset view",
                       {resetX, 5.0f, resetWidth, 34.0f},
@@ -1030,6 +1077,58 @@ int runInteractive() {
             }
             lY += 52.0f;
 
+            if (currentMode == MODE_CUBE) {
+                if (ui.sliderField(ui_design::ControlId::EditSizeX, "X size",
+                                   model.params.sizeX, 0.1f, 10.0f,
+                                   {lX, lY, lW, 48.0f},
+                                   ui_design::formatValue(
+                                       model.params.sizeX, 3, false, "mm"))) {
+                    dispatchInspectorValue<
+                        ui_action_wiring::InspectorAction::EditSizeX>(
+                        {ui_design::ControlId::EditSizeX, 0},
+                        model.params.sizeX,
+                        [&](const auto&) { model.needsUpdate = true; });
+                }
+                lY += 60.0f;
+                if (ui.sliderField(ui_design::ControlId::EditSizeY, "Y size",
+                                   model.params.sizeY, 0.1f, 5.0f,
+                                   {lX, lY, lW, 48.0f},
+                                   ui_design::formatValue(
+                                       model.params.sizeY, 3, false, "mm"))) {
+                    dispatchInspectorValue<
+                        ui_action_wiring::InspectorAction::EditSizeY>(
+                        {ui_design::ControlId::EditSizeY, 0},
+                        model.params.sizeY,
+                        [&](const auto&) { model.needsUpdate = true; });
+                }
+                lY += 60.0f;
+                if (ui.sliderField(ui_design::ControlId::EditSizeZ, "Z size",
+                                   model.params.sizeZ, 0.1f, 5.0f,
+                                   {lX, lY, lW, 48.0f},
+                                   ui_design::formatValue(
+                                       model.params.sizeZ, 3, false, "mm"))) {
+                    dispatchInspectorValue<
+                        ui_action_wiring::InspectorAction::EditSizeZ>(
+                        {ui_design::ControlId::EditSizeZ, 0},
+                        model.params.sizeZ,
+                        [&](const auto&) { model.needsUpdate = true; });
+                }
+                lY += 60.0f;
+                if (ui.sliderField(
+                        ui_design::ControlId::EditSubdivisions, "Subdivisions",
+                        model.params.subdivisions, 1.0f, 20.0f,
+                        {lX, lY, lW, 48.0f},
+                        ui_design::formatValue(
+                            model.params.subdivisions, 0, false, ""))) {
+                    dispatchInspectorValue<
+                        ui_action_wiring::InspectorAction::EditSubdivisions>(
+                        {ui_design::ControlId::EditSubdivisions, 0},
+                        model.params.subdivisions,
+                        [&](const auto&) { model.needsUpdate = true; });
+                }
+                lY += 60.0f;
+            }
+
             if (currentMode == MODE_IMPORT) {
                 ui.drawText("MODEL FILE", lX, lY + 12.0f, 12.0f,
                             ui.themeColor(ui_design::ColorToken::Graphite),
@@ -1070,7 +1169,7 @@ int runInteractive() {
                     const ui_design::Rect modelRowsRect{lX, lY, lW, rowsHeight};
                     const auto selectedModel = drawSelectableRows(
                         ui, ui_design::ControlId::SelectModelFile, modelLabels,
-                        firstIdx, activeModelIndex, modelRowsRect);
+                        firstIdx, activeModelIndex, modelRowsRect, 66.0f);
 
                     for (int i = firstIdx; i < lastIdx; ++i) {
                         const std::string display = modelLabels[static_cast<std::size_t>(i)];
@@ -1088,10 +1187,10 @@ int runInteractive() {
                             const float badgeY = lY + static_cast<float>(i - firstIdx) * 38.0f + 7.0f;
                             ui.drawRoundedRect({lX + lW - 58.0f, badgeY, 52.0f, 18.0f}, 7.0f,
                                 isGcode
-                                    ? glm::vec4(0.48f, 0.23f, 0.62f, 1.0f)
+                                    ? ui.themeColor(ui_design::ColorToken::SystemBlue)
                                     : isSTEP
-                                        ? glm::vec4(0.75f, 0.56f, 0.12f, 1.0f)
-                                        : glm::vec4(0.08f, 0.52f, 0.52f, 1.0f));
+                                        ? ui.themeColor(ui_design::ColorToken::Graphite)
+                                        : ui.themeColor(ui_design::ColorToken::PrimaryInk));
                             ui.drawText(isGcode ? "GCODE" : isSTEP ? "STEP" : "3MF",
                                         lX + lW - 52.0f, badgeY + 13.0f, 10.0f,
                                         ui.themeColor(ui_design::ColorToken::SnowSurface),
@@ -1183,7 +1282,7 @@ int runInteractive() {
                 ui_design::makeModelReceipt(
                     modelFormat, model.hasBRep(),
                     currentMode == MODE_CUBE ? 1 : model.lastLoadedObjectCount,
-                    physicalSize),
+                    physicalSize, currentMode == MODE_CUBE),
                 lX, lY, lW);
 
             lY += 18.0f;
@@ -1228,12 +1327,20 @@ int runInteractive() {
                 lY += rowsHeight + 12.0f;
             }
 
-            char matBuf[128];
-            snprintf(matBuf, sizeof(matBuf), "ACTIVE: %s", currentMaterial.name.c_str());
-            ui.drawText(matBuf, lX, lY + 14.0f, 13.0f,
+            const std::string activeMaterial = "ACTIVE: " + currentMaterial.name;
+            const auto activeMaterialPresentation = ui_design::presentLongLabel(
+                activeMaterial, lW, 13.0f);
+            const ui_design::Rect activeMaterialBounds{lX, lY, lW, 20.0f};
+            ui.drawText(activeMaterialPresentation.visible, lX, lY + 14.0f, 13.0f,
                         ui.themeColor(ui_design::ColorToken::PrimaryInk),
                         ui_design::FontRole::Interface);
+            if (activeMaterialPresentation.truncated &&
+                ui.pointerOver(activeMaterialBounds)) {
+                ui.queueTooltip(activeMaterialPresentation.full,
+                                activeMaterialBounds);
+            }
             lY += 22.0f;
+            char matBuf[128];
             snprintf(matBuf, sizeof(matBuf), "E: %.3g GPa   nu: %.2f",
                      currentMaterial.E * 1e-9, currentMaterial.nu);
             ui.drawText(matBuf, lX, lY + 13.0f, 12.0f,
@@ -1489,45 +1596,7 @@ int runInteractive() {
             }
         };
 
-        if (currentMode == MODE_CUBE) {
-            if (ui.sliderField(ui_design::ControlId::EditSizeX, "X size",
-                               model.params.sizeX, 0.1f, 10.0f, {rX, rY, rW, 48.0f},
-                               ui_design::formatValue(model.params.sizeX, 3, false, "m"))) {
-                dispatchInspectorValue<
-                    ui_action_wiring::InspectorAction::EditSizeX>(
-                    {ui_design::ControlId::EditSizeX, 0},
-                    model.params.sizeX, [&](const auto&) { model.needsUpdate = true; });
-            }
-            rY += 60.0f;
-            if (ui.sliderField(ui_design::ControlId::EditSizeY, "Y size",
-                               model.params.sizeY, 0.1f, 5.0f, {rX, rY, rW, 48.0f},
-                               ui_design::formatValue(model.params.sizeY, 3, false, "m"))) {
-                dispatchInspectorValue<
-                    ui_action_wiring::InspectorAction::EditSizeY>(
-                    {ui_design::ControlId::EditSizeY, 0},
-                    model.params.sizeY, [&](const auto&) { model.needsUpdate = true; });
-            }
-            rY += 60.0f;
-            if (ui.sliderField(ui_design::ControlId::EditSizeZ, "Z size",
-                               model.params.sizeZ, 0.1f, 5.0f, {rX, rY, rW, 48.0f},
-                               ui_design::formatValue(model.params.sizeZ, 3, false, "m"))) {
-                dispatchInspectorValue<
-                    ui_action_wiring::InspectorAction::EditSizeZ>(
-                    {ui_design::ControlId::EditSizeZ, 0},
-                    model.params.sizeZ, [&](const auto&) { model.needsUpdate = true; });
-            }
-            rY += 60.0f;
-            if (ui.sliderField(ui_design::ControlId::EditSubdivisions, "Subdivisions",
-                               model.params.subdivisions, 1.0f, 20.0f,
-                               {rX, rY, rW, 48.0f},
-                               ui_design::formatValue(model.params.subdivisions, 0, false, ""))) {
-                dispatchInspectorValue<
-                    ui_action_wiring::InspectorAction::EditSubdivisions>(
-                    {ui_design::ControlId::EditSubdivisions, 0},
-                    model.params.subdivisions, [&](const auto&) { model.needsUpdate = true; });
-            }
-            rY += 60.0f;
-        } else if (currentMode == MODE_IMPORT) {
+        if (currentMode == MODE_IMPORT) {
             if (ui.toggle(ui_design::ControlId::ToggleVertexSmoothing,
                           "Vertex smoothing", {rX, rY, rW, 32.0f},
                           model.params.enablePolarRemoval)) {
@@ -1565,22 +1634,29 @@ int runInteractive() {
         rY += 60.0f;
 
         if (currentMode == MODE_IMPORT) {
-            const float viewButtonW = (rW - 8.0f) * 0.5f;
-            if (ui.button(ui_design::ControlId::SelectSurfaceView, "Surface",
-                          {rX, rY, viewButtonW, 34.0f},
-                          ui_design::ControlRole::Secondary,
-                          !model.showVolumetricMesh)) {
+            const auto viewPresentation = ui_design::surfaceVolumePresentation(
+                model.hasVolumetricMesh, model.showVolumetricMesh);
+            int viewSelection = viewPresentation.selectedIndex;
+            const std::vector<ui_design::WidgetId> viewIds{
+                {ui_design::ControlId::SelectSurfaceView, 0},
+                {ui_design::ControlId::SelectVolumeView, 0},
+            };
+            const std::vector<bool> viewDisabled{
+                viewPresentation.disabled[0], viewPresentation.disabled[1]};
+            const bool viewChanged = ui.segmentedControl(
+                viewIds, {rX, rY, rW, 34.0f}, {"Surface", "Volume"},
+                viewSelection, false, viewDisabled);
+            switch (ui_design::resolveSurfaceVolumeAction(
+                viewChanged, viewSelection)) {
+            case ui_design::SurfaceVolumeAction::SelectSurface:
                 dispatchInspectorAction<
                     ui_action_wiring::InspectorAction::SelectSurfaceView>(
                     {ui_design::ControlId::SelectSurfaceView, 0}, [&](const auto&) {
                         model.showVolumetricMesh = false;
                         model.buildBuffers();
                     });
-            }
-            if (ui.button(ui_design::ControlId::SelectVolumeView, "Volume",
-                          {rX + viewButtonW + 8.0f, rY, viewButtonW, 34.0f},
-                          ui_design::ControlRole::Secondary,
-                          model.showVolumetricMesh, !model.hasVolumetricMesh)) {
+                break;
+            case ui_design::SurfaceVolumeAction::SelectVolume:
                 dispatchInspectorAction<
                     ui_action_wiring::InspectorAction::SelectVolumeView>(
                     {ui_design::ControlId::SelectVolumeView, 0}, [&](const auto&) {
@@ -1589,6 +1665,9 @@ int runInteractive() {
                             model.buildBuffers();
                         }
                     });
+                break;
+            case ui_design::SurfaceVolumeAction::None:
+                break;
             }
             rY += 46.0f;
         }
@@ -1673,7 +1752,8 @@ int runInteractive() {
             // Workflow: pick gcode model -> GENERATE 3D MESH -> type/accept the
             // magnitude -> RUN -> color-spectrum result + 3-D load arrows.
             if (solvePresentation.showToolpathWorkflow) {
-                ui.drawRect(rX, rY, rW, 1.5f, glm::vec3(0.35f, 0.2f, 0.4f)); rY += 8.0f;
+                ui.drawRect(rX, rY, rW, 1.5f, glm::vec3(ui.themeColor(
+                    ui_design::ColorToken::SystemBlue, 0.5f))); rY += 8.0f;
                 ui.drawText("GCODE SHOWCASE", rX, rY, 9.5f,
                             ui.themeColor(ui_design::ColorToken::PrimaryInk),
                             ui_design::FontRole::Interface); rY += 16.0f;
@@ -2447,7 +2527,7 @@ int runInteractive() {
                              ui_design::ColorToken::Graphite)), 0.22f);
 
         auto drawHelpSurface = [&]() {
-            if (!showHelp) return;
+            if (!g_helpOpen) return;
             const float rw = std::min(540.0f, uiLayout.viewport.w - 32.0f);
             const float rh = std::min(600.0f, static_cast<float>(scrHeight) - 64.0f);
             const float rx = 16.0f;
@@ -2538,7 +2618,7 @@ int runInteractive() {
             // slider then would paint it over the help text AND steal its
             // clicks (immediate-mode widgets hit-test regardless of draw
             // order). Keep the current cut state, just hide the control.
-            if (showHelp) {
+            if (g_helpOpen) {
                 // no slider this frame; the active cut (if any) stays as-is
             } else if (syBot - syTop > 60.0f) {
                 char maximum[32];
@@ -2621,13 +2701,17 @@ int runInteractive() {
         // The layer contract keeps solver history behind Help while retaining
         // the progress/Cancel surface as the topmost, actionable overlay.
         for (const auto surface : ui_design::viewportSurfacePaintOrder(
-                 showHelp, showComputeProgress)) {
+                 g_helpOpen, showComputeProgress)) {
             switch (surface) {
             case ui_design::ViewportSurface::SolverStatus:
-                drawSolverStatusOverlay(ui, panelX);
+                drawSolverStatusOverlay(
+                    ui, uiLayout.viewport, showComputeProgress);
                 break;
             case ui_design::ViewportSurface::Help:
                 drawHelpSurface();
+                break;
+            case ui_design::ViewportSurface::Tooltip:
+                ui.drawQueuedTooltip();
                 break;
             case ui_design::ViewportSurface::Progress:
                 drawComputeProgressSurface();
@@ -2638,6 +2722,23 @@ int runInteractive() {
         ui.endInteractionFrame();
         if (const auto focused = ui.focusedWidget()) {
             inspectorState.focused = focused->control;
+            const auto surface = ui_design::controlSurface(focused->control);
+            const bool belongsToActiveTab =
+                (surface == ui_design::ControlSurface::Model &&
+                 inspectorState.activeTab == ui_design::InspectorTab::Model) ||
+                (surface == ui_design::ControlSurface::Mesh &&
+                 inspectorState.activeTab == ui_design::InspectorTab::Mesh) ||
+                (surface == ui_design::ControlSurface::Solve &&
+                 inspectorState.activeTab == ui_design::InspectorTab::Solve);
+            if (belongsToActiveTab) {
+                if (const auto bounds = ui.focusedWidgetBounds()) {
+                    inspectorState.scrollOffset[activeTabIndex] =
+                        ui_interaction::revealFocusedScroll(
+                            inspectorState.scrollOffset[activeTabIndex], *bounds,
+                            inspectorContentRect,
+                            inspectorContentHeights[activeTabIndex]);
+                }
+            }
             if (focused->control != ui_design::ControlId::EditShowcaseMagnitude) {
                 showcaseMagFocused = false;
             }
@@ -2702,8 +2803,10 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
             mouseClickLatchY = mouseY;
         }
     }
-    if (button == GLFW_MOUSE_BUTTON_RIGHT) rightMousePressed = (action == GLFW_PRESS);
-    if (button == GLFW_MOUSE_BUTTON_MIDDLE) middleMousePressed = (action == GLFW_PRESS);
+    if (button == GLFW_MOUSE_BUTTON_RIGHT)
+        rightMousePressed = !g_helpOpen && (action == GLFW_PRESS);
+    if (button == GLFW_MOUSE_BUTTON_MIDDLE)
+        middleMousePressed = !g_helpOpen && (action == GLFW_PRESS);
 }
 
 void framebuffer_size_callback(GLFWwindow* window, int width, int height) { glViewport(0, 0, width, height); }
@@ -2715,7 +2818,8 @@ void mouse_callback(GLFWwindow* window, double xposIn, double yposIn) {
     // Inspector override: if hovering over the computed inspector, consume drag inputs.
     const auto layout = ui_design::computeWindowLayout(
         static_cast<int>(scrWidth), static_cast<int>(scrHeight));
-    if (ui_interaction::ownsPoint(layout, mouseX, mouseY)) {
+    const bool inspectorOwns = ui_interaction::ownsPoint(layout, mouseX, mouseY);
+    if (!ui_interaction::allowsViewportNavigation(g_helpOpen, inspectorOwns)) {
         lastX = xpos; lastY = ypos;
         return;
     }
@@ -2730,10 +2834,12 @@ void mouse_callback(GLFWwindow* window, double xposIn, double yposIn) {
 void scroll_callback(GLFWwindow* window, double xoffset, double yoffset) {
     const auto layout = ui_design::computeWindowLayout(
         static_cast<int>(scrWidth), static_cast<int>(scrHeight));
-    if (ui_interaction::ownsPoint(layout, mouseX, mouseY)) {
+    const bool inspectorOwns = ui_interaction::ownsPoint(layout, mouseX, mouseY);
+    if (inspectorOwns) {
         pendingInspectorWheel += static_cast<float>(yoffset);
         return;
     }
+    if (!ui_interaction::allowsViewportNavigation(g_helpOpen, false)) return;
     camera.ProcessMouseScroll(static_cast<float>(yoffset));
 }
 

@@ -1,6 +1,7 @@
 #include "UIDesign.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <iomanip>
 #include <sstream>
@@ -14,6 +15,7 @@ std::vector<ViewportSurface> viewportSurfacePaintOrder(
     if (showHelp) {
         order.push_back(ViewportSurface::Help);
     }
+    order.push_back(ViewportSurface::Tooltip);
     if (showProgress) {
         order.push_back(ViewportSurface::Progress);
     }
@@ -80,8 +82,143 @@ bool containsPoint(const Rect& rect, float x, float y) {
            y >= rect.y && y < rect.y + rect.h;
 }
 
+bool intersects(const Rect& first, const Rect& second) {
+    return first.x < second.x + second.w && first.x + first.w > second.x &&
+           first.y < second.y + second.h && first.y + first.h > second.y;
+}
+
 float extendContentBottom(float currentBottom, const Rect& drawnRect) {
     return std::max(currentBottom, drawnRect.y + drawnRect.h);
+}
+
+float essentialTextPixelSize(float requested) {
+    return std::max(11.0f, requested);
+}
+
+float conservativeTextWidth(std::string_view text, float pixelSize) {
+    return static_cast<float>(text.size()) * essentialTextPixelSize(pixelSize) * 1.2f;
+}
+
+LongLabelPresentation presentLongLabel(
+    std::string_view fullName, float maxWidth, float pixelSize) {
+    const std::string full(fullName);
+    if (conservativeTextWidth(full, pixelSize) <= maxWidth) {
+        return {full, full, false};
+    }
+    const float advance = essentialTextPixelSize(pixelSize) * 1.2f;
+    const std::size_t maxCharacters = maxWidth > 0.0f
+        ? static_cast<std::size_t>(std::floor(maxWidth / advance))
+        : 0;
+    if (maxCharacters <= 3) {
+        return {std::string(maxCharacters, '.'), full, true};
+    }
+    const std::size_t retained = maxCharacters - 3;
+    const std::size_t prefix = retained / 2;
+    const std::size_t suffix = retained - prefix;
+    return {
+        full.substr(0, prefix) + "..." + full.substr(full.size() - suffix),
+        full,
+        true,
+    };
+}
+
+std::vector<std::string> wrapTextToWidth(
+    std::string_view text, float maxWidth, float pixelSize) {
+    if (text.empty()) {
+        return {};
+    }
+    const float advance = essentialTextPixelSize(pixelSize) * 1.2f;
+    const std::size_t charactersPerLine = std::max<std::size_t>(
+        1, maxWidth > 0.0f
+            ? static_cast<std::size_t>(std::floor(maxWidth / advance))
+            : 1);
+    std::vector<std::string> lines;
+    for (std::size_t offset = 0; offset < text.size();
+         offset += charactersPerLine) {
+        lines.emplace_back(text.substr(offset, charactersPerLine));
+    }
+    return lines;
+}
+
+HorizontalSliderGeometry horizontalSliderGeometry(
+    const Rect& field, float normalizedPosition) {
+    const Rect track{field.x, field.y + field.h - 9.0f, field.w, 4.0f};
+    const float position = std::clamp(normalizedPosition, 0.0f, 1.0f);
+    return {
+        track,
+        {track.x + track.w * position - 8.0f, track.y - 6.0f, 16.0f, 16.0f},
+    };
+}
+
+BinarySegmentPresentation surfaceVolumePresentation(
+    bool hasVolumetricMesh, bool showVolumetricMesh) {
+    return {
+        hasVolumetricMesh && showVolumetricMesh ? 1 : 0,
+        {false, !hasVolumetricMesh},
+    };
+}
+
+SurfaceVolumeAction resolveSurfaceVolumeAction(
+    bool selectionChanged, int selectedIndex) {
+    if (!selectionChanged) {
+        return SurfaceVolumeAction::None;
+    }
+    return selectedIndex == 0
+        ? SurfaceVolumeAction::SelectSurface
+        : SurfaceVolumeAction::SelectVolume;
+}
+
+ViewportOverlayLayout computeViewportOverlayLayout(
+    const Rect& viewport, float windowHeight, float solverStatusWidth,
+    int solverStatusRows, bool showProgress) {
+    constexpr float progressHeight = 82.0f;
+    const float progressWidth = std::min(380.0f, std::max(0.0f, viewport.w - 32.0f));
+    const Rect progress{
+        viewport.x + 16.0f, windowHeight - progressHeight - 16.0f,
+        progressWidth, progressHeight};
+
+    constexpr float rowHeight = 18.0f;
+    const float statusHeight = std::max(0, solverStatusRows) * rowHeight;
+    const float statusWidth = std::min(
+        std::max(0.0f, solverStatusWidth), std::max(0.0f, viewport.w - 24.0f));
+    const float statusX = std::max(
+        viewport.x + 12.0f, viewport.x + viewport.w - 16.0f - statusWidth);
+    float statusY = windowHeight - 14.0f - statusHeight;
+    if (showProgress) {
+        statusY = std::min(statusY, progress.y - 16.0f - statusHeight);
+    }
+    statusY = std::max(viewport.y + 8.0f, statusY);
+    return {{statusX, statusY, statusWidth, statusHeight}, progress};
+}
+
+TitleReadiness makeTitleReadiness(
+    bool hasVolumetricMesh, ActiveComputation activeComputation,
+    bool hasResults) {
+    TitleReadiness readiness{
+        hasVolumetricMesh ? "Mesh ready" : "Mesh needed",
+        hasVolumetricMesh ? "Solve ready" : "Solve needs mesh",
+    };
+    if (activeComputation == ActiveComputation::Meshing) {
+        readiness.mesh = "Mesh running";
+        readiness.solve = "Solve waiting";
+        readiness.meshActive = true;
+    } else if (activeComputation == ActiveComputation::Solving) {
+        readiness.solve = "Solve running";
+        readiness.solveActive = true;
+    } else if (hasResults) {
+        readiness.solve = "Results ready";
+    }
+    return readiness;
+}
+
+ActiveComputation activeComputationForJobTitle(std::string_view title) {
+    if (title.empty()) {
+        return ActiveComputation::Idle;
+    }
+    if (title.find("MESHING") != std::string_view::npos) {
+        return ActiveComputation::Meshing;
+    }
+    return ActiveComputation::Solving;
 }
 
 FormattedValue formatValue(double value, int decimals, bool scientific, std::string_view unit) {
@@ -103,10 +240,11 @@ FormattedValueTextLayout layoutFormattedValueText(
 
 std::vector<ReceiptLine> makeModelReceipt(
     std::string_view format, bool brepRetained, int objectCount,
-    std::string_view physicalSize) {
+    std::string_view physicalSize, bool proceduralCube) {
+    const bool honestBrepRetained = !proceduralCube && brepRetained;
     return {
         {"Source", std::string(format)},
-        {"B-rep", brepRetained ? "Retained" : "Not retained"},
+        {"B-rep", honestBrepRetained ? "Retained" : "Not retained"},
         {"Objects", std::to_string(objectCount)},
         {"Physical size", std::string(physicalSize)},
     };
@@ -212,7 +350,7 @@ ControlVisual resolveControlVisual(ControlRole role, ControlState state) {
         visual = {ColorToken::SystemBlue, ColorToken::SystemBlue, 0.0f, 1.0f, 0.0f};
         break;
     case ControlRole::Destructive:
-        visual = {ColorToken::BlockedRed, ColorToken::SnowSurface, 1.0f, 1.0f, 0.0f};
+        visual = {ColorToken::BlockedRed, ColorToken::BlockedRed, 0.0f, 1.0f, 0.0f};
         break;
     }
 
@@ -490,6 +628,72 @@ std::string_view controlToken(ControlId id) {
         return "reset-view";
     }
     return {};
+}
+
+ControlSurface controlSurface(ControlId id) {
+    switch (id) {
+    case ControlId::None:
+        return ControlSurface::Unknown;
+    case ControlId::OpenHelp:
+    case ControlId::ResetView:
+        return ControlSurface::TitleBar;
+    case ControlId::SelectModelTab:
+    case ControlId::SelectMeshTab:
+    case ControlId::SelectSolveTab:
+        return ControlSurface::TabStrip;
+    case ControlId::SelectCubeMode:
+    case ControlId::SelectImportMode:
+    case ControlId::SelectModelFile:
+    case ControlId::PreviousModelPage:
+    case ControlId::NextModelPage:
+    case ControlId::SelectMaterial:
+    case ControlId::EditSizeX:
+    case ControlId::EditSizeY:
+    case ControlId::EditSizeZ:
+    case ControlId::EditSubdivisions:
+        return ControlSurface::Model;
+    case ControlId::ToggleVertexSmoothing:
+    case ControlId::SelectSurfaceView:
+    case ControlId::SelectVolumeView:
+    case ControlId::GenerateVolumeMesh:
+    case ControlId::EditMeshQuality:
+    case ControlId::EditMaxVolumePercent:
+    case ControlId::ToggleSlicing:
+    case ControlId::EditLayerThickness:
+    case ControlId::SelectSliceAxisX:
+    case ControlId::SelectSliceAxisY:
+    case ControlId::SelectSliceAxisZ:
+    case ControlId::EditMaxSlabs:
+    case ControlId::EditWallWidth:
+    case ControlId::PreviewSlice:
+    case ControlId::SelectPreviewLayer:
+        return ControlSurface::Mesh;
+    case ControlId::EditShowcaseMagnitude:
+    case ControlId::ResetShowcaseMagnitude:
+    case ControlId::RunShowcaseFracture:
+    case ControlId::ToggleMultithreading:
+    case ControlId::ToggleGpuAcceleration:
+    case ControlId::SelectBuildAxis:
+    case ControlId::SelectLoadPreset:
+    case ControlId::EditLoadMagnitude:
+    case ControlId::RunLinearAnalysis:
+    case ControlId::RunNonlinearAnalysis:
+    case ControlId::EditCurvatureAngle:
+    case ControlId::EditCurvatureFraction:
+    case ControlId::RunAdaptiveAnalysis:
+    case ControlId::ToggleFdmAnisotropy:
+    case ControlId::RunBrittleFracture:
+    case ControlId::SelectOriginalResult:
+    case ControlId::SelectDeformedResult:
+    case ControlId::SelectFractureView:
+    case ControlId::SelectDeadElementView:
+    case ControlId::ToggleForceMap:
+        return ControlSurface::Solve;
+    case ControlId::CancelJob:
+    case ControlId::EditSectionPosition:
+        return ControlSurface::Viewport;
+    }
+    return ControlSurface::Unknown;
 }
 
 }  // namespace ui_design

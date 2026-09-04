@@ -102,21 +102,32 @@ bool queueKeyIntent(std::optional<KeyIntent>& pending, KeyIntent candidate) {
     return true;
 }
 
-void appendVisibleFocus(
+void appendContextualFocus(
     std::vector<ui_design::WidgetId>& visible,
-    ui_design::WidgetId widget,
-    const ui_design::Rect& bounds,
-    const ui_design::Rect& visibleBounds) {
-    const float right = std::min(bounds.x + bounds.w,
-                                 visibleBounds.x + visibleBounds.w);
-    const float bottom = std::min(bounds.y + bounds.h,
-                                  visibleBounds.y + visibleBounds.h);
-    const bool intersects = right > std::max(bounds.x, visibleBounds.x) &&
-                            bottom > std::max(bounds.y, visibleBounds.y);
-    if (!intersects || std::find(visible.begin(), visible.end(), widget) != visible.end()) {
+    ui_design::WidgetId widget) {
+    if (std::find(visible.begin(), visible.end(), widget) != visible.end()) {
         return;
     }
     visible.push_back(widget);
+}
+
+float revealFocusedScroll(
+    float current, const ui_design::Rect& focusedBounds,
+    const ui_design::Rect& visibleBounds, float contentHeight) {
+    float next = current;
+    if (focusedBounds.y < visibleBounds.y) {
+        next += focusedBounds.y - visibleBounds.y;
+    } else if (focusedBounds.y + focusedBounds.h >
+               visibleBounds.y + visibleBounds.h) {
+        next += focusedBounds.y + focusedBounds.h -
+                (visibleBounds.y + visibleBounds.h);
+    }
+    const float maximum = std::max(0.0f, contentHeight - visibleBounds.h);
+    return std::clamp(next, 0.0f, maximum);
+}
+
+bool allowsViewportNavigation(bool helpOpen, bool inspectorOwnsPointer) {
+    return !helpOpen && !inspectorOwnsPointer;
 }
 
 bool allowsKeyboardMutation(KeyIntent intent, bool disabled, bool inputLocked) {
@@ -157,7 +168,7 @@ EscapeAction resolveEscape(bool jobRunning, bool cancellable, bool helpOpen) {
     if (jobRunning && cancellable) {
         return EscapeAction::CancelJob;
     }
-    return helpOpen ? EscapeAction::CloseHelp : EscapeAction::None;
+    return helpOpen ? EscapeAction::CloseHelp : EscapeAction::CloseWindow;
 }
 
 float effectiveContentScale(float xScale, float yScale) {

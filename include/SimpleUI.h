@@ -4,6 +4,7 @@
 #include "UIInteraction.h"
 
 #include <optional>
+#include <utility>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -33,6 +34,12 @@ private:
     std::optional<ui_design::WidgetId> keyboardTargetWidgetID;
     bool keyIntentConsumed = false;
     bool reducedMotion = false;
+    std::vector<std::pair<ui_design::WidgetId, ui_design::Rect>> focusableBounds;
+    struct TooltipRequest {
+        std::string text;
+        ui_design::Rect anchor;
+    };
+    std::optional<TooltipRequest> pendingTooltip;
     struct SegmentMotion {
         ui_design::ControlId group;
         float fromIndex;
@@ -65,6 +72,7 @@ public:
     std::optional<ui_design::WidgetId> focusedWidget() const {
         return focusedWidgetID;
     }
+    std::optional<ui_design::Rect> focusedWidgetBounds() const;
     void clearFocus() { focusedWidgetID.reset(); }
     void setReducedMotion(bool reduced) { reducedMotion = reduced; }
     // Blocks clicks/drags for widgets drawn while locked (compute in progress).
@@ -82,14 +90,17 @@ public:
     bool button(std::string label, float x, float y, float w, float h, bool active = false, bool disabled = false);
     bool button(ui_design::ControlId id, std::string_view label,
                 const ui_design::Rect& rect, ui_design::ControlRole role,
-                bool selected = false, bool disabled = false);
+                bool selected = false, bool disabled = false,
+                float rightAccessoryWidth = 0.0f);
     bool button(ui_design::WidgetId id, std::string_view label,
                 const ui_design::Rect& rect, ui_design::ControlRole role,
-                bool selected = false, bool disabled = false);
+                bool selected = false, bool disabled = false,
+                float rightAccessoryWidth = 0.0f);
     bool segmentedControl(const std::vector<ui_design::WidgetId>& ids,
                           const ui_design::Rect& rect,
                           const std::vector<std::string>& labels, int& selectedIndex,
-                          bool disabled = false);
+                          bool disabled = false,
+                          const std::vector<bool>& disabledSegments = {});
     bool toggle(ui_design::ControlId id, std::string_view label,
                 const ui_design::Rect& rect, bool& value, bool disabled = false);
     bool sliderField(ui_design::ControlId id, std::string_view label,
@@ -104,6 +115,9 @@ public:
                  const ui_design::Rect& rect, bool disabled = false);
     void pushClip(const ui_design::Rect& rect);
     void popClip();
+    bool pointerOver(const ui_design::Rect& rect) const;
+    void queueTooltip(std::string_view text, const ui_design::Rect& anchor);
+    void drawQueuedTooltip();
     glm::vec4 themeColor(ui_design::ColorToken token, float opacity = 1.0f) const;
     void shutdown();
 };

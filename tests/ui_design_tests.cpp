@@ -215,6 +215,34 @@ void testControlVisualStates() {
     const auto blocked = ui_design::resolveControlVisual(
         ui_design::ControlRole::Secondary, ui_design::ControlState::Disabled);
     expectNear(blocked.contentOpacity, 0.38f);
+
+    const auto cancel = ui_design::resolveControlVisual(
+        ui_design::ControlRole::Destructive, ui_design::ControlState::Rest);
+    expectEqual(cancel.fill, ui_design::ColorToken::BlockedRed);
+    expectEqual(cancel.text, ui_design::ColorToken::BlockedRed);
+    expectNear(cancel.fillOpacity, 0.0f);
+}
+
+void testControlHomesMatchApprovedA1InformationArchitecture() {
+    expectEqual(ui_design::controlSurface(ui_design::ControlId::EditSizeX),
+                ui_design::ControlSurface::Model);
+    expectEqual(ui_design::controlSurface(ui_design::ControlId::EditSizeY),
+                ui_design::ControlSurface::Model);
+    expectEqual(ui_design::controlSurface(ui_design::ControlId::EditSizeZ),
+                ui_design::ControlSurface::Model);
+    expectEqual(ui_design::controlSurface(ui_design::ControlId::EditSubdivisions),
+                ui_design::ControlSurface::Model);
+    expectEqual(ui_design::controlSurface(ui_design::ControlId::SelectSurfaceView),
+                ui_design::ControlSurface::Mesh);
+    expectEqual(ui_design::controlSurface(ui_design::ControlId::SelectVolumeView),
+                ui_design::ControlSurface::Mesh);
+    expectEqual(ui_design::controlSurface(ui_design::ControlId::RunLinearAnalysis),
+                ui_design::ControlSurface::Solve);
+
+    for (const auto id : ui_design::requiredInspectorControls()) {
+        expectTrue(ui_design::controlSurface(id) != ui_design::ControlSurface::Unknown,
+                   "every inspector control must have a production IA home");
+    }
 }
 
 void testFontCandidateOrder() {
@@ -283,6 +311,134 @@ void testReceiptPresentation() {
     expectReceiptContains(model, "STEP");
     expectReceiptContains(model, "Retained");
     expectReceiptContains(model, "3");
+
+    const auto proceduralCube = ui_design::makeModelReceipt(
+        "Procedural cube", true, 1, "1.0 x 1.0 x 1.0 mm", true);
+    expectReceiptContains(proceduralCube, "Not retained");
+    expectFalse(proceduralCube[1].value.find("Retained") != std::string::npos,
+                "procedural cube receipt must ignore stale imported B-rep state");
+}
+
+void testTitleReadinessIsFactualAndTextual() {
+    expectEqual(ui_design::activeComputationForJobTitle(""),
+                ui_design::ActiveComputation::Idle);
+    expectEqual(ui_design::activeComputationForJobTitle("TETGEN MESHING"),
+                ui_design::ActiveComputation::Meshing);
+    expectEqual(ui_design::activeComputationForJobTitle("TOOLPATH MESHING"),
+                ui_design::ActiveComputation::Meshing);
+    expectEqual(ui_design::activeComputationForJobTitle("LINEAR STATIC FEA"),
+                ui_design::ActiveComputation::Solving);
+    expectEqual(ui_design::activeComputationForJobTitle("BRITTLE FRACTURE FEA"),
+                ui_design::ActiveComputation::Solving);
+
+    const auto empty = ui_design::makeTitleReadiness(
+        false, ui_design::ActiveComputation::Idle, false);
+    expectEqual(empty.mesh, "Mesh needed");
+    expectEqual(empty.solve, "Solve needs mesh");
+    expectFalse(empty.meshActive, "idle mesh readiness must not be emphasized");
+    expectFalse(empty.solveActive, "idle solve readiness must not be emphasized");
+
+    const auto meshed = ui_design::makeTitleReadiness(
+        true, ui_design::ActiveComputation::Idle, false);
+    expectEqual(meshed.mesh, "Mesh ready");
+    expectEqual(meshed.solve, "Solve ready");
+
+    const auto meshing = ui_design::makeTitleReadiness(
+        false, ui_design::ActiveComputation::Meshing, false);
+    expectEqual(meshing.mesh, "Mesh running");
+    expectEqual(meshing.solve, "Solve waiting");
+    expectTrue(meshing.meshActive, "meshing must emphasize Mesh status");
+    expectFalse(meshing.solveActive, "meshing must not emphasize Solve status");
+
+    const auto solving = ui_design::makeTitleReadiness(
+        true, ui_design::ActiveComputation::Solving, false);
+    expectEqual(solving.mesh, "Mesh ready");
+    expectEqual(solving.solve, "Solve running");
+    expectFalse(solving.meshActive, "solving must not emphasize Mesh status");
+    expectTrue(solving.solveActive, "solving must emphasize Solve status");
+
+    const auto results = ui_design::makeTitleReadiness(
+        true, ui_design::ActiveComputation::Idle, true);
+    expectEqual(results.solve, "Results ready");
+}
+
+void testLongLabelsUseMiddleEllipsisAndRetainFullName() {
+    const std::string full = "very-long-model-filename-with-identity.step";
+    constexpr float compactRowWidth = 206.0f;
+    constexpr float rowTextSize = 12.16f;
+    const auto presentation = ui_design::presentLongLabel(
+        full, compactRowWidth, rowTextSize);
+    expectTrue(presentation.truncated, "long labels must be truncated deterministically");
+    expectTrue(ui_design::conservativeTextWidth(
+                   presentation.visible, rowTextSize) <= compactRowWidth,
+               "middle ellipsis must fit the supported stroke fallback width");
+    expectTrue(presentation.visible.find("...") != std::string::npos,
+               "middle ellipsis must carry an explicit omission marker");
+    expectEqual(presentation.full, full);
+    expectTrue(presentation.visible.rfind(".step") == presentation.visible.size() - 5,
+               "middle ellipsis must preserve the distinguishing extension");
+
+    const auto shortName = ui_design::presentLongLabel(
+        "steel.mat", compactRowWidth, rowTextSize);
+    expectFalse(shortName.truncated, "short labels must remain unchanged");
+    expectEqual(shortName.visible, "steel.mat");
+
+    const auto tooltipLines = ui_design::wrapTextToWidth(
+        full, 340.0f, 11.0f);
+    std::string recombined;
+    for (const auto& line : tooltipLines) {
+        expectTrue(ui_design::conservativeTextWidth(line, 11.0f) <= 340.0f,
+                   "tooltip lines must fit their actual inner width");
+        recombined += line;
+    }
+    expectEqual(recombined, full);
+}
+
+void testEssentialTextNeverFallsBelowElevenPixels() {
+    expectNear(ui_design::essentialTextPixelSize(7.5f), 11.0f);
+    expectNear(ui_design::essentialTextPixelSize(11.0f), 11.0f);
+    expectNear(ui_design::essentialTextPixelSize(15.0f), 15.0f);
+}
+
+void testSurfaceVolumeSegmentPreservesAvailability() {
+    const auto surfaceOnly = ui_design::surfaceVolumePresentation(false, false);
+    expectEqual(surfaceOnly.selectedIndex, 0);
+    expectFalse(surfaceOnly.disabled[0], "surface must remain selectable");
+    expectTrue(surfaceOnly.disabled[1], "volume must remain disabled before meshing");
+
+    const auto volume = ui_design::surfaceVolumePresentation(true, true);
+    expectEqual(volume.selectedIndex, 1);
+    expectFalse(volume.disabled[0], "surface must remain selectable after meshing");
+    expectFalse(volume.disabled[1], "volume must become selectable after meshing");
+}
+
+void testSurfaceVolumeActionRequiresASelectionChange() {
+    expectEqual(ui_design::resolveSurfaceVolumeAction(false, 1),
+                ui_design::SurfaceVolumeAction::None);
+    expectEqual(ui_design::resolveSurfaceVolumeAction(true, 0),
+                ui_design::SurfaceVolumeAction::SelectSurface);
+    expectEqual(ui_design::resolveSurfaceVolumeAction(true, 1),
+                ui_design::SurfaceVolumeAction::SelectVolume);
+}
+
+void testHorizontalSliderUsesFourPixelTrackAndSixteenPixelThumb() {
+    const auto geometry = ui_design::horizontalSliderGeometry(
+        {20.0f, 30.0f, 240.0f, 48.0f}, 0.25f);
+    expectNear(geometry.track.h, 4.0f);
+    expectNear(geometry.thumb.w, 16.0f);
+    expectNear(geometry.thumb.h, 16.0f);
+    expectNear(geometry.thumb.x + geometry.thumb.w * 0.5f,
+               geometry.track.x + geometry.track.w * 0.25f);
+}
+
+void testViewportOverlayLayoutStacksStatusAboveProgress() {
+    const auto window = ui_design::computeWindowLayout(1024, 768);
+    const auto overlays = ui_design::computeViewportOverlayLayout(
+        window.viewport, 768.0f, 620.0f, 12, true);
+    expectFalse(ui_design::intersects(overlays.solverStatus, overlays.progress),
+                "solver status and progress must not intersect at 1024x768");
+    expectTrue(overlays.solverStatus.y >= window.viewport.y,
+               "solver status must stay inside the viewport safe area");
 }
 
 void testSolvePresentationRoutesCubeToGenericWorkflow() {
@@ -418,19 +574,17 @@ void testKeyIntentQueueKeepsOnlyFirstIntentPerFrame() {
 
 void testVisibleFocusOrderUsesStableWidgetsAndIncludesDisabledControls() {
     std::vector<ui_design::WidgetId> visible;
-    const ui_design::Rect clip{100.0f, 100.0f, 320.0f, 400.0f};
-    ui_interaction::appendVisibleFocus(
-        visible, {ui_design::ControlId::SelectModelFile, 3},
-        {110.0f, 110.0f, 280.0f, 32.0f}, clip);
-    ui_interaction::appendVisibleFocus(
-        visible, {ui_design::ControlId::RunLinearAnalysis, 0},
-        {110.0f, 500.0f, 280.0f, 40.0f}, clip);
-    ui_interaction::appendVisibleFocus(
-        visible, {ui_design::ControlId::RunNonlinearAnalysis, 0},
-        {110.0f, 170.0f, 280.0f, 40.0f}, clip);
+    ui_interaction::appendContextualFocus(
+        visible, {ui_design::ControlId::SelectModelFile, 3});
+    ui_interaction::appendContextualFocus(
+        visible, {ui_design::ControlId::RunLinearAnalysis, 0});
+    ui_interaction::appendContextualFocus(
+        visible, {ui_design::ControlId::RunNonlinearAnalysis, 0});
+    ui_interaction::appendContextualFocus(
+        visible, {ui_design::ControlId::RunLinearAnalysis, 0});
 
-    expectTrue(visible.size() == 2,
-               "only controls intersecting the active visible clip are focusable");
+    expectTrue(visible.size() == 3,
+               "all contextually present controls, including below-fold controls, are focusable");
     expectTrue(visible.front() ==
                    ui_design::WidgetId{ui_design::ControlId::SelectModelFile, 3},
                "focus order must preserve repeated-row widget identity");
@@ -440,6 +594,31 @@ void testVisibleFocusOrderUsesStableWidgetsAndIncludesDisabledControls() {
     expectTrue(*ui_interaction::nextWidgetFocus(visible, visible.back(), 1) ==
                    visible.front(),
                "widget focus must wrap through visible controls");
+}
+
+void testKeyboardFocusRevealAdjustsInspectorScroll() {
+    const ui_design::Rect viewport{100.0f, 100.0f, 320.0f, 400.0f};
+    expectNear(ui_interaction::revealFocusedScroll(
+                   0.0f, {110.0f, 620.0f, 280.0f, 40.0f}, viewport,
+                   900.0f),
+               160.0f);
+    expectNear(ui_interaction::revealFocusedScroll(
+                   200.0f, {110.0f, 60.0f, 280.0f, 32.0f}, viewport,
+                   900.0f),
+               160.0f);
+    expectNear(ui_interaction::revealFocusedScroll(
+                   120.0f, {110.0f, 180.0f, 280.0f, 32.0f}, viewport,
+                   900.0f),
+               120.0f);
+}
+
+void testHelpOwnsViewportNavigationInput() {
+    expectTrue(ui_interaction::allowsViewportNavigation(false, false),
+               "viewport navigation must remain available outside the inspector");
+    expectFalse(ui_interaction::allowsViewportNavigation(false, true),
+                "inspector must retain pointer ownership");
+    expectFalse(ui_interaction::allowsViewportNavigation(true, false),
+                "open Help must suppress camera navigation over the viewport");
 }
 
 void testKeyboardMutationHonorsDisabledAndBusyGates() {
@@ -538,7 +717,7 @@ void testEscapePrefersCancellableJobThenHelp() {
     expectEqual(ui_interaction::resolveEscape(false, false, true),
                 ui_interaction::EscapeAction::CloseHelp);
     expectEqual(ui_interaction::resolveEscape(false, false, false),
-                ui_interaction::EscapeAction::None);
+                ui_interaction::EscapeAction::CloseWindow);
 }
 
 void testDpiScaleChangesRebuildOnlyWhenEffectiveScaleChanges() {
@@ -562,6 +741,7 @@ void testViewportSurfacePaintOrderKeepsHelpAboveStatusAndProgressAboveHelp() {
     const std::vector<ui_design::ViewportSurface> expectedAll = {
         ui_design::ViewportSurface::SolverStatus,
         ui_design::ViewportSurface::Help,
+        ui_design::ViewportSurface::Tooltip,
         ui_design::ViewportSurface::Progress,
     };
     expectEqual(allSurfaces, expectedAll);
@@ -570,12 +750,14 @@ void testViewportSurfacePaintOrderKeepsHelpAboveStatusAndProgressAboveHelp() {
     const std::vector<ui_design::ViewportSurface> expectedHelpOnly = {
         ui_design::ViewportSurface::SolverStatus,
         ui_design::ViewportSurface::Help,
+        ui_design::ViewportSurface::Tooltip,
     };
     expectEqual(helpOnly, expectedHelpOnly);
 
     const auto progressOnly = ui_design::viewportSurfacePaintOrder(false, true);
     const std::vector<ui_design::ViewportSurface> expectedProgressOnly = {
         ui_design::ViewportSurface::SolverStatus,
+        ui_design::ViewportSurface::Tooltip,
         ui_design::ViewportSurface::Progress,
     };
     expectEqual(progressOnly, expectedProgressOnly);
@@ -591,10 +773,18 @@ int main() {
         {"palette and control manifest", testPaletteAndControlManifest},
         {"control partitions and widget identity", testControlManifestPartitionsAndWidgetIdentity},
         {"control visual states", testControlVisualStates},
+        {"control homes match A1 IA", testControlHomesMatchApprovedA1InformationArchitecture},
         {"font candidate order", testFontCandidateOrder},
         {"theme color conversion", testThemeColorConversion},
         {"formatted value separates number and unit", testFormattedValueLayoutSeparatesNumberAndUnit},
         {"receipt presentation", testReceiptPresentation},
+        {"title readiness", testTitleReadinessIsFactualAndTextual},
+        {"long label presentation", testLongLabelsUseMiddleEllipsisAndRetainFullName},
+        {"essential text minimum", testEssentialTextNeverFallsBelowElevenPixels},
+        {"surface volume segment", testSurfaceVolumeSegmentPreservesAvailability},
+        {"surface volume action change gate", testSurfaceVolumeActionRequiresASelectionChange},
+        {"horizontal slider geometry", testHorizontalSliderUsesFourPixelTrackAndSixteenPixelThumb},
+        {"viewport overlay stacking", testViewportOverlayLayoutStacksStatusAboveProgress},
         {"cube routes to generic solve workflow", testSolvePresentationRoutesCubeToGenericWorkflow},
         {"empty import has no mesh source claim", testEmptyImportHasNoMeshSourceClaim},
         {"solve capability omits adaptive", testSolveCapabilitySummaryOmitsUnassessedAdaptiveMode},
@@ -606,6 +796,8 @@ int main() {
         {"compact layout keeps positive viewport", testCompactLayoutKeepsPositiveViewport},
         {"key intent queue keeps first", testKeyIntentQueueKeepsOnlyFirstIntentPerFrame},
         {"visible focus order uses stable widgets", testVisibleFocusOrderUsesStableWidgetsAndIncludesDisabledControls},
+        {"keyboard focus reveal", testKeyboardFocusRevealAdjustsInspectorScroll},
+        {"Help owns viewport navigation", testHelpOwnsViewportNavigationInput},
         {"keyboard mutation honors gates", testKeyboardMutationHonorsDisabledAndBusyGates},
         {"keyboard slider adjustment", testKeyboardSliderAdjustmentUsesLinearAndLogarithmicRanges},
         {"focus ring is outline only", testFocusRingPresentationIsAThreePixelOutlineWithClearInterior},
