@@ -222,6 +222,9 @@ set(SOURCES
     src/main.cpp
     src/BuiltInShader.cpp
     src/SimpleUI.cpp
+    src/UIFontRenderer.cpp
+    src/UIDesign.cpp
+    src/UIInteraction.cpp
     src/GeometryUtils.cpp
     src/LoadPhysics.cpp
     src/FEAModel.cpp
@@ -282,6 +285,70 @@ endif()
 
 # --- Create executable (C/C++ only; CUDA linked via FEACudaKernels) ---
 add_executable(${PROJECT_NAME} ${SOURCES})
+
+find_package(Freetype QUIET)
+if(Freetype_FOUND)
+    target_link_libraries(${PROJECT_NAME} PRIVATE Freetype::Freetype)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE HAS_FREETYPE_UI=1)
+    if(WIN32)
+        set(_freetype_runtime_hints)
+        if(FREETYPE_LIBRARY_RELEASE AND EXISTS "${FREETYPE_LIBRARY_RELEASE}")
+            get_filename_component(_freetype_library_dir
+                "${FREETYPE_LIBRARY_RELEASE}" DIRECTORY)
+            get_filename_component(_freetype_prefix
+                "${_freetype_library_dir}" DIRECTORY)
+            list(APPEND _freetype_runtime_hints "${_freetype_prefix}/bin")
+        endif()
+        set(_freetype_runtime_files)
+        set(_freetype_runtime_complete TRUE)
+        foreach(_freetype_runtime_name
+                freetype.dll
+                zlib1.dll
+                bz2.dll
+                libpng16.dll
+                brotlidec.dll
+                brotlicommon.dll)
+            string(MAKE_C_IDENTIFIER "${_freetype_runtime_name}"
+                _freetype_runtime_id)
+            set(_freetype_runtime_var
+                "POLYFEA_FREETYPE_RUNTIME_${_freetype_runtime_id}")
+            unset(${_freetype_runtime_var} CACHE)
+            unset(${_freetype_runtime_var})
+            find_file(${_freetype_runtime_var}
+                NAMES "${_freetype_runtime_name}"
+                PATHS ${_freetype_runtime_hints}
+                NO_DEFAULT_PATH)
+            if(${_freetype_runtime_var})
+                list(APPEND _freetype_runtime_files
+                    "${${_freetype_runtime_var}}")
+            else()
+                set(_freetype_runtime_complete FALSE)
+            endif()
+        endforeach()
+        if(_freetype_runtime_complete)
+            add_custom_target(stage_freetype_runtime ALL
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    ${_freetype_runtime_files}
+                    "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
+                COMMAND_EXPAND_LISTS
+                COMMENT "Staging FreeType runtime closure beside ${PROJECT_NAME}")
+            add_dependencies(stage_freetype_runtime ${PROJECT_NAME})
+        else()
+            message(WARNING
+                "FreeType was linked but its Windows runtime closure was not found; "
+                "ordinary build-tree launch may require dependency staging.")
+        endif()
+    endif()
+else()
+    message(WARNING "FreeType not found: UI will use the built-in stroke font")
+endif()
+
+add_library(ui_font_fallback_compile OBJECT src/UIFontRenderer.cpp)
+target_include_directories(ui_font_fallback_compile PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/src
+    ${glm_SOURCE_DIR})
+target_compile_definitions(ui_font_fallback_compile PRIVATE UI_FONT_FORCE_FALLBACK=1)
 
 # --- Clipper2: include path + HAS_CLIPPER2 only when populated ---
 if(HAS_CLIPPER2)
@@ -505,3 +572,28 @@ else()
     target_compile_options(load_physics_tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
 endif()
 add_test(NAME load_physics_tests COMMAND load_physics_tests)
+
+# --- Focused UI-design contract tests (GL-free) ---
+add_executable(ui_design_tests
+    tests/ui_design_tests.cpp
+    src/UIDesign.cpp
+    src/UIInteraction.cpp)
+target_include_directories(ui_design_tests PRIVATE ${CMAKE_SOURCE_DIR}/include)
+if(MSVC)
+    target_compile_options(ui_design_tests PRIVATE /W4 /WX)
+else()
+    target_compile_options(ui_design_tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
+endif()
+add_test(NAME ui_design_tests COMMAND ui_design_tests)
+
+# --- Behavioral inspector-action wiring contract (GL-free) ---
+add_executable(ui_action_wiring_tests
+    tests/ui_action_wiring_tests.cpp
+    src/UIDesign.cpp)
+target_include_directories(ui_action_wiring_tests PRIVATE ${CMAKE_SOURCE_DIR}/include)
+if(MSVC)
+    target_compile_options(ui_action_wiring_tests PRIVATE /W4 /WX)
+else()
+    target_compile_options(ui_action_wiring_tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
+endif()
+add_test(NAME ui_action_wiring_tests COMMAND ui_action_wiring_tests)

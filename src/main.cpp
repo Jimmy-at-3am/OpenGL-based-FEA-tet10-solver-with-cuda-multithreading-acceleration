@@ -10,6 +10,8 @@
 #include "ShaderSources.h"
 #include "BuiltInShader.h"
 #include "SimpleUI.h"
+#include "UIActionBindings.h"
+#include "UIInteraction.h"
 #include "FEAModel.h"
 #include "FEASolver.h"
 #include "LoadPhysics.h"
@@ -22,6 +24,7 @@
 #include <filesystem>
 #include <fstream>
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -29,7 +32,9 @@
 #include <cstdlib>
 #include <functional>
 #include <memory>
+#include <sstream>
 #include <thread>
+#include <utility>
 
 #include <omp.h>
 
@@ -62,6 +67,11 @@ float lastFrame = 0.0f;
 AppMode currentMode = MODE_CUBE;
 std::vector<std::string> modelFiles;  // replaces stlFiles: holds .stl + .3mf
 float panelWidth = 600.0f;
+float pendingInspectorWheel = 0.0f;
+static std::optional<ui_interaction::KeyIntent> g_pendingKeyIntent;
+static float g_contentScale = 1.0f;
+static bool g_reducedMotion = false;
+static bool g_helpOpen = false;
 int modelListPage = 0;          // current page index for the model file list
 static constexpr int kModelsPerPage = 6;
 
@@ -216,7 +226,34 @@ void scroll_callback(GLFWwindow* window, double xoffset, double yoffset);
 void mouse_button_callback(GLFWwindow* window, int button, int action, int mods);
 void char_callback(GLFWwindow* window, unsigned int codepoint);
 void key_callback(GLFWwindow* window, int key, int scancode, int action, int mods);
+void content_scale_callback(GLFWwindow* window, float xscale, float yscale);
 void processInput(GLFWwindow* window);
+
+static ui_interaction::Key mapGlfwKey(int key) {
+    switch (key) {
+    case GLFW_KEY_TAB: return ui_interaction::Key::Tab;
+    case GLFW_KEY_ENTER:
+    case GLFW_KEY_KP_ENTER: return ui_interaction::Key::Enter;
+    case GLFW_KEY_SPACE: return ui_interaction::Key::Space;
+    case GLFW_KEY_LEFT: return ui_interaction::Key::Left;
+    case GLFW_KEY_RIGHT: return ui_interaction::Key::Right;
+    case GLFW_KEY_UP: return ui_interaction::Key::Up;
+    case GLFW_KEY_DOWN: return ui_interaction::Key::Down;
+    case GLFW_KEY_ESCAPE: return ui_interaction::Key::Escape;
+    default: return ui_interaction::Key::Other;
+    }
+}
+
+static bool systemPrefersReducedMotion() {
+#if defined(_WIN32) && defined(SPI_GETCLIENTAREAANIMATION)
+    BOOL animationsEnabled = TRUE;
+    if (SystemParametersInfoW(
+            SPI_GETCLIENTAREAANIMATION, 0, &animationsEnabled, 0) != FALSE) {
+        return animationsEnabled == FALSE;
+    }
+#endif
+    return false;
+}
 
 // =============================================================================
 // Async compute jobs. One background worker at a time runs the heavy stages
@@ -232,6 +269,7 @@ struct ComputeJob {
     std::atomic<bool>   done{false};
     std::atomic<float>  progress{-1.0f};   // <0 = indeterminate (animated stripe)
     std::string         title;
+    ui_design::ActiveComputation activity = ui_design::ActiveComputation::Idle;
     bool                cancellable = true;
     bool                okResult    = false;
     std::function<bool()> work;                            // worker thread
@@ -241,11 +279,13 @@ struct ComputeJob {
 static ComputeJob g_job;
 static bool computeBusy() { return g_job.running.load(); }
 
-static void startComputeJob(FEAModel& model, const std::string& title, bool cancellable,
+static void startComputeJob(FEAModel& model, const std::string& title,
+                            bool cancellable,
                             std::function<bool()> work,
                             std::function<void(bool, bool)> finalize) {
     if (computeBusy()) return;
     g_job.title       = title;
+    g_job.activity    = ui_design::activeComputationForJobTitle(title);
     g_job.cancel      = false;
     g_job.done        = false;
     g_job.progress    = -1.0f;
@@ -305,37 +345,55 @@ static void startComputeJob(FEAModel& model, const std::string& title, bool canc
     });
 }
 
-// Bottom-left sliding progress panel — shared by compute jobs, startup and
+// Bottom-left sliding progress surface — shared by compute jobs, startup and
 // shutdown. progress < 0 renders an animated indeterminate stripe. Returns
-// true when the cancel X was clicked.
+// true when the labeled cancel action was clicked.
 static bool drawProgressPanel(SimpleUI& ui, const std::string& title, float progress,
-                              bool showCancel, float slideT, double now) {
-    const float w = 360.0f, h = 62.0f, xBase = 12.0f;
-    const float yShown = static_cast<float>(scrHeight) - h - 12.0f;
+                               bool showCancel, float slideT, double now) {
+    const ui_design::Rect viewport{
+        0.0f, 44.0f, static_cast<float>(scrWidth) - panelWidth,
+        static_cast<float>(scrHeight) - 44.0f};
+    const auto shownLayout = ui_design::computeViewportOverlayLayout(
+        viewport, static_cast<float>(scrHeight), 0.0f, 0, true);
+    const float w = shownLayout.progress.w;
+    const float h = shownLayout.progress.h;
+    const float xBase = shownLayout.progress.x;
+    const float yShown = shownLayout.progress.y;
     float t = slideT < 0.0f ? 0.0f : (slideT > 1.0f ? 1.0f : slideT);
-    t = 1.0f - (1.0f - t) * (1.0f - t);                       // ease-out slide
+    t = 1.0f - (1.0f - t) * (1.0f - t);                       // 220 ms ease-out
     const float yHidden = static_cast<float>(scrHeight) + 8.0f;
     const float y = yHidden - (yHidden - yShown) * t;
 
-    ui.drawRectA(xBase, y, w, h, glm::vec3(0.10f, 0.11f, 0.13f), 0.92f);
-    ui.drawRect(xBase, y, w, 2.0f, glm::vec3(0.3f, 0.6f, 0.9f));
-    ui.drawText(title, xBase + 12.0f, y + 9.0f, 8.0f, glm::vec3(0.85f, 0.9f, 1.0f));
+    const ui_design::Rect surface{xBase, y, w, h};
+    ui.drawShadow(surface, 14.0f, 1.0f);
+    ui.drawRoundedRect(surface, 14.0f,
+                       ui.themeColor(ui_design::ColorToken::SnowSurface, 0.94f));
+    ui.drawText(title, xBase + 16.0f, y + 25.0f, 13.0f,
+                ui.themeColor(ui_design::ColorToken::PrimaryInk),
+                ui_design::FontRole::Interface);
 
     bool cancelClicked = false;
-    if (showCancel &&
-        ui.button("X", xBase + w - 27.0f, y + 6.0f, 20.0f, 20.0f))
-        cancelClicked = true;
+    if (showCancel) {
+        cancelClicked = ui.button(
+            ui_design::ControlId::CancelJob, "Cancel",
+            {xBase + w - 88.0f, y + 9.0f, 72.0f, 34.0f},
+            ui_design::ControlRole::Destructive);
+    }
 
-    const float barX = xBase + 12.0f, barW = w - 24.0f;
-    const float barY = y + 34.0f,     barH = 16.0f;
-    ui.drawRect(barX, barY, barW, barH, glm::vec3(0.20f, 0.21f, 0.24f));
+    const float barX = xBase + 16.0f, barW = w - 32.0f;
+    const float barY = y + 57.0f,     barH = 6.0f;
+    ui.drawRoundedRect({barX, barY, barW, barH}, 3.0f,
+                       ui.themeColor(ui_design::ColorToken::PrimaryInk, 0.12f));
     if (progress >= 0.0f) {
-        const float p = progress > 1.0f ? 1.0f : progress;
+        const float p = std::clamp(progress, 0.0f, 1.0f);
         if (p > 0.0f)
-            ui.drawRect(barX, barY, barW * p, barH, glm::vec3(0.30f, 0.70f, 0.90f));
+            ui.drawRoundedRect({barX, barY, barW * p, barH}, 3.0f,
+                               ui.themeColor(ui_design::ColorToken::SystemBlue));
         char pct[16];
-        snprintf(pct, sizeof(pct), "%d", static_cast<int>(p * 100.0f + 0.5f));
-        ui.drawText(pct, barX + barW - 34.0f, barY + 4.0f, 7.5f, glm::vec3(0.95f));
+        snprintf(pct, sizeof(pct), "%d%%", static_cast<int>(p * 100.0f + 0.5f));
+        ui.drawText(pct, barX + barW - 42.0f, barY + 17.0f, 11.0f,
+                    ui.themeColor(ui_design::ColorToken::Graphite),
+                    ui_design::FontRole::Data);
     } else {
         // Indeterminate: a stripe sweeping the bar.
         const float stripeW = barW * 0.25f;
@@ -344,7 +402,8 @@ static bool drawProgressPanel(SimpleUI& ui, const std::string& title, float prog
         const float s0 = std::max(sx, barX);
         const float s1 = std::min(sx + stripeW, barX + barW);
         if (s1 > s0)
-            ui.drawRect(s0, barY, s1 - s0, barH, glm::vec3(0.30f, 0.70f, 0.90f));
+            ui.drawRoundedRect({s0, barY, s1 - s0, barH}, 3.0f,
+                               ui.themeColor(ui_design::ColorToken::SystemBlue));
     }
     return cancelClicked;
 }
@@ -361,7 +420,8 @@ static bool drawProgressPanel(SimpleUI& ui, const std::string& title, float prog
 // viewport rather than another widget: dark slate/navy text straight on the
 // light background, with a hairline under the active row carrying its bar.
 // =============================================================================
-static void drawSolverStatusOverlay(SimpleUI& ui, float viewportRight) {
+static void drawSolverStatusOverlay(
+    SimpleUI& ui, const ui_design::Rect& viewport, bool showProgress) {
     std::string runLabel;
     double      runElapsed = 0.0;
     std::vector<SolverStatus::Stage> stages = SolverStatus::snapshot(&runLabel, &runElapsed);
@@ -401,13 +461,13 @@ static void drawSolverStatusOverlay(SimpleUI& ui, float viewportRight) {
             stages.erase(stages.begin(), stages.end() - kMaxRows);
     }
 
-    const float fs   = 7.5f;              // glyph size
-    const float cw   = fs * 1.2f;         // SimpleUI's fixed advance per char
-    const float lh   = 15.0f;             // line height
+    const float fs   = 11.0f;
+    const float cw   = fs * 0.58f;
+    const float lh   = 18.0f;
     const float rowN = static_cast<float>(stages.size()) + 1.0f;   // + header
 
     // Build every row's text first so the block can be right-aligned as a unit.
-    struct Row { std::string text; glm::vec3 col; float bar; };
+    struct Row { std::string text; ui_design::ColorToken color; float opacity; float bar; };
     std::vector<Row> rows;
     rows.reserve(stages.size() + 1);
 
@@ -415,7 +475,7 @@ static void drawSolverStatusOverlay(SimpleUI& ui, float viewportRight) {
         char hb[128];
         snprintf(hb, sizeof(hb), "%s   %.1fS",
                  runLabel.empty() ? "SOLVER" : runLabel.c_str(), runElapsed);
-        rows.push_back({hb, glm::vec3(0.05f, 0.12f, 0.30f), -1.0f});
+        rows.push_back({hb, ui_design::ColorToken::PrimaryInk, 1.0f, -1.0f});
     }
 
     for (const auto& s : stages) {
@@ -454,29 +514,45 @@ static void drawSolverStatusOverlay(SimpleUI& ui, float viewportRight) {
                  indent, "", running ? '>' : ' ',
                  s.label.c_str(), devBuf, stat, span, s.detail.c_str());
 
-        glm::vec3 col;
+        ui_design::ColorToken color = ui_design::ColorToken::Graphite;
+        float opacity = 0.88f;
         switch (s.state) {
-            case SolverStatus::State::Active:    col = glm::vec3(0.07f, 0.21f, 0.50f); break;
-            case SolverStatus::State::Queued:    col = glm::vec3(0.56f, 0.59f, 0.63f); break;
+            case SolverStatus::State::Active:
+                color = ui_design::ColorToken::SystemBlue;
+                opacity = 1.0f;
+                break;
+            case SolverStatus::State::Queued:
+                color = ui_design::ColorToken::Graphite;
+                opacity = 0.66f;
+                break;
             case SolverStatus::State::Failed:
-            case SolverStatus::State::Cancelled: col = glm::vec3(0.55f, 0.16f, 0.14f); break;
-            default:                             col = glm::vec3(0.34f, 0.39f, 0.46f); break;
+            case SolverStatus::State::Cancelled:
+                color = ui_design::ColorToken::BlockedRed;
+                opacity = 1.0f;
+                break;
+            default:
+                break;
         }
-        rows.push_back({line, col, running ? s.progress : -1.0f});
+        rows.push_back({line, color, opacity, running ? s.progress : -1.0f});
     }
 
     size_t maxLen = 0;
     for (const auto& r : rows) maxLen = std::max(maxLen, r.text.size());
     const float blockW = static_cast<float>(maxLen) * cw;
-    const float x0     = std::max(12.0f, viewportRight - 16.0f - blockW);
-    float       y      = static_cast<float>(scrHeight) - 14.0f - rowN * lh;
+    const auto overlayLayout = ui_design::computeViewportOverlayLayout(
+        viewport, static_cast<float>(scrHeight), blockW,
+        static_cast<int>(rowN), showProgress);
+    const float x0 = overlayLayout.solverStatus.x;
+    float y = overlayLayout.solverStatus.y;
 
     for (const auto& r : rows) {
-        ui.drawText(r.text, x0, y, fs, r.col);
+        ui.drawText(r.text, x0, y + fs, fs, ui.themeColor(r.color, r.opacity),
+                    ui_design::FontRole::Data);
         if (r.bar >= 0.0f) {
             // Hairline progress rule under the active row — a line, not a box.
             const float bw = blockW * std::min(1.0f, r.bar);
-            ui.drawRect(x0, y + fs + 3.0f, bw, 1.5f, glm::vec3(0.15f, 0.40f, 0.72f));
+            ui.drawRoundedRect({x0, y + fs + 4.0f, bw, 2.0f}, 1.0f,
+                               ui.themeColor(ui_design::ColorToken::SystemBlue));
         }
         y += lh;
     }
@@ -517,6 +593,176 @@ bool projectToScreen(const glm::vec3& point, const glm::mat4& view, const glm::m
     return true;
 }
 
+void drawInspectorTabs(
+    SimpleUI& ui, ui_interaction::InspectorState& state,
+    const ui_design::Rect& inspectorRect) {
+    const std::vector<ui_design::WidgetId> ids{
+        {ui_design::ControlId::SelectModelTab, 0},
+        {ui_design::ControlId::SelectMeshTab, 0},
+        {ui_design::ControlId::SelectSolveTab, 0},
+    };
+    const std::vector<std::string> labels{"Model", "Mesh", "Solve"};
+    int selected = static_cast<int>(state.activeTab);
+    const ui_design::Rect tabs{
+        inspectorRect.x + 16.0f, inspectorRect.y + 12.0f,
+        inspectorRect.w - 32.0f, 36.0f};
+    if (ui.segmentedControl(ids, tabs, labels, selected)) {
+        if (selected == 0) {
+            ui_action_wiring::invokeInspectorAction<
+                ui_action_wiring::InspectorAction::SelectModelTab>(
+                    ids[0], [&](const auto&) {
+                        ui_interaction::selectTab(
+                            state, ui_design::InspectorTab::Model);
+                    });
+        } else if (selected == 1) {
+            ui_action_wiring::invokeInspectorAction<
+                ui_action_wiring::InspectorAction::SelectMeshTab>(
+                    ids[1], [&](const auto&) {
+                        ui_interaction::selectTab(
+                            state, ui_design::InspectorTab::Mesh);
+                    });
+        } else {
+            ui_action_wiring::invokeInspectorAction<
+                ui_action_wiring::InspectorAction::SelectSolveTab>(
+                    ids[2], [&](const auto&) {
+                        ui_interaction::selectTab(
+                            state, ui_design::InspectorTab::Solve);
+                    });
+        }
+    }
+}
+
+std::optional<AppMode> drawModeSegment(
+    SimpleUI& ui, AppMode mode, const ui_design::Rect& rect) {
+    const std::vector<ui_design::WidgetId> ids{
+        {ui_design::ControlId::SelectCubeMode, 0},
+        {ui_design::ControlId::SelectImportMode, 0},
+    };
+    const std::vector<std::string> labels{"Cube", "Import"};
+    int selected = mode == MODE_CUBE ? 0 : 1;
+    if (!ui.segmentedControl(ids, rect, labels, selected)) {
+        return std::nullopt;
+    }
+    return selected == 0 ? MODE_CUBE : MODE_IMPORT;
+}
+
+std::optional<int> drawSelectableRows(
+    SimpleUI& ui, ui_design::ControlId family,
+    const std::vector<std::string>& labels, int firstIndex, int activeIndex,
+    const ui_design::Rect& rect, float rightAccessoryWidth = 0.0f) {
+    constexpr float rowHeight = 32.0f;
+    constexpr float rowGap = 6.0f;
+    const int rowCount = std::max(
+        0, static_cast<int>((rect.h + rowGap) / (rowHeight + rowGap)));
+    const int lastIndex = std::min(
+        firstIndex + rowCount, static_cast<int>(labels.size()));
+    for (int index = std::max(0, firstIndex); index < lastIndex; ++index) {
+        const int row = index - firstIndex;
+        const ui_design::Rect rowRect{
+            rect.x, rect.y + static_cast<float>(row) * (rowHeight + rowGap),
+            rect.w, rowHeight};
+        const ui_design::WidgetId id{family, index};
+        constexpr float rowTextSize = 12.16f;
+        const float labelWidth = std::max(
+            0.0f, rowRect.w - rightAccessoryWidth - 16.0f);
+        const auto label = ui_design::presentLongLabel(
+            labels[static_cast<std::size_t>(index)], labelWidth, rowTextSize);
+        if (ui.button(id, label.visible, rowRect,
+                      ui_design::ControlRole::Secondary, index == activeIndex,
+                      false, rightAccessoryWidth)) {
+            return index;
+        }
+        if (label.truncated && ui.pointerOver(rowRect)) {
+            ui.queueTooltip(label.full, rowRect);
+        }
+    }
+    return std::nullopt;
+}
+
+std::vector<std::string> wrapReceiptValue(
+    std::string_view value, std::size_t maxCharacters) {
+    std::vector<std::string> lines;
+    std::string current;
+    std::istringstream words{std::string(value)};
+    std::string word;
+    while (words >> word) {
+        if (!current.empty() && current.size() + 1 + word.size() > maxCharacters) {
+            lines.push_back(current);
+            current.clear();
+        }
+        if (!current.empty()) current += ' ';
+        current += word;
+    }
+    if (!current.empty()) lines.push_back(current);
+    if (lines.empty()) lines.emplace_back();
+    return lines;
+}
+
+float drawReceipt(
+    SimpleUI& ui, const std::vector<ui_design::ReceiptLine>& lines,
+    float x, float y, float width) {
+    constexpr float horizontalInset = 14.0f;
+    constexpr float topInset = 10.0f;
+    constexpr float labelHeight = 14.0f;
+    constexpr float valueHeight = 15.0f;
+    constexpr float rowGap = 8.0f;
+    const std::size_t maxCharacters = static_cast<std::size_t>(
+        std::max(20.0f, (width - 2.0f * horizontalInset) / 5.8f));
+
+    std::vector<std::vector<std::string>> wrappedValues;
+    wrappedValues.reserve(lines.size());
+    float height = topInset * 2.0f;
+    for (const auto& line : lines) {
+        wrappedValues.push_back(wrapReceiptValue(line.value, maxCharacters));
+        height += labelHeight +
+                  valueHeight * static_cast<float>(wrappedValues.back().size()) +
+                  rowGap;
+    }
+    if (!lines.empty()) height -= rowGap;
+
+    const ui_design::Rect receiptRect{x, y, width, height};
+    ui.drawRoundedRect(receiptRect, 10.0f,
+                       ui.themeColor(ui_design::ColorToken::PrimaryInk, 0.08f));
+    ui.drawRoundedRect({x, y, 3.0f, height}, 1.5f,
+                       ui.themeColor(ui_design::ColorToken::SystemBlue));
+
+    float cursorY = y + topInset;
+    for (std::size_t index = 0; index < lines.size(); ++index) {
+        const auto& line = lines[index];
+        ui.drawText(line.label, x + horizontalInset, cursorY + 10.0f, 11.0f,
+                    ui.themeColor(ui_design::ColorToken::Graphite),
+                    ui_design::FontRole::Interface);
+        cursorY += labelHeight;
+
+        ui_design::ColorToken valueToken = ui_design::ColorToken::PrimaryInk;
+        if (line.tone == ui_design::ReceiptTone::Available) {
+            valueToken = ui_design::ColorToken::SystemBlue;
+        } else if (line.tone == ui_design::ReceiptTone::Approximate) {
+            valueToken = ui_design::ColorToken::Graphite;
+        } else if (line.tone == ui_design::ReceiptTone::Blocked) {
+            valueToken = ui_design::ColorToken::BlockedRed;
+        }
+        for (const auto& valueLine : wrappedValues[index]) {
+            ui.drawText(valueLine, x + horizontalInset, cursorY + 11.0f, 11.0f,
+                        ui.themeColor(valueToken), ui_design::FontRole::Data);
+            cursorY += valueHeight;
+        }
+        cursorY += rowGap;
+    }
+    return y + height + 12.0f;
+}
+
+template <ui_action_wiring::InspectorAction Action, typename Callback>
+bool dispatchInspectorAction(ui_design::WidgetId widget, Callback callback) {
+    return ui_action_wiring::invokeInspectorAction<Action>(widget, callback);
+}
+
+template <ui_action_wiring::InspectorAction Action, typename Callback>
+bool dispatchInspectorValue(
+    ui_design::WidgetId widget, double value, Callback callback) {
+    return ui_action_wiring::invokeInspectorValue<Action>(widget, value, callback);
+}
+
 int runInteractive() {
     glfwInit();
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
@@ -541,6 +787,7 @@ int runInteractive() {
     glfwSetMouseButtonCallback(window, mouse_button_callback);
     glfwSetCharCallback(window, char_callback);   // magnitude field
     glfwSetKeyCallback(window, key_callback);
+    glfwSetWindowContentScaleCallback(window, content_scale_callback);
     glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
 
     if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) { return -1; }
@@ -553,8 +800,16 @@ int runInteractive() {
 
     // Boot with a visible progress bar: the UI shader comes up first so every
     // remaining init stage can render a frame into the bottom-left panel.
+    float xScale = 1.0f;
+    float yScale = 1.0f;
+    glfwGetWindowContentScale(window, &xScale, &yScale);
+    g_contentScale = ui_interaction::effectiveContentScale(xScale, yScale);
+    g_reducedMotion = systemPrefersReducedMotion();
     SimpleUI ui;
-    ui.init(scrWidth, scrHeight);
+    ui.init(scrWidth, scrHeight, g_contentScale);
+    ui.setReducedMotion(g_reducedMotion);
+    ui_interaction::InspectorState inspectorState;
+    std::array<float, 3> inspectorContentHeights{0.0f, 0.0f, 0.0f};
     drawBootFrame(window, ui, "STARTING: COMPILING SHADERS", 0.15f);
 
     BuiltInShader schematicShader(modelVS, modelFS);
@@ -602,7 +857,8 @@ int runInteractive() {
             glfwWaitEvents();
             continue;
         }
-        scrWidth = w; scrHeight = h; ui.resize(scrWidth, scrHeight);
+        scrWidth = w; scrHeight = h;
+        ui.resize(scrWidth, scrHeight, g_contentScale);
         processInput(window);
 
         // Async job completion: join the worker here and run the finalize step
@@ -661,15 +917,25 @@ int runInteractive() {
         model.drawSectionPlane(schematicShader);     // sectional-view cut plane
 
         glDisable(GL_DEPTH_TEST);
-        float panelW = panelWidth; float panelX = scrWidth - panelW;
-        float halfW  = panelW * 0.5f;
-        float divX   = panelX + halfW;
+        const ui_design::WindowLayout uiLayout = ui_design::computeWindowLayout(
+            static_cast<int>(scrWidth), static_cast<int>(scrHeight));
+        panelWidth = uiLayout.inspector.w;
+        const float panelW = uiLayout.inspector.w;
+        const float panelX = uiLayout.inspector.x;
+        const std::string documentTitle = model.loadedFileName.empty()
+            ? "PolyFEA"
+            : "PolyFEA | " + fs::path(model.loadedFileName).filename().string();
+        const ui_design::Rect inspectorContentRect{
+            uiLayout.inspector.x + 16.0f,
+            uiLayout.inspector.y + 60.0f,
+            uiLayout.inspector.w - 32.0f,
+            uiLayout.inspector.h - 76.0f};
 
         auto drawAxisLabel = [&](const glm::vec3& point, const char* axisName, float axisValue, const glm::vec3& color) {
             float sx = 0.0f;
             float sy = 0.0f;
             if (!projectToScreen(point, view, projection, sx, sy)) return;
-            if (sx >= panelX - 70.0f) return;
+            if (sx >= uiLayout.viewport.x + uiLayout.viewport.w - 70.0f) return;
             char label[64];
             snprintf(label, sizeof(label), "%s %.3f", axisName, axisValue);
             ui.drawText(label, sx + 6.0f, sy - 6.0f, 8.0f, color);
@@ -679,194 +945,420 @@ int runInteractive() {
         drawAxisLabel(glm::vec3(0.0f, axisLengths.y, 0.0f), "Y", axisLengths.y, glm::vec3(0.35f, 1.0f, 0.35f));
         drawAxisLabel(glm::vec3(0.0f, 0.0f, axisLengths.z), "Z", axisLengths.z, glm::vec3(0.35f, 0.7f, 1.0f));
 
-        // While a compute job runs the whole control panel is render-only:
-        // widgets ignore input and a dim overlay signals "computation running".
+        auto frameKeyIntent = std::exchange(g_pendingKeyIntent, std::nullopt);
+        if (frameKeyIntent == ui_interaction::KeyIntent::Cancel) {
+            switch (ui_interaction::resolveEscape(
+                computeBusy(), g_job.cancellable, g_helpOpen)) {
+            case ui_interaction::EscapeAction::CancelJob:
+                dispatchInspectorAction<
+                    ui_action_wiring::InspectorAction::CancelJob>(
+                    {ui_design::ControlId::CancelJob, 0}, [&](const auto&) {
+                        g_job.cancel = true;
+                        std::cout << "[JOB] cancel requested by keyboard."
+                                  << std::endl;
+                    });
+                break;
+            case ui_interaction::EscapeAction::CloseHelp:
+                g_helpOpen = false;
+                break;
+            case ui_interaction::EscapeAction::CloseWindow:
+                glfwSetWindowShouldClose(window, GLFW_TRUE);
+                break;
+            case ui_interaction::EscapeAction::None:
+                break;
+            }
+            frameKeyIntent.reset();
+        }
+        ui.beginInteractionFrame(frameKeyIntent);
+        ui.setInputLocked(false);
+        ui.drawRoundedRect(uiLayout.titleBar, 0.0f,
+                           ui.themeColor(ui_design::ColorToken::SnowSurface, 0.96f));
+        const auto readiness = ui_design::makeTitleReadiness(
+            model.hasVolumetricMesh,
+            busy ? g_job.activity : ui_design::ActiveComputation::Idle,
+            model.hasDeformation);
+        const float resetWidth = 112.0f;
+        const float helpWidth = g_helpOpen ? 104.0f : 76.0f;
+        const float resetX = static_cast<float>(scrWidth) - resetWidth - 12.0f;
+        const float helpX = resetX - helpWidth - 8.0f;
+        const float readinessX = std::max(300.0f, helpX - 224.0f);
+        const ui_design::Rect titleBounds{
+            54.0f, 5.0f, std::max(0.0f, readinessX - 70.0f), 34.0f};
+        const auto titlePresentation = ui_design::presentLongLabel(
+            documentTitle, titleBounds.w, 15.0f);
+        ui.drawText(titlePresentation.visible, 54.0f, 28.0f, 15.0f,
+                    ui.themeColor(ui_design::ColorToken::PrimaryInk),
+                    ui_design::FontRole::Display);
+        if (titlePresentation.truncated && ui.pointerOver(titleBounds)) {
+            ui.queueTooltip(titlePresentation.full, titleBounds);
+        }
+        ui.drawText(readiness.mesh, readinessX, 18.0f, 11.0f,
+                    ui.themeColor(readiness.meshActive
+                        ? ui_design::ColorToken::SystemBlue
+                        : ui_design::ColorToken::Graphite),
+                    ui_design::FontRole::Interface);
+        ui.drawText(readiness.solve, readinessX, 34.0f, 11.0f,
+                    ui.themeColor(readiness.solveActive
+                        ? ui_design::ColorToken::SystemBlue
+                        : ui_design::ColorToken::Graphite),
+                    ui_design::FontRole::Interface);
+        if (ui.button(ui_design::ControlId::OpenHelp,
+                      g_helpOpen ? "Close help" : "Help",
+                      {helpX, 5.0f, helpWidth, 34.0f},
+                      ui_design::ControlRole::Ghost, g_helpOpen)) {
+            dispatchInspectorAction<ui_action_wiring::InspectorAction::OpenHelp>(
+                {ui_design::ControlId::OpenHelp, 0},
+                [&](const auto&) { g_helpOpen = !g_helpOpen; });
+        }
+        if (ui.button(ui_design::ControlId::ResetView, "Reset view",
+                      {resetX, 5.0f, resetWidth, 34.0f},
+                      ui_design::ControlRole::Secondary)) {
+            dispatchInspectorAction<ui_action_wiring::InspectorAction::ResetView>(
+                {ui_design::ControlId::ResetView, 0}, [&](const auto&) {
+                    camera.OrbitTarget = glm::vec3(0.0f);
+                    camera.OrbitRadius = 5.0f;
+                    camera.UpdatePosition();
+                });
+        }
+
+        // While a compute job runs the inspector is render-only: widgets
+        // ignore input and a dim overlay signals "computation running".
         ui.setInputLocked(busy);
+        ui.drawRoundedRect(uiLayout.inspector, 0.0f,
+                           ui.themeColor(ui_design::ColorToken::SnowSurface, 0.96f));
+        drawInspectorTabs(ui, inspectorState, uiLayout.inspector);
 
-        ui.drawRect(panelX, 0, panelW, scrHeight, glm::vec3(0.1f, 0.1f, 0.1f));
-        ui.drawRect(panelX, 0, 2, scrHeight, glm::vec3(0.3f, 0.3f, 0.3f));
-        ui.drawRect(divX, 0, 2, scrHeight, glm::vec3(0.22f, 0.22f, 0.22f));
+        const std::size_t activeTabIndex =
+            static_cast<std::size_t>(inspectorState.activeTab);
+        inspectorState.scrollOffset[activeTabIndex] = ui_interaction::applyScroll(
+            inspectorState.scrollOffset[activeTabIndex], pendingInspectorWheel,
+            inspectorContentHeights[activeTabIndex], inspectorContentRect.h);
+        pendingInspectorWheel = 0.0f;
+        const float inspectorContentY = inspectorContentRect.y -
+                                        inspectorState.scrollOffset[activeTabIndex];
+        ui.pushClip(inspectorContentRect);
 
-        // ===== LEFT COLUMN: LOADING =====
-        float lX = panelX + 15.0f;
-        float lW = halfW - 25.0f;
-        float lY = 18.0f;
+        // ===== MODEL TAB =====
+        float lX = inspectorContentRect.x;
+        float lW = inspectorContentRect.w;
+        float lY = inspectorContentY;
 
-        ui.drawText("FEA PRE-PROCESSOR", lX, lY, 13.0f, glm::vec3(0.5f, 0.8f, 1.0f)); lY += 22.0f;
-        ui.drawText("MODE: CAD ORBIT", lX, lY, 9.0f, glm::vec3(0.3f, 1.0f, 0.3f)); lY += 20.0f;
-        ui.drawRect(lX, lY, lW, 1.5f, glm::vec3(0.3f)); lY += 12.0f;
+        if (inspectorState.activeTab == ui_design::InspectorTab::Model) {
+            ui.drawText("Model", lX, lY + 18.0f, 18.0f,
+                        ui.themeColor(ui_design::ColorToken::PrimaryInk),
+                        ui_design::FontRole::Display);
+            lY += 34.0f;
+            ui.drawText("MODE: CAD ORBIT", lX, lY + 13.0f, 12.0f,
+                        ui.themeColor(ui_design::ColorToken::Graphite),
+                        ui_design::FontRole::Interface);
+            lY += 24.0f;
 
-        ui.drawText("LOAD MODEL", lX, lY, 9.5f, glm::vec3(0.65f, 0.65f, 0.65f)); lY += 20.0f;
-        float lBtnH = lW * 0.5f - 3.0f;
-        if (ui.button("CUBE MODE", lX, lY, lBtnH, 22.0f, currentMode == MODE_CUBE)) {
-            currentMode = MODE_CUBE;
-            model.needsUpdate = true;
-            camera.OrbitTarget = glm::vec3(0.0f);
-            camera.OrbitRadius = 5.0f;
-            camera.UpdatePosition();
-        }
-        if (ui.button("IMPORT FILE", lX + lBtnH + 6.0f, lY, lBtnH, 22.0f, currentMode == MODE_IMPORT)) {
-            currentMode = MODE_IMPORT;
-            scanForModels();
-            modelListPage = 0;
-        }
-        lY += 30.0f;
+            if (const auto selected = drawModeSegment(
+                    ui, currentMode, {lX, lY, lW, 36.0f})) {
+                if (*selected == MODE_CUBE) {
+                    dispatchInspectorAction<
+                        ui_action_wiring::InspectorAction::SelectCubeMode>(
+                        {ui_design::ControlId::SelectCubeMode, 0}, [&](const auto&) {
+                        currentMode = MODE_CUBE;
+                        model.needsUpdate = true;
+                        camera.OrbitTarget = glm::vec3(0.0f);
+                        camera.OrbitRadius = 5.0f;
+                        camera.UpdatePosition();
+                    });
+                } else {
+                    dispatchInspectorAction<
+                        ui_action_wiring::InspectorAction::SelectImportMode>(
+                        {ui_design::ControlId::SelectImportMode, 0}, [&](const auto&) {
+                        currentMode = MODE_IMPORT;
+                        scanForModels();
+                        modelListPage = 0;
+                    });
+                }
+            }
+            lY += 52.0f;
 
-        if (currentMode == MODE_IMPORT) {
-            if (modelFiles.empty()) {
-                ui.drawText("NO MODELS FOUND", lX, lY, 9.0f, glm::vec3(1.0f, 0.2f, 0.2f)); lY += 15.0f;
-                ui.drawText("(place .stl / .3mf / .step here)", lX, lY, 7.5f, glm::vec3(0.5f)); lY += 20.0f;
-            } else {
-                int totalPages = ((int)modelFiles.size() + kModelsPerPage - 1) / kModelsPerPage;
-                // Clamp page in case the file list shrank after a rescan
-                if (modelListPage >= totalPages) modelListPage = totalPages - 1;
-                if (modelListPage < 0)           modelListPage = 0;
+            if (currentMode == MODE_CUBE) {
+                if (ui.sliderField(ui_design::ControlId::EditSizeX, "X size",
+                                   model.params.sizeX, 0.1f, 10.0f,
+                                   {lX, lY, lW, 48.0f},
+                                   ui_design::formatValue(
+                                       model.params.sizeX, 3, false, "mm"))) {
+                    dispatchInspectorValue<
+                        ui_action_wiring::InspectorAction::EditSizeX>(
+                        {ui_design::ControlId::EditSizeX, 0},
+                        model.params.sizeX,
+                        [&](const auto&) { model.needsUpdate = true; });
+                }
+                lY += 60.0f;
+                if (ui.sliderField(ui_design::ControlId::EditSizeY, "Y size",
+                                   model.params.sizeY, 0.1f, 5.0f,
+                                   {lX, lY, lW, 48.0f},
+                                   ui_design::formatValue(
+                                       model.params.sizeY, 3, false, "mm"))) {
+                    dispatchInspectorValue<
+                        ui_action_wiring::InspectorAction::EditSizeY>(
+                        {ui_design::ControlId::EditSizeY, 0},
+                        model.params.sizeY,
+                        [&](const auto&) { model.needsUpdate = true; });
+                }
+                lY += 60.0f;
+                if (ui.sliderField(ui_design::ControlId::EditSizeZ, "Z size",
+                                   model.params.sizeZ, 0.1f, 5.0f,
+                                   {lX, lY, lW, 48.0f},
+                                   ui_design::formatValue(
+                                       model.params.sizeZ, 3, false, "mm"))) {
+                    dispatchInspectorValue<
+                        ui_action_wiring::InspectorAction::EditSizeZ>(
+                        {ui_design::ControlId::EditSizeZ, 0},
+                        model.params.sizeZ,
+                        [&](const auto&) { model.needsUpdate = true; });
+                }
+                lY += 60.0f;
+                if (ui.sliderField(
+                        ui_design::ControlId::EditSubdivisions, "Subdivisions",
+                        model.params.subdivisions, 1.0f, 20.0f,
+                        {lX, lY, lW, 48.0f},
+                        ui_design::formatValue(
+                            model.params.subdivisions, 0, false, ""))) {
+                    dispatchInspectorValue<
+                        ui_action_wiring::InspectorAction::EditSubdivisions>(
+                        {ui_design::ControlId::EditSubdivisions, 0},
+                        model.params.subdivisions,
+                        [&](const auto&) { model.needsUpdate = true; });
+                }
+                lY += 60.0f;
+            }
 
-                int firstIdx = modelListPage * kModelsPerPage;
-                int lastIdx  = std::min(firstIdx + kModelsPerPage, (int)modelFiles.size());
+            if (currentMode == MODE_IMPORT) {
+                ui.drawText("MODEL FILE", lX, lY + 12.0f, 12.0f,
+                            ui.themeColor(ui_design::ColorToken::Graphite),
+                            ui_design::FontRole::Interface);
+                lY += 24.0f;
+                if (modelFiles.empty()) {
+                    ui.drawText("No models found", lX, lY + 14.0f, 13.0f,
+                                ui.themeColor(ui_design::ColorToken::BlockedRed),
+                                ui_design::FontRole::Interface);
+                    lY += 22.0f;
+                    ui.drawText("Place .stl / .3mf / .step here", lX, lY + 12.0f, 11.0f,
+                                ui.themeColor(ui_design::ColorToken::Graphite),
+                                ui_design::FontRole::Interface);
+                    lY += 28.0f;
+                } else {
+                    const int totalPages =
+                        (static_cast<int>(modelFiles.size()) + kModelsPerPage - 1) /
+                        kModelsPerPage;
+                    if (modelListPage >= totalPages) modelListPage = totalPages - 1;
+                    if (modelListPage < 0) modelListPage = 0;
 
-                for (int i = firstIdx; i < lastIdx; ++i) {
-                    const std::string& file = modelFiles[i];
-                    std::string display = fs::path(file).filename().string();
-                    bool isActive = !model.loadedFileName.empty() &&
-                                    (file == model.loadedFileName ||
-                                     display == fs::path(model.loadedFileName).filename().string());
+                    const int firstIdx = modelListPage * kModelsPerPage;
+                    const int lastIdx = std::min(
+                        firstIdx + kModelsPerPage, static_cast<int>(modelFiles.size()));
+                    std::vector<std::string> modelLabels;
+                    modelLabels.reserve(modelFiles.size());
+                    int activeModelIndex = -1;
+                    for (int i = 0; i < static_cast<int>(modelFiles.size()); ++i) {
+                        const std::string display = fs::path(modelFiles[i]).filename().string();
+                        modelLabels.push_back(display);
+                        const bool isActive = !model.loadedFileName.empty() &&
+                            (modelFiles[i] == model.loadedFileName ||
+                             display == fs::path(model.loadedFileName).filename().string());
+                        if (isActive) activeModelIndex = i;
+                    }
 
-                    std::string nameLow = display;
-                    std::transform(nameLow.begin(), nameLow.end(), nameLow.begin(),
-                                   [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
-                    std::string extLow = fs::path(display).extension().string();
-                    std::transform(extLow.begin(), extLow.end(), extLow.begin(),
-                                   [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
-                    bool isGcode = nameLow.size() > 10 &&
-                                   nameLow.compare(nameLow.size() - 10, 10, ".gcode.3mf") == 0;
-                    bool is3MF  = !isGcode && (extLow == ".3mf");
-                    bool isSTEP = (extLow == ".step" || extLow == ".stp");
-                    bool hasBadge = is3MF || isSTEP || isGcode;
+                    const float rowsHeight = static_cast<float>(lastIdx - firstIdx) * 38.0f - 6.0f;
+                    const ui_design::Rect modelRowsRect{lX, lY, lW, rowsHeight};
+                    const auto selectedModel = drawSelectableRows(
+                        ui, ui_design::ControlId::SelectModelFile, modelLabels,
+                        firstIdx, activeModelIndex, modelRowsRect, 66.0f);
 
-                    if (ui.button(display, lX, lY, lW - (hasBadge ? 46.0f : 0.0f), 22.0f, isActive)) {
-                        if (model.loadFile(file)) {
-                            camera.OrbitTarget = glm::vec3(0.0f);
-                            camera.OrbitRadius = 5.0f;
-                            if (isGcode) {
-                                // pull the stored showcase default
-                                // (calibrated magnitude etc.) and auto-select the
-                                // PLA card — the gcode showcase is FDM physics.
-                                showcaseCfg = showcaseDefaultsFor(display);
-                                char b[32];
-                                snprintf(b, sizeof(b), "%.0f", showcaseCfg.magN);
-                                showcaseMagText = b;
-                                showcaseMagFocused = false;
-                                if (loadMaterialFile("materials/pla.mat", currentMaterial))
-                                    activeMaterialFile = "materials/pla.mat";
-                            }
+                    for (int i = firstIdx; i < lastIdx; ++i) {
+                        const std::string display = modelLabels[static_cast<std::size_t>(i)];
+                        std::string nameLow = display;
+                        std::transform(nameLow.begin(), nameLow.end(), nameLow.begin(),
+                                       [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
+                        std::string extLow = fs::path(display).extension().string();
+                        std::transform(extLow.begin(), extLow.end(), extLow.begin(),
+                                       [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
+                        const bool isGcode = nameLow.size() > 10 &&
+                            nameLow.compare(nameLow.size() - 10, 10, ".gcode.3mf") == 0;
+                        const bool is3MF = !isGcode && extLow == ".3mf";
+                        const bool isSTEP = extLow == ".step" || extLow == ".stp";
+                        if (isGcode || is3MF || isSTEP) {
+                            const float badgeY = lY + static_cast<float>(i - firstIdx) * 38.0f + 7.0f;
+                            ui.drawRoundedRect({lX + lW - 58.0f, badgeY, 52.0f, 18.0f}, 7.0f,
+                                isGcode
+                                    ? ui.themeColor(ui_design::ColorToken::SystemBlue)
+                                    : isSTEP
+                                        ? ui.themeColor(ui_design::ColorToken::Graphite)
+                                        : ui.themeColor(ui_design::ColorToken::PrimaryInk));
+                            ui.drawText(isGcode ? "GCODE" : isSTEP ? "STEP" : "3MF",
+                                        lX + lW - 52.0f, badgeY + 13.0f, 10.0f,
+                                        ui.themeColor(ui_design::ColorToken::SnowSurface),
+                                        ui_design::FontRole::Interface);
                         }
                     }
-                    if (isGcode) {
-                        ui.drawRect(lX + lW - 44.0f, lY + 2.0f, 42.0f, 18.0f,
-                                    glm::vec3(0.35f, 0.15f, 0.45f));
-                        ui.drawText("GCODE", lX + lW - 42.0f, lY + 6.0f, 6.5f,
-                                    glm::vec3(0.95f, 0.6f, 1.0f));
+
+                    if (selectedModel) {
+                        dispatchInspectorAction<
+                            ui_action_wiring::InspectorAction::SelectModelFile>(
+                            {ui_design::ControlId::SelectModelFile, *selectedModel},
+                            [&](const ui_action_wiring::InspectorEvent& event) {
+                                const int i = event.widget.instance;
+                                const std::string& file = modelFiles[static_cast<std::size_t>(i)];
+                                const std::string display = fs::path(file).filename().string();
+                                std::string nameLow = display;
+                                std::transform(nameLow.begin(), nameLow.end(), nameLow.begin(),
+                                               [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
+                                const bool isGcode = nameLow.size() > 10 &&
+                                    nameLow.compare(nameLow.size() - 10, 10, ".gcode.3mf") == 0;
+                                if (model.loadFile(file)) {
+                                    camera.OrbitTarget = glm::vec3(0.0f);
+                                    camera.OrbitRadius = 5.0f;
+                                    if (isGcode) {
+                                        // pull the stored showcase default
+                                        // (calibrated magnitude etc.) and auto-select the
+                                        // PLA card — the gcode showcase is FDM physics.
+                                        showcaseCfg = showcaseDefaultsFor(display);
+                                        char b[32];
+                                        snprintf(b, sizeof(b), "%.0f", showcaseCfg.magN);
+                                        showcaseMagText = b;
+                                        showcaseMagFocused = false;
+                                        if (loadMaterialFile("materials/pla.mat", currentMaterial))
+                                            activeMaterialFile = "materials/pla.mat";
+                                    }
+                                }
+                            });
                     }
-                    if (is3MF) {
-                        ui.drawRect(lX + lW - 44.0f, lY + 2.0f, 42.0f, 18.0f,
-                                    glm::vec3(0.05f, 0.45f, 0.45f));
-                        ui.drawText("3MF", lX + lW - 39.0f, lY + 6.0f, 7.5f,
-                                    glm::vec3(0.4f, 1.0f, 0.95f));
+                    lY += rowsHeight + 12.0f;
+
+                    if (totalPages > 1) {
+                        const float navButtonW = 72.0f;
+                        if (ui.button(ui_design::ControlId::PreviousModelPage, "Previous",
+                                      {lX, lY, navButtonW, 32.0f},
+                                      ui_design::ControlRole::Secondary, false,
+                                      modelListPage == 0)) {
+                            dispatchInspectorAction<
+                                ui_action_wiring::InspectorAction::PreviousModelPage>(
+                                {ui_design::ControlId::PreviousModelPage, 0},
+                                [&](const auto&) { --modelListPage; });
+                        }
+                        char pageLabel[32];
+                        snprintf(pageLabel, sizeof(pageLabel), "%d / %d",
+                                 modelListPage + 1, totalPages);
+                        ui.drawText(pageLabel, lX + lW * 0.5f - 15.0f, lY + 21.0f, 12.0f,
+                                    ui.themeColor(ui_design::ColorToken::Graphite),
+                                    ui_design::FontRole::Data);
+                        if (ui.button(ui_design::ControlId::NextModelPage, "Next",
+                                      {lX + lW - navButtonW, lY, navButtonW, 32.0f},
+                                      ui_design::ControlRole::Secondary, false,
+                                      modelListPage == totalPages - 1)) {
+                            dispatchInspectorAction<
+                                ui_action_wiring::InspectorAction::NextModelPage>(
+                                {ui_design::ControlId::NextModelPage, 0},
+                                [&](const auto&) { ++modelListPage; });
+                        }
+                        lY += 44.0f;
                     }
-                    if (isSTEP) {
-                        ui.drawRect(lX + lW - 44.0f, lY + 2.0f, 42.0f, 18.0f,
-                                    glm::vec3(0.45f, 0.35f, 0.05f));
-                        ui.drawText("STEP", lX + lW - 40.0f, lY + 6.0f, 7.5f,
-                                    glm::vec3(1.0f, 0.85f, 0.3f));
-                    }
-                    lY += 30.0f;
                 }
 
-                // Pagination controls (only shown when there is more than one page)
-                if (totalPages > 1) {
-                    lY += 4.0f;
-                    float navBtnW = (lW - 8.0f) / 3.0f;
-                    if (ui.button("<", lX, lY, navBtnW, 22.0f, false, modelListPage == 0)) {
-                        --modelListPage;
-                    }
-                    // Centre page counter text
-                    char pageLabel[32];
-                    snprintf(pageLabel, sizeof(pageLabel), "%d / %d", modelListPage + 1, totalPages);
-                    ui.drawText(pageLabel, lX + navBtnW + 4.0f + 4.0f, lY + 6.0f,
-                                8.5f, glm::vec3(0.7f, 0.7f, 0.7f));
-                    if (ui.button(">", lX + 2.0f * navBtnW + 8.0f, lY, navBtnW, 22.0f,
-                                  false, modelListPage == totalPages - 1)) {
-                        ++modelListPage;
-                    }
-                    lY += 30.0f;
-                }
             }
 
-            // --- File metadata line ---
-            if (!model.loadedFileName.empty()) {
-                lY += 4.0f;
-                ui.drawRect(lX, lY, lW, 1.0f, glm::vec3(0.25f)); lY += 8.0f;
-                char metaBuf[128];
-                if (!model.lastLoadedFormat.empty()) {
-                    if (model.lastLoadedFormat == "STEP" && model.hasBRep()) {
-                        snprintf(metaBuf, sizeof(metaBuf), "Source: STEP (B-rep retained)");
-                        ui.drawText(metaBuf, lX, lY, 8.0f, glm::vec3(1.0f, 0.85f, 0.3f)); lY += 14.0f;
-                    } else {
-                        snprintf(metaBuf, sizeof(metaBuf),
-                                 "FORMAT: %s", model.lastLoadedFormat.c_str());
-                        ui.drawText(metaBuf, lX, lY, 8.0f, glm::vec3(0.4f, 0.9f, 0.85f)); lY += 14.0f;
-                    }
-                    if (model.lastLoadedObjectCount > 1) {
-                        snprintf(metaBuf, sizeof(metaBuf),
-                                 "OBJECTS: %d", model.lastLoadedObjectCount);
-                        ui.drawText(metaBuf, lX, lY, 8.0f, glm::vec3(0.65f, 0.85f, 0.65f)); lY += 14.0f;
+            const bool hasModelReceiptSource =
+                currentMode == MODE_CUBE || !model.loadedFileName.empty();
+            const std::string modelFormat = currentMode == MODE_CUBE
+                ? "Procedural cube"
+                : model.lastLoadedFormat.empty() ? "No model selected"
+                                                 : model.lastLoadedFormat;
+            char physicalSize[96];
+            if (hasModelReceiptSource) {
+                const glm::vec3 sizeMM = model.physicalSizeMM();
+                snprintf(physicalSize, sizeof(physicalSize),
+                         "%.1f x %.1f x %.1f mm", sizeMM.x, sizeMM.y, sizeMM.z);
+            } else {
+                snprintf(physicalSize, sizeof(physicalSize), "Not available");
+            }
+            lY = drawReceipt(
+                ui,
+                ui_design::makeModelReceipt(
+                    modelFormat, model.hasBRep(),
+                    currentMode == MODE_CUBE ? 1 : model.lastLoadedObjectCount,
+                    physicalSize, currentMode == MODE_CUBE),
+                lX, lY, lW);
+
+            lY += 18.0f;
+            ui.drawText("MATERIAL", lX, lY + 12.0f, 12.0f,
+                        ui.themeColor(ui_design::ColorToken::Graphite),
+                        ui_design::FontRole::Interface);
+            lY += 24.0f;
+            if (matFiles.empty()) {
+                ui.drawText("No .mat files found", lX, lY + 14.0f, 13.0f,
+                            ui.themeColor(ui_design::ColorToken::BlockedRed),
+                            ui_design::FontRole::Interface);
+                lY += 22.0f;
+                ui.drawText("Place files in ./materials/", lX, lY + 12.0f, 11.0f,
+                            ui.themeColor(ui_design::ColorToken::Graphite),
+                            ui_design::FontRole::Interface);
+                lY += 28.0f;
+            } else {
+                std::vector<std::string> materialLabels;
+                materialLabels.reserve(matFiles.size());
+                int activeMaterialIndex = -1;
+                for (int i = 0; i < static_cast<int>(matFiles.size()); ++i) {
+                    materialLabels.push_back(matStemToLabel(matFiles[static_cast<std::size_t>(i)]));
+                    if (matFiles[static_cast<std::size_t>(i)] == activeMaterialFile) {
+                        activeMaterialIndex = i;
                     }
                 }
-            }
-        } // end MODE_IMPORT
-
-        lY += 5.0f;
-        ui.drawRect(lX, lY, lW, 1.5f, glm::vec3(0.3f)); lY += 12.0f;
-        ui.drawText("LOAD MATERIAL", lX, lY, 9.5f, glm::vec3(0.65f, 0.65f, 0.65f)); lY += 20.0f;
-
-        if (matFiles.empty()) {
-            ui.drawText("NO .MAT FILES FOUND", lX, lY, 8.5f, glm::vec3(1.0f, 0.4f, 0.4f)); lY += 20.0f;
-            ui.drawText("(place in ./materials/)", lX, lY, 7.5f, glm::vec3(0.55f)); lY += 18.0f;
-        } else {
-            for (const auto& mf : matFiles) {
-                bool isActive = (mf == activeMaterialFile);
-                if (ui.button(matStemToLabel(mf), lX, lY, lW, 22.0f, isActive)) {
-                    activeMaterialFile = mf;
-                    loadMaterialFile("materials/" + mf, currentMaterial);
+                const float rowsHeight = static_cast<float>(matFiles.size()) * 38.0f - 6.0f;
+                const auto selectedMaterial = drawSelectableRows(
+                    ui, ui_design::ControlId::SelectMaterial, materialLabels, 0,
+                    activeMaterialIndex, {lX, lY, lW, rowsHeight});
+                if (selectedMaterial) {
+                    dispatchInspectorAction<
+                        ui_action_wiring::InspectorAction::SelectMaterial>(
+                        {ui_design::ControlId::SelectMaterial, *selectedMaterial},
+                        [&](const ui_action_wiring::InspectorEvent& event) {
+                            const std::string& mf =
+                                matFiles[static_cast<std::size_t>(event.widget.instance)];
+                            activeMaterialFile = mf;
+                            loadMaterialFile("materials/" + mf, currentMaterial);
+                        });
                 }
-                lY += 30.0f;
+                lY += rowsHeight + 12.0f;
             }
+
+            const std::string activeMaterial = "ACTIVE: " + currentMaterial.name;
+            const auto activeMaterialPresentation = ui_design::presentLongLabel(
+                activeMaterial, lW, 13.0f);
+            const ui_design::Rect activeMaterialBounds{lX, lY, lW, 20.0f};
+            ui.drawText(activeMaterialPresentation.visible, lX, lY + 14.0f, 13.0f,
+                        ui.themeColor(ui_design::ColorToken::PrimaryInk),
+                        ui_design::FontRole::Interface);
+            if (activeMaterialPresentation.truncated &&
+                ui.pointerOver(activeMaterialBounds)) {
+                ui.queueTooltip(activeMaterialPresentation.full,
+                                activeMaterialBounds);
+            }
+            lY += 22.0f;
+            char matBuf[128];
+            snprintf(matBuf, sizeof(matBuf), "E: %.3g GPa   nu: %.2f",
+                     currentMaterial.E * 1e-9, currentMaterial.nu);
+            ui.drawText(matBuf, lX, lY + 13.0f, 12.0f,
+                        ui.themeColor(ui_design::ColorToken::Graphite),
+                        ui_design::FontRole::Data);
+            lY += 20.0f;
+            snprintf(matBuf, sizeof(matBuf), "rho: %.0f kg/m3", currentMaterial.density);
+            ui.drawText(matBuf, lX, lY + 13.0f, 12.0f,
+                        ui.themeColor(ui_design::ColorToken::Graphite),
+                        ui_design::FontRole::Data);
+            lY += 24.0f;
+            inspectorContentHeights[static_cast<std::size_t>(ui_design::InspectorTab::Model)] =
+                std::max(inspectorContentRect.h, lY - inspectorContentY + 16.0f);
         }
 
-        lY += 3.0f;
-        ui.drawRect(lX, lY, lW, 1.5f, glm::vec3(0.25f)); lY += 10.0f;
-        char matBuf[128];
-        snprintf(matBuf, sizeof(matBuf), "ACTIVE: %s", currentMaterial.name.c_str());
-        ui.drawText(matBuf, lX, lY, 9.0f, glm::vec3(0.85f, 0.95f, 0.75f)); lY += 17.0f;
-        snprintf(matBuf, sizeof(matBuf), "E: %.3g GPa   nu: %.2f", currentMaterial.E * 1e-9, currentMaterial.nu);
-        ui.drawText(matBuf, lX, lY, 8.5f, glm::vec3(0.7f, 0.85f, 0.7f)); lY += 15.0f;
-        snprintf(matBuf, sizeof(matBuf), "rho: %.0f kg/m3", currentMaterial.density);
-        ui.drawText(matBuf, lX, lY, 8.5f, glm::vec3(0.6f, 0.75f, 0.6f));
-
-        // ===== RIGHT COLUMN: CONTROLS =====
-        float rX = divX + 15.0f;
-        float rW = halfW - 25.0f;
-        float rY = 18.0f;
-
-        char axisBuffer[64];
-        snprintf(axisBuffer, sizeof(axisBuffer), "X AXIS: %.3f m", axisLengths.x);
-        ui.drawText(axisBuffer, rX, rY, 8.5f, glm::vec3(0.95f, 0.55f, 0.55f)); rY += 18.0f;
-        snprintf(axisBuffer, sizeof(axisBuffer), "Y AXIS: %.3f m", axisLengths.y);
-        ui.drawText(axisBuffer, rX, rY, 8.5f, glm::vec3(0.55f, 0.95f, 0.55f)); rY += 18.0f;
-        snprintf(axisBuffer, sizeof(axisBuffer), "Z AXIS: %.3f m", axisLengths.z);
-        ui.drawText(axisBuffer, rX, rY, 8.5f, glm::vec3(0.55f, 0.75f, 0.95f)); rY += 22.0f;
-        ui.drawRect(rX, rY, rW, 1.5f, glm::vec3(0.3f)); rY += 14.0f;
+        float rX = inspectorContentRect.x;
+        float rW = inspectorContentRect.w;
+        float rY = inspectorContentY;
 
         static bool useMultithreading = false;
         static bool useGPU = false;
@@ -885,6 +1377,48 @@ int runInteractive() {
         static SlabMesher::ToolpathMeshStats lastTpStats;
         static bool hasTpStats = false;
 
+        if (inspectorState.activeTab == ui_design::InspectorTab::Mesh) {
+        ui.drawText("Mesh", rX, rY + 18.0f, 18.0f,
+                    ui.themeColor(ui_design::ColorToken::PrimaryInk),
+                    ui_design::FontRole::Display);
+        rY += 34.0f;
+
+        const std::string meshPath = ui_design::meshReceiptSource(
+            currentMode == MODE_CUBE, !model.loadedFileName.empty(),
+            model.hasToolpath(), model.hasBRep());
+        const std::string elementType = !model.hasVolumetricMesh
+            ? "Not generated"
+            : model.hasQuadraticMesh ? "Tet10" : "Tet4";
+        const std::uint64_t elementCount = !model.hasVolumetricMesh
+            ? 0
+            : model.hasQuadraticMesh
+                ? static_cast<std::uint64_t>(model.tetrahedraQuadratic.size() / 10)
+                : static_cast<std::uint64_t>(model.tetrahedra.size() / 4);
+        const bool hasLayerMapping =
+            model.hasToolpath() && hasTpStats && model.hasVolumetricMesh;
+        rY = drawReceipt(
+            ui,
+            ui_design::makeMeshReceipt(
+                meshPath, elementType, elementCount,
+                hasLayerMapping ? model.toolpath->layerCount : 0,
+                hasLayerMapping ? lastTpStats.nSlabs : 0,
+                hasLayerMapping ? lastTpStats.layersPerSlab : 0),
+            rX, rY, rW);
+
+        char axisBuffer[64];
+        snprintf(axisBuffer, sizeof(axisBuffer), "X %.3f m", axisLengths.x);
+        ui.drawText(axisBuffer, rX, rY + 13.0f, 12.0f,
+                    ui.themeColor(ui_design::ColorToken::Graphite),
+                    ui_design::FontRole::Data); rY += 20.0f;
+        snprintf(axisBuffer, sizeof(axisBuffer), "Y %.3f m", axisLengths.y);
+        ui.drawText(axisBuffer, rX, rY + 13.0f, 12.0f,
+                    ui.themeColor(ui_design::ColorToken::Graphite),
+                    ui_design::FontRole::Data); rY += 20.0f;
+        snprintf(axisBuffer, sizeof(axisBuffer), "Z %.3f m", axisLengths.z);
+        ui.drawText(axisBuffer, rX, rY + 13.0f, 12.0f,
+                    ui.themeColor(ui_design::ColorToken::Graphite),
+                    ui_design::FontRole::Data); rY += 28.0f;
+
         // --- SLICE controls (shared by CUBE + IMPORT) ---
         // The SLICE PREVIEW button calls the EXACT free functions the headless
         // harness calls in ScenarioRunner::runSlice (LayerSlicer::computeSlices +
@@ -892,11 +1426,19 @@ int runInteractive() {
         static LayerSlicer::SliceResult sliceResult; // UI-local cache (decoupled)
         static LayerSlicer::SliceGrouping sliceGrp;   // physical readout
         static int   slicePreviewLayer = 0;
+        static ui_interaction::DiscreteSliderAccumulator slicePreviewPosition;
         static float sliceMaxSlabsF    = 40.0f;
-        auto rebuildSlicePreview = [&](int layer) {
+        auto rebuildSlicePreview = [&](int layer, bool synchronizePosition = true) {
             int nL = static_cast<int>(sliceResult.sections.size());
-            if (nL == 0) { model.showSlicePreview = false; return; }
+            if (nL == 0) {
+                model.showSlicePreview = false;
+                slicePreviewPosition.synchronize(0, 0);
+                return;
+            }
             slicePreviewLayer = std::max(0, std::min(layer, nL - 1));
+            if (synchronizePosition) {
+                slicePreviewPosition.synchronize(slicePreviewLayer, nL);
+            }
             auto segs = LayerSlicer::sectionToSegments(
                 sliceResult.sections[slicePreviewLayer], sliceResult.buildAxis,
                 sliceResult.planeCoords[slicePreviewLayer]);
@@ -904,42 +1446,105 @@ int runInteractive() {
             model.showSlicePreview = true;
         };
         auto drawSliceControls = [&](float x, float& y, float w) {
-            ui.drawRect(x, y, w, 1.5f, glm::vec3(0.3f)); y += 10.0f;
-            std::string sl = model.params.enableLayerSlicing ? "SLICE: ON" : "SLICE: OFF";
-            if (ui.button(sl, x, y, w, 22.0f, model.params.enableLayerSlicing)) {
-                model.params.enableLayerSlicing = !model.params.enableLayerSlicing;
-                if (!model.params.enableLayerSlicing) model.showSlicePreview = false;
+            y += 12.0f;
+            ui.drawText("SLICING", x, y + 12.0f, 12.0f,
+                        ui.themeColor(ui_design::ColorToken::Graphite),
+                        ui_design::FontRole::Interface);
+            y += 24.0f;
+            if (ui.toggle(ui_design::ControlId::ToggleSlicing, "Layer slicing",
+                          {x, y, w, 32.0f}, model.params.enableLayerSlicing)) {
+                dispatchInspectorValue<
+                    ui_action_wiring::InspectorAction::ToggleSlicing>(
+                    {ui_design::ControlId::ToggleSlicing, 0},
+                    model.params.enableLayerSlicing ? 1.0 : 0.0,
+                    [&](const auto&) {
+                        if (!model.params.enableLayerSlicing) model.showSlicePreview = false;
+                    });
             }
-            y += 28.0f;
+            y += 44.0f;
             if (!model.params.enableLayerSlicing) return;
 
-            ui.slider("LAYER THICK", model.params.layerThickness, 0.01f, 1.0f, x, y, w, 15.0f); y += 20.0f;
-            float bw = w / 3.0f - 3.0f;
-            if (ui.button("AXIS X", x, y, bw, 20.0f, model.params.buildAxisSel == 0)) model.params.buildAxisSel = 0;
-            if (ui.button("AXIS Y", x + bw + 4.0f, y, bw, 20.0f, model.params.buildAxisSel == 1)) model.params.buildAxisSel = 1;
-            if (ui.button("AXIS Z", x + 2.0f * (bw + 4.0f), y, bw, 20.0f, model.params.buildAxisSel == 2)) model.params.buildAxisSel = 2;
-            y += 26.0f;
-            ui.slider("MAX SLABS", sliceMaxSlabsF, 2.0f, 200.0f, x, y, w, 15.0f);
-            model.params.maxSlabs = static_cast<int>(sliceMaxSlabsF + 0.5f); y += 20.0f;
-            ui.slider("WALL WIDTH", model.params.wallWidth, 0.05f, 2.0f, x, y, w, 15.0f); y += 20.0f;
-
-            if (ui.button("SLICE PREVIEW", x, y, w, 28.0f)) {
-                LayerSlicer::SliceGrouping grp;
-                std::vector<LayerSlicer::PlaneStats> stats;
-                const BRepHandle* brep = model.hasBRep() ? model.brep.get() : nullptr;
-                // [same-path: harness LayerSlicer::computeSlices]
-                sliceResult = LayerSlicer::computeSlices(
-                    model.surfaceVertices, model.surfaceIndices,
-                    model.currentMinBounds, model.currentMaxBounds,
-                    model.params, model.modelToMM, brep, grp, stats);
-                sliceGrp = grp; // cache for the physical readout
-                // [same-path: harness model.setLayerStack]
-                model.setLayerStack(LayerSlicer::axisFromParams(model.params),
-                                    grp.physicalLayerThickness, grp.layersPerSlab,
-                                    grp.slabBoundaries);
-                rebuildSlicePreview(static_cast<int>(sliceResult.sections.size()) / 2);
+            if (ui.sliderField(ui_design::ControlId::EditLayerThickness,
+                               "Layer thickness", model.params.layerThickness,
+                               0.01f, 1.0f, {x, y, w, 48.0f},
+                               ui_design::formatValue(model.params.layerThickness, 2, false, "mm"))) {
+                dispatchInspectorValue<
+                    ui_action_wiring::InspectorAction::EditLayerThickness>(
+                    {ui_design::ControlId::EditLayerThickness, 0},
+                    model.params.layerThickness, [](const auto&) {});
             }
-            y += 32.0f;
+            y += 60.0f;
+            int sliceAxis = model.params.buildAxisSel;
+            const std::vector<ui_design::WidgetId> axisIds{
+                {ui_design::ControlId::SelectSliceAxisX, 0},
+                {ui_design::ControlId::SelectSliceAxisY, 0},
+                {ui_design::ControlId::SelectSliceAxisZ, 0},
+            };
+            if (ui.segmentedControl(axisIds, {x, y, w, 34.0f},
+                                    {"X", "Y", "Z"}, sliceAxis)) {
+                const auto applySliceAxis =
+                    [&](const auto&) { model.params.buildAxisSel = sliceAxis; };
+                if (sliceAxis == 0) {
+                    dispatchInspectorValue<
+                        ui_action_wiring::InspectorAction::SelectSliceAxisX>(
+                        {ui_design::ControlId::SelectSliceAxisX, 0}, sliceAxis,
+                        applySliceAxis);
+                } else if (sliceAxis == 1) {
+                    dispatchInspectorValue<
+                        ui_action_wiring::InspectorAction::SelectSliceAxisY>(
+                        {ui_design::ControlId::SelectSliceAxisY, 0}, sliceAxis,
+                        applySliceAxis);
+                } else {
+                    dispatchInspectorValue<
+                        ui_action_wiring::InspectorAction::SelectSliceAxisZ>(
+                        {ui_design::ControlId::SelectSliceAxisZ, 0}, sliceAxis,
+                        applySliceAxis);
+                }
+            }
+            y += 46.0f;
+            if (ui.sliderField(ui_design::ControlId::EditMaxSlabs, "Maximum slabs",
+                               sliceMaxSlabsF, 2.0f, 200.0f, {x, y, w, 48.0f},
+                               ui_design::formatValue(sliceMaxSlabsF, 0, false, ""))) {
+                dispatchInspectorValue<
+                    ui_action_wiring::InspectorAction::EditMaxSlabs>(
+                    {ui_design::ControlId::EditMaxSlabs, 0},
+                                       sliceMaxSlabsF, [](const auto&) {});
+            }
+            model.params.maxSlabs = static_cast<int>(sliceMaxSlabsF + 0.5f);
+            y += 60.0f;
+            if (ui.sliderField(ui_design::ControlId::EditWallWidth, "Wall width",
+                               model.params.wallWidth, 0.05f, 2.0f,
+                               {x, y, w, 48.0f},
+                               ui_design::formatValue(model.params.wallWidth, 2, false, "mm"))) {
+                dispatchInspectorValue<
+                    ui_action_wiring::InspectorAction::EditWallWidth>(
+                    {ui_design::ControlId::EditWallWidth, 0},
+                                       model.params.wallWidth, [](const auto&) {});
+            }
+            y += 60.0f;
+
+            if (ui.button(ui_design::ControlId::PreviewSlice, "Preview slice",
+                          {x, y, w, 36.0f}, ui_design::ControlRole::Primary)) {
+                dispatchInspectorAction<
+                    ui_action_wiring::InspectorAction::PreviewSlice>(
+                    {ui_design::ControlId::PreviewSlice, 0}, [&](const auto&) {
+                        LayerSlicer::SliceGrouping grp;
+                        std::vector<LayerSlicer::PlaneStats> stats;
+                        const BRepHandle* brep = model.hasBRep() ? model.brep.get() : nullptr;
+                        // [same-path: harness LayerSlicer::computeSlices]
+                        sliceResult = LayerSlicer::computeSlices(
+                            model.surfaceVertices, model.surfaceIndices,
+                            model.currentMinBounds, model.currentMaxBounds,
+                            model.params, model.modelToMM, brep, grp, stats);
+                        sliceGrp = grp; // cache for the physical readout
+                        // [same-path: harness model.setLayerStack]
+                        model.setLayerStack(LayerSlicer::axisFromParams(model.params),
+                                            grp.physicalLayerThickness, grp.layersPerSlab,
+                                            grp.slabBoundaries);
+                        rebuildSlicePreview(static_cast<int>(sliceResult.sections.size()) / 2);
+                    });
+            }
+            y += 48.0f;
 
             // physical (real-world) readout — real mm dimensions and
             // the true layer count, so the print is physically readable.
@@ -947,71 +1552,137 @@ int runInteractive() {
                 glm::vec3 mm = model.physicalSizeMM();
                 char dbuf[128];
                 snprintf(dbuf, sizeof(dbuf), "PART %.1f x %.1f x %.1f mm", mm.x, mm.y, mm.z);
-                ui.drawText(dbuf, x, y, 8.0f, glm::vec3(0.7f, 0.9f, 1.0f)); y += 14.0f;
+                ui.drawText(dbuf, x, y + 13.0f, 12.0f,
+                            ui.themeColor(ui_design::ColorToken::PrimaryInk),
+                            ui_design::FontRole::Data); y += 20.0f;
                 if (sliceGrp.nPhysical > 0) {
                     char lbuf[128];
                     snprintf(lbuf, sizeof(lbuf), "%d layers @ %.2f mm  (%d slabs, k=%d)",
                              sliceGrp.nPhysical, sliceGrp.physThickMM, sliceGrp.nSlabs,
                              sliceGrp.layersPerSlab);
-                    ui.drawText(lbuf, x, y, 8.0f, glm::vec3(0.7f, 0.9f, 1.0f)); y += 16.0f;
+                    ui.drawText(lbuf, x, y + 13.0f, 12.0f,
+                                ui.themeColor(ui_design::ColorToken::Graphite),
+                                ui_design::FontRole::Data); y += 20.0f;
                 }
             }
 
             int nL = static_cast<int>(sliceResult.sections.size());
             if (model.showSlicePreview && nL > 0) {
-                float layerF = static_cast<float>(slicePreviewLayer);
-                if (ui.slider("LAYER", layerF, 0.0f, static_cast<float>(nL - 1), x, y, w, 15.0f))
-                    rebuildSlicePreview(static_cast<int>(layerF + 0.5f));
-                y += 20.0f;
+                float layerF = slicePreviewPosition.position;
+                ui_interaction::SliderChangeSource layerChangeSource =
+                    ui_interaction::SliderChangeSource::None;
+                if (ui.sliderField(ui_design::ControlId::SelectPreviewLayer,
+                                   "Preview layer", layerF, 0.0f,
+                                   static_cast<float>(nL - 1), {x, y, w, 48.0f},
+                                   ui_design::formatValue(layerF, 0, false, ""),
+                                   false, false, &layerChangeSource)) {
+                    const int selectedLayer =
+                        slicePreviewPosition.commit(
+                            layerF, nL, layerChangeSource);
+                    dispatchInspectorValue<
+                        ui_action_wiring::InspectorAction::SelectPreviewLayer>(
+                         {ui_design::ControlId::SelectPreviewLayer, 0}, layerF,
+                         [&](const auto&) {
+                            rebuildSlicePreview(selectedLayer, false);
+                         });
+                }
+                y += 60.0f;
                 char sbuf[96];
                 snprintf(sbuf, sizeof(sbuf), "SLAB %d/%d  loops:%d", slicePreviewLayer + 1, nL,
                          static_cast<int>(sliceResult.sections[slicePreviewLayer].size()));
-                ui.drawText(sbuf, x, y, 8.0f, glm::vec3(1.0f, 0.7f, 0.3f)); y += 16.0f;
+                ui.drawText(sbuf, x, y + 13.0f, 12.0f,
+                            ui.themeColor(ui_design::ColorToken::Graphite),
+                            ui_design::FontRole::Data); y += 20.0f;
             }
         };
 
-        if (currentMode == MODE_CUBE) {
-            if (ui.slider("X LENGTH (m)", model.params.sizeX, 0.1f, 10.0f, rX, rY, rW, 20.0f)) model.needsUpdate = true; rY += 40.0f;
-            if (ui.slider("Y LENGTH (m)", model.params.sizeY, 0.1f, 5.0f, rX, rY, rW, 20.0f)) model.needsUpdate = true; rY += 40.0f;
-            if (ui.slider("Z LENGTH (m)", model.params.sizeZ, 0.1f, 5.0f, rX, rY, rW, 20.0f)) model.needsUpdate = true; rY += 40.0f;
-            if (ui.slider("SUBDIVISIONS", model.params.subdivisions, 1.0f, 20.0f, rX, rY, rW, 20.0f)) model.needsUpdate = true; rY += 40.0f;
-            ui.slider("MESH QUALITY (p)", model.params.tetRadiusEdge, 1.1f, 3.0f, rX, rY, rW, 15.0f); rY += 20.0f;
-            ui.slider("MAX VOLUME (%)", model.params.maxVolPercent, 0.00001f, 0.2f, rX, rY, rW, 15.0f, true); rY += 20.0f;
-            if (ui.button("GENERATE 3D MESH", rX, rY, rW, 35.0f)) {
-                std::cout << "Button Clicked: Launching TetGen..." << std::endl;
-                startComputeJob(model, "TETGEN MESHING", true,
-                    [&model]() -> bool { return model.generateVolumetricMesh(); },
-                    [&model](bool, bool) { model.buildBuffers(); });
+        if (currentMode == MODE_IMPORT) {
+            if (ui.toggle(ui_design::ControlId::ToggleVertexSmoothing,
+                          "Vertex smoothing", {rX, rY, rW, 32.0f},
+                          model.params.enablePolarRemoval)) {
+                dispatchInspectorValue<
+                    ui_action_wiring::InspectorAction::ToggleVertexSmoothing>(
+                    {ui_design::ControlId::ToggleVertexSmoothing, 0},
+                    model.params.enablePolarRemoval ? 1.0 : 0.0,
+                    [&](const auto&) {
+                        if (!model.loadedFileName.empty()) model.loadFile(model.loadedFileName);
+                    });
             }
-            rY += 40.0f;
-            drawSliceControls(rX, rY, rW); // SLICE block (CUBE)
+            rY += 44.0f;
         }
-        else if (currentMode == MODE_IMPORT) {
-            std::string prLabel = model.params.enablePolarRemoval ? "VERTEX SMOOTHING: ON" : "VERTEX SMOOTHING: OFF";
-            if (ui.button(prLabel, rX, rY, rW, 20.0f, model.params.enablePolarRemoval)) {
-                model.params.enablePolarRemoval = !model.params.enablePolarRemoval;
-                if (!model.loadedFileName.empty()) model.loadFile(model.loadedFileName);
-            }
-            rY += 25.0f;
 
-            ui.slider("MESH QUALITY (p)", model.params.tetRadiusEdge, 1.1f, 3.0f, rX, rY, rW, 15.0f); rY += 20.0f;
-            ui.slider("MAX VOLUME (%)", model.params.maxVolPercent, 0.00001f, 0.2f, rX, rY, rW, 15.0f, true); rY += 20.0f;
+        if (ui.sliderField(ui_design::ControlId::EditMeshQuality, "Mesh quality",
+                           model.params.tetRadiusEdge, 1.1f, 3.0f,
+                           {rX, rY, rW, 48.0f},
+                           ui_design::formatValue(model.params.tetRadiusEdge, 2, false, "p"))) {
+            dispatchInspectorValue<
+                ui_action_wiring::InspectorAction::EditMeshQuality>(
+                {ui_design::ControlId::EditMeshQuality, 0},
+                                   model.params.tetRadiusEdge, [](const auto&) {});
+        }
+        rY += 60.0f;
+        if (ui.sliderField(ui_design::ControlId::EditMaxVolumePercent, "Maximum volume",
+                           model.params.maxVolPercent, 0.00001f, 0.2f,
+                           {rX, rY, rW, 48.0f},
+                           ui_design::formatValue(model.params.maxVolPercent, 2, true, "%"),
+                           true)) {
+            dispatchInspectorValue<
+                ui_action_wiring::InspectorAction::EditMaxVolumePercent>(
+                {ui_design::ControlId::EditMaxVolumePercent, 0},
+                                   model.params.maxVolPercent, [](const auto&) {});
+        }
+        rY += 60.0f;
 
-            float btnW = rW * 0.5f - 2.0f;
-            if (ui.button("SURFACE MESH", rX, rY, btnW, 25.0f, !model.showVolumetricMesh, false)) {
-                model.showVolumetricMesh = false;
-                model.buildBuffers();
+        if (currentMode == MODE_IMPORT) {
+            const auto viewPresentation = ui_design::surfaceVolumePresentation(
+                model.hasVolumetricMesh, model.showVolumetricMesh);
+            int viewSelection = viewPresentation.selectedIndex;
+            const std::vector<ui_design::WidgetId> viewIds{
+                {ui_design::ControlId::SelectSurfaceView, 0},
+                {ui_design::ControlId::SelectVolumeView, 0},
+            };
+            const std::vector<bool> viewDisabled{
+                viewPresentation.disabled[0], viewPresentation.disabled[1]};
+            const bool viewChanged = ui.segmentedControl(
+                viewIds, {rX, rY, rW, 34.0f}, {"Surface", "Volume"},
+                viewSelection, false, viewDisabled);
+            switch (ui_design::resolveSurfaceVolumeAction(
+                viewChanged, viewSelection)) {
+            case ui_design::SurfaceVolumeAction::SelectSurface:
+                dispatchInspectorAction<
+                    ui_action_wiring::InspectorAction::SelectSurfaceView>(
+                    {ui_design::ControlId::SelectSurfaceView, 0}, [&](const auto&) {
+                        model.showVolumetricMesh = false;
+                        model.buildBuffers();
+                    });
+                break;
+            case ui_design::SurfaceVolumeAction::SelectVolume:
+                dispatchInspectorAction<
+                    ui_action_wiring::InspectorAction::SelectVolumeView>(
+                    {ui_design::ControlId::SelectVolumeView, 0}, [&](const auto&) {
+                        if (model.hasVolumetricMesh) {
+                            model.showVolumetricMesh = true;
+                            model.buildBuffers();
+                        }
+                    });
+                break;
+            case ui_design::SurfaceVolumeAction::None:
+                break;
             }
-            if (ui.button("VOLUME MESH", rX + btnW + 4.0f, rY, btnW, 25.0f, model.showVolumetricMesh, !model.hasVolumetricMesh)) {
-                if (model.hasVolumetricMesh) {
-                    model.showVolumetricMesh = true;
-                    model.buildBuffers();
-                }
-            }
-            rY += 30.0f;
+            rY += 46.0f;
+        }
 
-            if (ui.button("GENERATE 3D MESH", rX, rY, rW, 35.0f)) {
-                if (model.hasToolpath()) {
+        if (ui.button(ui_design::ControlId::GenerateVolumeMesh, "Generate volume mesh",
+                      {rX, rY, rW, 40.0f}, ui_design::ControlRole::Primary)) {
+            dispatchInspectorAction<
+                ui_action_wiring::InspectorAction::GenerateVolumeMesh>(
+                {ui_design::ControlId::GenerateVolumeMesh, 0}, [&](const auto&) {
+                if (currentMode == MODE_CUBE) {
+                    std::cout << "Button Clicked: Launching TetGen..." << std::endl;
+                    startComputeJob(model, "TETGEN MESHING", true,
+                        [&model]() -> bool { return model.generateVolumetricMesh(); },
+                        [&model](bool, bool) { model.buildBuffers(); });
+                } else if (model.hasToolpath()) {
                     // gcode models mesh through the toolpath lane
                     // — the EXACT functions the harness calls, on a worker.
                     // [same-path: mesh.method="toolpath" in ScenarioRunner]
@@ -1060,37 +1731,76 @@ int runInteractive() {
                         [&model]() -> bool { return model.generateVolumetricMesh(); },
                         [&model](bool, bool) { model.buildBuffers(); });
                 }
-            }
-            rY += 40.0f;
+            });
+        }
+        rY += 52.0f;
+        drawSliceControls(rX, rY, rW);
+        inspectorContentHeights[static_cast<std::size_t>(ui_design::InspectorTab::Mesh)] =
+            std::max(inspectorContentRect.h, rY - inspectorContentY + 16.0f);
+        } // end Mesh tab
+
+        if (inspectorState.activeTab == ui_design::InspectorTab::Solve) {
+            rY = inspectorContentY;
+            ui.drawText("Solve", rX, rY + 18.0f, 18.0f,
+                        ui.themeColor(ui_design::ColorToken::PrimaryInk),
+                        ui_design::FontRole::Display);
+            rY += 34.0f;
+            const auto solvePresentation = ui_design::solvePresentationPolicy(
+                currentMode == MODE_CUBE, model.hasToolpath());
 
             // ===== GCODE SHOWCASE panel =====
             // Workflow: pick gcode model -> GENERATE 3D MESH -> type/accept the
             // magnitude -> RUN -> color-spectrum result + 3-D load arrows.
-            if (model.hasToolpath()) {
-                ui.drawRect(rX, rY, rW, 1.5f, glm::vec3(0.35f, 0.2f, 0.4f)); rY += 8.0f;
-                ui.drawText("GCODE SHOWCASE", rX, rY, 9.5f, glm::vec3(0.95f, 0.6f, 1.0f)); rY += 16.0f;
+            if (solvePresentation.showToolpathWorkflow) {
+                const auto showcaseHeader =
+                    ui_design::sectionHeaderLayout(rY, 9.5f);
+                ui.drawText("GCODE SHOWCASE", rX,
+                            showcaseHeader.labelBaselineY, 9.5f,
+                            ui.themeColor(ui_design::ColorToken::PrimaryInk),
+                            ui_design::FontRole::Interface);
+                ui.drawRect(rX, showcaseHeader.dividerY, rW, 1.5f,
+                            glm::vec3(ui.themeColor(
+                                ui_design::ColorToken::SystemBlue, 0.5f)));
+                rY = showcaseHeader.nextContentBaselineY;
                 char lbuf[96];
                 snprintf(lbuf, sizeof(lbuf), "LOAD: %s  (force in N)",
                          showcaseCfg.load.c_str());
-                ui.drawText(lbuf, rX, rY, 8.0f, glm::vec3(0.8f)); rY += 14.0f;
+                ui.drawText(lbuf, rX, rY, 8.0f,
+                            ui.themeColor(ui_design::ColorToken::Graphite),
+                            ui_design::FontRole::Data); rY += 14.0f;
                 if (!showcaseCfg.found || showcaseCfg.magN <= 0.0)
                     { ui.drawText("no stored default for this model (enter a value)",
-                                  rX, rY, 7.0f, glm::vec3(0.6f)); rY += 12.0f; }
+                                  rX, rY, 7.0f,
+                                  ui.themeColor(ui_design::ColorToken::Graphite),
+                                  ui_design::FontRole::Interface); rY += 12.0f; }
 
                 // Typed magnitude field: click to focus, digits/'.'/'-' typed,
                 // BACKSPACE deletes, ENTER commits.
                 std::string fieldLabel = "MAG: " + showcaseMagText +
                                          (showcaseMagFocused ? "_" : "") + " N";
-                if (ui.button(fieldLabel, rX, rY, rW * 0.62f, 24.0f, showcaseMagFocused)) {
-                    showcaseMagFocused = !showcaseMagFocused;
-                    g_charInput.clear(); g_backspace = false; g_enter = false;
+                if (ui.button(ui_design::ControlId::EditShowcaseMagnitude,
+                              fieldLabel, {rX, rY, rW * 0.62f, 34.0f},
+                              ui_design::ControlRole::Secondary,
+                              showcaseMagFocused)) {
+                    dispatchInspectorAction<
+                        ui_action_wiring::InspectorAction::EditShowcaseMagnitude>(
+                        {ui_design::ControlId::EditShowcaseMagnitude, 0}, [&](const auto&) {
+                            showcaseMagFocused = !showcaseMagFocused;
+                            g_charInput.clear(); g_backspace = false; g_enter = false;
+                        });
                 }
-                if (ui.button("DEFAULT", rX + rW * 0.65f, rY, rW * 0.35f, 24.0f)) {
-                    char b[32]; snprintf(b, sizeof(b), "%.0f", showcaseCfg.magN);
-                    showcaseMagText = b;
+                if (ui.button(ui_design::ControlId::ResetShowcaseMagnitude,
+                              "Default", {rX + rW * 0.65f, rY, rW * 0.35f, 34.0f},
+                              ui_design::ControlRole::Secondary)) {
+                    dispatchInspectorAction<
+                        ui_action_wiring::InspectorAction::ResetShowcaseMagnitude>(
+                        {ui_design::ControlId::ResetShowcaseMagnitude, 0}, [&](const auto&) {
+                            char b[32]; snprintf(b, sizeof(b), "%.0f", showcaseCfg.magN);
+                            showcaseMagText = b;
+                        });
                 }
-                rY += 30.0f;
-                if (showcaseMagFocused) {
+                rY += 42.0f;
+                if (showcaseMagFocused && !busy) {
                     for (char c : g_charInput)
                         if (std::isdigit(static_cast<unsigned char>(c)) || c == '.' || c == '-')
                             if (showcaseMagText.size() < 12) showcaseMagText.push_back(c);
@@ -1099,13 +1809,22 @@ int runInteractive() {
                         if (!showcaseMagText.empty()) showcaseMagText.pop_back();
                         g_backspace = false;
                     }
-                    if (g_enter) { showcaseMagFocused = false; g_enter = false; }
+                    if (g_enter) {
+                        showcaseMagFocused = false;
+                        g_enter = false;
+                        ui.clearFocus();
+                    }
                 } else {
                     g_charInput.clear(); g_backspace = false; g_enter = false;
                 }
 
-                if (ui.button("RUN SHOWCASE FEA (FRACTURE)", rX, rY, rW, 30.0f,
+                if (ui.button(ui_design::ControlId::RunShowcaseFracture,
+                              "Run showcase fracture", {rX, rY, rW, 40.0f},
+                              ui_design::ControlRole::Primary,
                               false, !model.hasVolumetricMesh)) {
+                    dispatchInspectorAction<
+                        ui_action_wiring::InspectorAction::RunShowcaseFracture>(
+                        {ui_design::ControlId::RunShowcaseFracture, 0}, [&](const auto&) {
                     double mag = 0.0;
                     try { mag = std::stod(showcaseMagText); } catch (...) {}
                     if (mag > 0.0 && model.hasVolumetricMesh) {
@@ -1151,8 +1870,9 @@ int runInteractive() {
                         std::cout << "[SHOWCASE] enter a positive magnitude (N) first"
                                   << std::endl;
                     }
+                    });
                 }
-                rY += 36.0f;
+                rY += 48.0f;
 
                 // Meshing honesty: the print's true layer count vs the slabs
                 // the FE mesh actually uses (k printed layers merge per slab).
@@ -1161,17 +1881,23 @@ int runInteractive() {
                     snprintf(tb, sizeof(tb), "%d PRINT LAYERS - %d SLABS (K=%d)",
                              model.toolpath->layerCount,
                              lastTpStats.nSlabs, lastTpStats.layersPerSlab);
-                    ui.drawText(tb, rX, rY, 7.5f, glm::vec3(0.85f, 0.7f, 0.95f));
+                    ui.drawText(tb, rX, rY, 7.5f,
+                                ui.themeColor(ui_design::ColorToken::Graphite),
+                                ui_design::FontRole::Data);
                     rY += 16.0f;
                 }
             }
 
             if (model.hasVolumetricMesh) {
-                std::string mtLabel = useMultithreading ? "MULTITHREADING: ON" : "MULTITHREADING: OFF";
-                if (ui.button(mtLabel, rX, rY, rW, 25.0f, useMultithreading)) {
-                    useMultithreading = !useMultithreading;
+                if (ui.toggle(ui_design::ControlId::ToggleMultithreading,
+                              "Multithreading", {rX, rY, rW, 32.0f},
+                              useMultithreading)) {
+                    dispatchInspectorValue<
+                        ui_action_wiring::InspectorAction::ToggleMultithreading>(
+                        {ui_design::ControlId::ToggleMultithreading, 0},
+                        useMultithreading ? 1.0 : 0.0, [](const auto&) {});
                 }
-                rY += 30.0f;
+                rY += 44.0f;
 
                 // Load/axis presets for the generic (non-gcode) solvers.
                 struct LoadPresetOption {
@@ -1201,17 +1927,16 @@ int runInteractive() {
                 };
                 static constexpr int kLoadPresetCount =
                     static_cast<int>(sizeof(loadPresets) / sizeof(loadPresets[0]));
-                static const char* buildAxisNames[] = {
-                    "LAYER: X (build top)",
-                    "LAYER: Y (build top)",
-                    "LAYER: Z (build top)",
-                };
 
-                std::string gpuLabel = useGPU ? "GPU ACCEL (CUDA): ON" : "GPU ACCEL (CUDA): OFF";
-                if (ui.button(gpuLabel, rX, rY, rW, 25.0f, useGPU)) {
-                    useGPU = !useGPU;
+                if (ui.toggle(ui_design::ControlId::ToggleGpuAcceleration,
+                              "GPU acceleration (CUDA)", {rX, rY, rW, 32.0f},
+                              useGPU)) {
+                    dispatchInspectorValue<
+                        ui_action_wiring::InspectorAction::ToggleGpuAcceleration>(
+                        {ui_design::ControlId::ToggleGpuAcceleration, 0},
+                        useGPU ? 1.0 : 0.0, [](const auto&) {});
                 }
-                rY += 30.0f;
+                rY += 44.0f;
 
                 // Generic load/solver controls apply to STL/STEP/cube meshes
                 // only. A gcode toolpath model runs through the SHOWCASE panel
@@ -1220,16 +1945,49 @@ int runInteractive() {
                 // buttons are unused there, so they are hidden rather than
                 // shown dead. MULTITHREADING and GPU stay: the showcase run
                 // consumes both.
-                if (!model.hasToolpath()) {
-                if (ui.button(buildAxisNames[buildAxis], rX, rY, rW, 22.0f)) {
-                    buildAxis = (buildAxis + 1) % 3;
+                if (solvePresentation.showGenericWorkflow) {
+                ui.drawText("BUILD AXIS", rX, rY + 12.0f, 12.0f,
+                            ui.themeColor(ui_design::ColorToken::Graphite),
+                            ui_design::FontRole::Interface);
+                rY += 24.0f;
+                int selectedBuildAxis = buildAxis;
+                const std::vector<ui_design::WidgetId> buildAxisIds{
+                    {ui_design::ControlId::SelectBuildAxis, 0},
+                    {ui_design::ControlId::SelectBuildAxis, 1},
+                    {ui_design::ControlId::SelectBuildAxis, 2},
+                };
+                if (ui.segmentedControl(buildAxisIds, {rX, rY, rW, 34.0f},
+                                        {"X", "Y", "Z"}, selectedBuildAxis)) {
+                    dispatchInspectorValue<
+                        ui_action_wiring::InspectorAction::SelectBuildAxis>(
+                        {ui_design::ControlId::SelectBuildAxis, selectedBuildAxis},
+                        selectedBuildAxis,
+                        [&](const auto&) { buildAxis = selectedBuildAxis; });
                 }
-                rY += 27.0f;
+                rY += 46.0f;
 
-                if (ui.button(loadPresets[loadTypeSel].label, rX, rY, rW, 22.0f)) {
-                    loadTypeSel = (loadTypeSel + 1) % kLoadPresetCount;
+                ui.drawText("LOAD PRESET", rX, rY + 12.0f, 12.0f,
+                            ui.themeColor(ui_design::ColorToken::Graphite),
+                            ui_design::FontRole::Interface);
+                rY += 24.0f;
+                std::vector<std::string> loadPresetLabels;
+                loadPresetLabels.reserve(kLoadPresetCount);
+                for (const auto& preset : loadPresets) {
+                    loadPresetLabels.emplace_back(preset.label);
                 }
-                rY += 27.0f;
+                const float loadRowsHeight = kLoadPresetCount * 38.0f - 6.0f;
+                const auto selectedLoadPreset = drawSelectableRows(
+                    ui, ui_design::ControlId::SelectLoadPreset,
+                    loadPresetLabels, 0, loadTypeSel,
+                    {rX, rY, rW, loadRowsHeight});
+                if (selectedLoadPreset) {
+                    dispatchInspectorValue<
+                        ui_action_wiring::InspectorAction::SelectLoadPreset>(
+                        {ui_design::ControlId::SelectLoadPreset, *selectedLoadPreset},
+                        *selectedLoadPreset,
+                        [&](const auto&) { loadTypeSel = *selectedLoadPreset; });
+                }
+                rY += loadRowsHeight + 12.0f;
 
                 const LoadPresetOption& selectedPreset = loadPresets[loadTypeSel];
                 const auto presetPhysics = load_physics::describePreset(
@@ -1243,29 +2001,18 @@ int runInteractive() {
                 const auto fractureCapability = load_physics::assessPreset(
                     selectedPreset.physics,
                     load_physics::AnalysisMode::BrittleFracture);
-                const char* fractureReceipt =
-                    fractureCapability.status == load_physics::Capability::Unsupported
-                        ? load_physics::capabilityName(fractureCapability.status)
-                        : "MESH-DEP";
+                if (ui.sliderField(ui_design::ControlId::EditLoadMagnitude,
+                                   presetPhysics.magnitudeLabel,
+                                   forceMagnitudeMN, 1.0f, 1000.0f,
+                                   {rX, rY, rW, 48.0f},
+                                   ui_design::formatValue(forceMagnitudeMN, 1, false, "MN"))) {
+                    dispatchInspectorValue<
+                        ui_action_wiring::InspectorAction::EditLoadMagnitude>(
+                        {ui_design::ControlId::EditLoadMagnitude, 0},
+                        forceMagnitudeMN, [](const auto&) {});
+                }
+                rY += 60.0f;
 
-                ui.slider(presetPhysics.magnitudeLabel,
-                          forceMagnitudeMN, 1.0f, 1000.0f,
-                          rX, rY, rW, 15.0f);
-                rY += 20.0f;
-
-                ui.drawText(std::string("LOAD: ") + presetPhysics.scopeSummary,
-                            rX, rY, 6.1f, glm::vec3(0.65f, 0.82f, 0.95f));
-                rY += 10.0f;
-                ui.drawText(std::string("DIST: ") + presetPhysics.distributionSummary,
-                            rX, rY, 5.9f, glm::vec3(0.9f, 0.72f, 0.42f));
-                rY += 10.0f;
-                ui.drawText(std::string("SUPPORT: ") + presetPhysics.supportSummary,
-                            rX, rY, 5.9f, glm::vec3(0.78f, 0.68f, 0.94f));
-                rY += 10.0f;
-                const std::string capabilityReceipt =
-                    std::string("L ") + load_physics::capabilityName(linearCapability.status) +
-                    " | NL " + load_physics::capabilityName(nonlinearCapability.status) +
-                    " | FR " + fractureReceipt;
                 const bool anyModeBlocked = !linearCapability.canRun() ||
                                             !nonlinearCapability.canRun() ||
                                             !fractureCapability.canRun();
@@ -1273,27 +2020,61 @@ int runInteractive() {
                     linearCapability.status == load_physics::Capability::Approximate ||
                     nonlinearCapability.status == load_physics::Capability::Approximate ||
                     fractureCapability.status == load_physics::Capability::Approximate;
-                ui.drawText(capabilityReceipt, rX, rY, 5.9f,
-                            anyModeBlocked
-                                ? glm::vec3(1.0f, 0.48f, 0.35f)
-                                : anyModeApproximate
-                                    ? glm::vec3(0.95f, 0.72f, 0.35f)
-                                    : glm::vec3(0.75f, 0.88f, 0.68f));
-                rY += 10.0f;
                 const load_physics::CapabilityResult* blockedCapability =
                     !linearCapability.canRun() ? &linearCapability
                     : !nonlinearCapability.canRun() ? &nonlinearCapability
                     : !fractureCapability.canRun() ? &fractureCapability
                     : nullptr;
-                if (blockedCapability != nullptr) {
-                    ui.drawText(std::string("BLOCK: ") + blockedCapability->reason,
-                                rX, rY, 5.9f, glm::vec3(1.0f, 0.42f, 0.32f));
-                    rY += 10.0f;
-                }
-                rY += 4.0f;
 
-                if (ui.button("LINEAR STATIC FEA", rX, rY, rW, 25.0f,
+                const auto capabilityWord = [](load_physics::Capability status) {
+                    switch (status) {
+                    case load_physics::Capability::Exact:
+                        return "Available";
+                    case load_physics::Capability::Approximate:
+                        return "Approximate";
+                    case load_physics::Capability::Unsupported:
+                        return "Blocked";
+                    }
+                    return "Blocked";
+                };
+                const std::string linearReceipt =
+                    std::string(capabilityWord(linearCapability.status)) +
+                    " (" + load_physics::capabilityName(linearCapability.status) + ")";
+                const std::string nonlinearReceipt =
+                    std::string(capabilityWord(nonlinearCapability.status)) +
+                    " (" + load_physics::capabilityName(nonlinearCapability.status) + ")";
+                const std::string fractureReceipt =
+                    std::string(capabilityWord(fractureCapability.status)) +
+                    " (" + (fractureCapability.canRun()
+                                ? std::string("MESH-DEP/") +
+                                      load_physics::capabilityName(fractureCapability.status)
+                                : load_physics::capabilityName(fractureCapability.status)) + ")";
+                const std::string capabilityReceipt =
+                    ui_design::makeSolveCapabilitySummary(
+                        linearReceipt, nonlinearReceipt, fractureReceipt,
+                        blockedCapability == nullptr
+                            ? std::string_view{}
+                            : std::string_view(blockedCapability->reason));
+                const ui_design::ReceiptTone capabilityTone = anyModeBlocked
+                    ? ui_design::ReceiptTone::Blocked
+                    : anyModeApproximate ? ui_design::ReceiptTone::Approximate
+                                         : ui_design::ReceiptTone::Available;
+                rY = drawReceipt(
+                    ui,
+                    ui_design::makeSolveReceipt(
+                        selectedPreset.label, presetPhysics.scopeSummary,
+                        presetPhysics.distributionSummary,
+                        presetPhysics.supportSummary, capabilityReceipt,
+                        capabilityTone),
+                    rX, rY, rW);
+
+                if (ui.button(ui_design::ControlId::RunLinearAnalysis,
+                              "Run linear analysis", {rX, rY, rW, 40.0f},
+                              ui_design::ControlRole::Primary,
                               false, !linearCapability.canRun())) {
+                    dispatchInspectorAction<
+                        ui_action_wiring::InspectorAction::RunLinearAnalysis>(
+                        {ui_design::ControlId::RunLinearAnalysis, 0}, [&](const auto&) {
                     std::cout << "Launching Static Solver..." << std::endl;
                     auto solver = std::make_shared<FEASolver>();
                     solver->loadType             = selectedPreset.solver;
@@ -1309,13 +2090,19 @@ int runInteractive() {
                     startComputeJob(model, "LINEAR STATIC FEA", true,
                         [solver, &model]() -> bool { return solver->solveLinearStatic(model, 10.0f); },
                         [&model](bool, bool) { model.buildBuffers(); });
+                    });
                 }
-                rY += 30.0f;
+                rY += 48.0f;
                 const std::string nonlinearLabel = nonlinearCapability.canRun()
                     ? "NONLINEAR FEA (NR)"
                     : "NONLINEAR FEA: BLOCKED";
-                if (ui.button(nonlinearLabel, rX, rY, rW, 25.0f,
+                if (ui.button(ui_design::ControlId::RunNonlinearAnalysis,
+                              nonlinearLabel, {rX, rY, rW, 40.0f},
+                              ui_design::ControlRole::Secondary,
                               false, !nonlinearCapability.canRun())) {
+                    dispatchInspectorAction<
+                        ui_action_wiring::InspectorAction::RunNonlinearAnalysis>(
+                        {ui_design::ControlId::RunNonlinearAnalysis, 0}, [&](const auto&) {
                     std::cout << "Launching Newton-Raphson Solver..." << std::endl;
                     auto solver = std::make_shared<FEASolver>();
                     solver->loadType             = selectedPreset.solver;
@@ -1336,16 +2123,41 @@ int runInteractive() {
                             return solver->solveNonlinearStatic(model, 10.0f, nrp);
                         },
                         [&model](bool, bool) { model.buildBuffers(); });
+                    });
                 }
-                rY += 30.0f;
+                rY += 48.0f;
 
-                ui.drawRect(rX, rY, rW, 1.5f, glm::vec3(0.25f)); rY += 10.0f;
-                ui.drawText("ADAPTIVE MESHING", rX, rY, 9.0f, glm::vec3(0.75f, 0.95f, 0.85f)); rY += 17.0f;
-                ui.slider("CURV ANGLE (DEG)", curvAngleThreshold, 1.0f, 45.0f, rX, rY, rW, 15.0f); rY += 20.0f;
-                ui.slider("CURV FRAC LIMIT", curvFracLimit, 0.05f, 0.75f, rX, rY, rW, 15.0f); rY += 20.0f;
+                ui.drawText("ADAPTIVE MESHING", rX, rY + 12.0f, 12.0f,
+                            ui.themeColor(ui_design::ColorToken::Graphite),
+                            ui_design::FontRole::Interface); rY += 24.0f;
+                if (ui.sliderField(ui_design::ControlId::EditCurvatureAngle,
+                                   "Curvature angle", curvAngleThreshold,
+                                   1.0f, 45.0f, {rX, rY, rW, 48.0f},
+                                   ui_design::formatValue(curvAngleThreshold, 1, false, "deg"))) {
+                    dispatchInspectorValue<
+                        ui_action_wiring::InspectorAction::EditCurvatureAngle>(
+                        {ui_design::ControlId::EditCurvatureAngle, 0},
+                        curvAngleThreshold, [](const auto&) {});
+                }
+                rY += 60.0f;
+                if (ui.sliderField(ui_design::ControlId::EditCurvatureFraction,
+                                   "Curvature fraction", curvFracLimit,
+                                   0.05f, 0.75f, {rX, rY, rW, 48.0f},
+                                   ui_design::formatValue(curvFracLimit, 2, false, ""))) {
+                    dispatchInspectorValue<
+                        ui_action_wiring::InspectorAction::EditCurvatureFraction>(
+                        {ui_design::ControlId::EditCurvatureFraction, 0},
+                        curvFracLimit, [](const auto&) {});
+                }
+                rY += 60.0f;
 
-                if (ui.button("RUN ADAPTIVE FEA", rX, rY, rW, 25.0f,
+                if (ui.button(ui_design::ControlId::RunAdaptiveAnalysis,
+                              "Run adaptive analysis", {rX, rY, rW, 40.0f},
+                              ui_design::ControlRole::Secondary,
                               false, !linearCapability.canRun())) {
+                    dispatchInspectorAction<
+                        ui_action_wiring::InspectorAction::RunAdaptiveAnalysis>(
+                        {ui_design::ControlId::RunAdaptiveAnalysis, 0}, [&](const auto&) {
                     std::cout << "Launching Adaptive Solver..." << std::endl;
                     auto solver = std::make_shared<FEASolver>();
                     solver->loadType          = selectedPreset.solver;
@@ -1362,29 +2174,40 @@ int runInteractive() {
                     startComputeJob(model, "ADAPTIVE FEA", true,
                         [solver, &model]() -> bool { return solver->solveAdaptive(model, 10.0f); },
                         [&model](bool, bool) { model.buildBuffers(); });
+                    });
                 }
-                rY += 30.0f;
+                rY += 48.0f;
 
                 // FDM anisotropy toggle — only meaningful if the loaded material has E_z data.
                 const bool hasFdmData = (currentMaterial.E_z > 0.0);
                 {
-                    std::string fdmLabel = useFdmAnisotropy
-                        ? "FDM ANISOTROPY: ON " : "FDM ANISOTROPY: OFF";
+                    std::string fdmLabel = "FDM anisotropy";
                     if (!hasFdmData) fdmLabel += " [no data]";
-                    if (ui.button(fdmLabel, rX, rY, rW, 22.0f, useFdmAnisotropy)) {
-                        if (!hasFdmData) {
-                            std::cout << "[FDM-ANISO] Current material has no E_z/G_pz data — "
-                                      << "load a 3D-print material (e.g. pla.mat) first." << std::endl;
-                            useFdmAnisotropy = false;
-                        } else {
-                            useFdmAnisotropy = !useFdmAnisotropy;
-                        }
+                    if (ui.toggle(ui_design::ControlId::ToggleFdmAnisotropy,
+                                  fdmLabel, {rX, rY, rW, 32.0f},
+                                  useFdmAnisotropy)) {
+                        dispatchInspectorValue<
+                            ui_action_wiring::InspectorAction::ToggleFdmAnisotropy>(
+                            {ui_design::ControlId::ToggleFdmAnisotropy, 0},
+                            useFdmAnisotropy ? 1.0 : 0.0,
+                            [&](const auto&) {
+                                if (!hasFdmData) {
+                                    std::cout << "[FDM-ANISO] Current material has no E_z/G_pz data — "
+                                              << "load a 3D-print material (e.g. pla.mat) first." << std::endl;
+                                    useFdmAnisotropy = false;
+                                }
+                            });
                     }
                 }
-                rY += 27.0f;
+                rY += 44.0f;
 
-                if (ui.button("BRITTLE FRACTURE", rX, rY, rW, 25.0f,
+                if (ui.button(ui_design::ControlId::RunBrittleFracture,
+                              "Run brittle fracture", {rX, rY, rW, 40.0f},
+                              ui_design::ControlRole::Secondary,
                               false, !fractureCapability.canRun())) {
+                    dispatchInspectorAction<
+                        ui_action_wiring::InspectorAction::RunBrittleFracture>(
+                        {ui_design::ControlId::RunBrittleFracture, 0}, [&](const auto&) {
                     // Reset any previous fracture state so we start fresh.
                     model.elementAlive.clear();
                     model.elementFailureIter.clear();
@@ -1421,59 +2244,146 @@ int runInteractive() {
                     startComputeJob(model, "BRITTLE FRACTURE FEA", true,
                         [solver, &model]() -> bool { return solver->solveBrittleFracture(model, 10.0f, 50); },
                         [&model](bool, bool) { model.buildBuffers(); });
+                    });
                 }
-                rY += 30.0f;
+                rY += 48.0f;
                 } // end !hasToolpath (generic load/solver controls)
             }
 
+            if (!model.hasVolumetricMesh &&
+                solvePresentation.showGenericWorkflow) {
+                rY = drawReceipt(
+                    ui,
+                    ui_design::makeSolveReceipt(
+                        "Not selected", "Not available", "Not available",
+                        "Not available", "Generate a volume mesh first.",
+                        ui_design::ReceiptTone::Blocked),
+                    rX, rY, rW);
+                ui.drawText("Generate a volume mesh first.", rX, rY + 11.0f,
+                            11.0f,
+                            ui.themeColor(ui_design::ColorToken::BlockedRed),
+                            ui_design::FontRole::Interface);
+                rY += 22.0f;
+                ui.button(ui_design::ControlId::RunLinearAnalysis,
+                          "Run linear analysis", {rX, rY, rW, 40.0f},
+                          ui_design::ControlRole::Primary, false, true);
+                rY += 48.0f;
+                ui.button(ui_design::ControlId::RunNonlinearAnalysis,
+                          "NONLINEAR FEA: BLOCKED", {rX, rY, rW, 40.0f},
+                          ui_design::ControlRole::Secondary, false, true);
+                rY += 48.0f;
+                ui.button(ui_design::ControlId::RunAdaptiveAnalysis,
+                          "Run adaptive analysis", {rX, rY, rW, 40.0f},
+                          ui_design::ControlRole::Secondary, false, true);
+                rY += 48.0f;
+                ui.button(ui_design::ControlId::RunBrittleFracture,
+                          "Run brittle fracture", {rX, rY, rW, 40.0f},
+                          ui_design::ControlRole::Secondary, false, true);
+                rY += 48.0f;
+            }
+
             if (model.hasDeformation) {
-                std::string btnLabel = model.showDeformedMesh ? "SHOWING: DEFORMED" : "SHOWING: ORIGINAL";
-                if (ui.button(btnLabel, rX, rY, rW, 25.0f, model.showDeformedMesh)) {
-                    model.showDeformedMesh = !model.showDeformedMesh;
-                    model.buildBuffers();
+                const float resultButtonW = (rW - 8.0f) * 0.5f;
+                if (ui.button(ui_design::ControlId::SelectOriginalResult, "Original",
+                              {rX, rY, resultButtonW, 34.0f},
+                              ui_design::ControlRole::Secondary,
+                              !model.showDeformedMesh)) {
+                    dispatchInspectorAction<
+                        ui_action_wiring::InspectorAction::SelectOriginalResult>(
+                        {ui_design::ControlId::SelectOriginalResult, 0}, [&](const auto&) {
+                            model.showDeformedMesh = false;
+                            model.buildBuffers();
+                        });
                 }
-                rY += 30.0f;
+                if (ui.button(ui_design::ControlId::SelectDeformedResult, "Deformed",
+                              {rX + resultButtonW + 8.0f, rY, resultButtonW, 34.0f},
+                              ui_design::ControlRole::Secondary,
+                              model.showDeformedMesh)) {
+                    dispatchInspectorAction<
+                        ui_action_wiring::InspectorAction::SelectDeformedResult>(
+                        {ui_design::ControlId::SelectDeformedResult, 0}, [&](const auto&) {
+                            model.showDeformedMesh = true;
+                            model.buildBuffers();
+                        });
+                }
+                rY += 46.0f;
 
                 // fracture result controls (only when a fracture run
                 // has produced per-element failure data).
                 const bool hasFracture = !model.elementFailureMode.empty();
                 if (hasFracture) {
-                    const char* fvName =
-                        (model.fractureViewMode == 3) ? "MODE" :
-                        (model.fractureViewMode == 4) ? "CRACK ORDER" :
-                        (model.fractureViewMode == 5) ? "STRESS" : "DEFORM";
-                    std::string fvLabel = std::string("FRACTURE VIEW: ") + fvName;
-                    if (ui.button(fvLabel, rX, rY, rW, 25.0f, model.fractureViewMode != 1)) {
-                        model.fractureViewMode =
-                            (model.fractureViewMode == 1) ? 3 :
-                            (model.fractureViewMode == 3) ? 4 :
-                            (model.fractureViewMode == 4) ? 5 : 1;
-                        model.buildBuffers();
+                    static constexpr int fractureValues[] = {1, 3, 4, 5};
+                    int fractureSelection = 0;
+                    for (int i = 0; i < 4; ++i) {
+                        if (model.fractureViewMode == fractureValues[i]) {
+                            fractureSelection = i;
+                        }
                     }
-                    rY += 30.0f;
+                    const std::vector<ui_design::WidgetId> fractureIds{
+                        {ui_design::ControlId::SelectFractureView, 0},
+                        {ui_design::ControlId::SelectFractureView, 1},
+                        {ui_design::ControlId::SelectFractureView, 2},
+                        {ui_design::ControlId::SelectFractureView, 3},
+                    };
+                    if (ui.segmentedControl(
+                            fractureIds, {rX, rY, rW, 34.0f},
+                            {"Deform", "Mode", "Crack order", "Stress"},
+                            fractureSelection)) {
+                        const int selectedValue = fractureValues[fractureSelection];
+                        dispatchInspectorValue<
+                            ui_action_wiring::InspectorAction::SelectFractureView>(
+                            {ui_design::ControlId::SelectFractureView,
+                             fractureSelection}, selectedValue,
+                            [&](const auto&) {
+                                model.fractureViewMode = selectedValue;
+                                model.buildBuffers();
+                            });
+                    }
+                    rY += 46.0f;
 
-                    const char* dvNames[3] = {"HIDDEN", "GHOST", "COLORED"};
-                    std::string dvLabel = std::string("DEAD ELEMS: ") + dvNames[(int)model.fractureDeadView];
-                    if (ui.button(dvLabel, rX, rY, rW, 25.0f, model.fractureDeadView != FEAModel::DEAD_HIDDEN)) {
-                        model.fractureDeadView =
-                            (FEAModel::FractureDeadView)(((int)model.fractureDeadView + 1) % 3);
-                        model.buildBuffers();
+                    int deadSelection = static_cast<int>(model.fractureDeadView);
+                    const std::vector<ui_design::WidgetId> deadIds{
+                        {ui_design::ControlId::SelectDeadElementView, 0},
+                        {ui_design::ControlId::SelectDeadElementView, 1},
+                        {ui_design::ControlId::SelectDeadElementView, 2},
+                    };
+                    if (ui.segmentedControl(deadIds, {rX, rY, rW, 34.0f},
+                                            {"Hidden", "Ghost", "Colored"},
+                                            deadSelection)) {
+                        dispatchInspectorValue<
+                            ui_action_wiring::InspectorAction::SelectDeadElementView>(
+                            {ui_design::ControlId::SelectDeadElementView, deadSelection},
+                            deadSelection,
+                            [&](const auto&) {
+                                model.fractureDeadView =
+                                    static_cast<FEAModel::FractureDeadView>(deadSelection);
+                                model.buildBuffers();
+                            });
                     }
-                    rY += 30.0f;
+                    rY += 46.0f;
                 }
 
-                std::string forceMapLabel = model.showAppliedForceField ? "FORCE MAP: ON" : "FORCE MAP: OFF";
-                if (ui.button(forceMapLabel, rX, rY, rW, 25.0f, model.showAppliedForceField)) {
-                    model.showAppliedForceField = !model.showAppliedForceField;
+                if (ui.toggle(ui_design::ControlId::ToggleForceMap, "Force map",
+                              {rX, rY, rW, 32.0f},
+                              model.showAppliedForceField)) {
+                    dispatchInspectorValue<
+                        ui_action_wiring::InspectorAction::ToggleForceMap>(
+                        {ui_design::ControlId::ToggleForceMap, 0},
+                        model.showAppliedForceField ? 1.0 : 0.0,
+                        [](const auto&) {});
                 }
-                rY += 30.0f;
+                rY += 44.0f;
 
                 char forceBuffer[64];
                 snprintf(forceBuffer, sizeof(forceBuffer), "TOTAL FORCE: %.3g N", model.totalAppliedForce);
-                ui.drawText(forceBuffer, rX, rY, 8.5f, glm::vec3(0.95f));
+                ui.drawText(forceBuffer, rX, rY, 8.5f,
+                            ui.themeColor(ui_design::ColorToken::PrimaryInk),
+                            ui_design::FontRole::Data);
                 rY += 18.0f;
                 snprintf(forceBuffer, sizeof(forceBuffer), "NODE FORCE: %.3g N", model.appliedForcePerNode);
-                ui.drawText(forceBuffer, rX, rY, 8.5f, glm::vec3(0.95f));
+                ui.drawText(forceBuffer, rX, rY, 8.5f,
+                            ui.themeColor(ui_design::ColorToken::PrimaryInk),
+                            ui_design::FontRole::Data);
                 rY += 22.0f;
 
                 int activeScalarMode = model.getActiveScalarMode();
@@ -1485,7 +2395,9 @@ int runInteractive() {
                     float legendBarY = rY + 12.0f;
                     float legendBarW = 18.0f;
                     float legendBarH = 108.0f;
-                    ui.drawText(legendTitle, rX, rY, 8.5f, glm::vec3(0.65f, 0.85f, 1.0f));
+                    ui.drawText(legendTitle, rX, rY, 8.5f,
+                                ui.themeColor(ui_design::ColorToken::PrimaryInk),
+                                ui_design::FontRole::Interface);
 
                     for (int i = 0; i < 48; ++i) {
                         float t0 = (float)i / 48.0f;
@@ -1494,10 +2406,18 @@ int runInteractive() {
                         ui.drawRect(legendBarX, segY, legendBarW, legendBarH / 48.0f + 1.0f, contourColor(t0));
                     }
 
-                    ui.drawLine(legendBarX, legendBarY, legendBarX + legendBarW, legendBarY, glm::vec3(0.9f), 1.0f);
-                    ui.drawLine(legendBarX + legendBarW, legendBarY, legendBarX + legendBarW, legendBarY + legendBarH, glm::vec3(0.9f), 1.0f);
-                    ui.drawLine(legendBarX + legendBarW, legendBarY + legendBarH, legendBarX, legendBarY + legendBarH, glm::vec3(0.9f), 1.0f);
-                    ui.drawLine(legendBarX, legendBarY + legendBarH, legendBarX, legendBarY, glm::vec3(0.9f), 1.0f);
+                    const glm::vec3 legendLineColor(ui.themeColor(
+                        ui_design::ColorToken::PrimaryInk, 0.45f));
+                    ui.drawLine(legendBarX, legendBarY, legendBarX + legendBarW,
+                                legendBarY, legendLineColor, 1.0f);
+                    ui.drawLine(legendBarX + legendBarW, legendBarY,
+                                legendBarX + legendBarW, legendBarY + legendBarH,
+                                legendLineColor, 1.0f);
+                    ui.drawLine(legendBarX + legendBarW, legendBarY + legendBarH,
+                                legendBarX, legendBarY + legendBarH,
+                                legendLineColor, 1.0f);
+                    ui.drawLine(legendBarX, legendBarY + legendBarH, legendBarX,
+                                legendBarY, legendLineColor, 1.0f);
 
                     float cubeX = rX + 18.0f;
                     float cubeY = legendBarY + 10.0f;
@@ -1517,7 +2437,8 @@ int runInteractive() {
                     float fx = cubeX + cubeDepth;
                     float fy = cubeY - cubeDepth * 0.45f;
                     float s = cubeSize;
-                    glm::vec3 cubeLineColor(0.92f, 0.92f, 0.92f);
+                    glm::vec3 cubeLineColor(ui.themeColor(
+                        ui_design::ColorToken::PrimaryInk, 0.45f));
                     ui.drawLine(bx, by, bx + s, by, cubeLineColor, 1.0f);
                     ui.drawLine(bx + s, by, bx + s, by + s, cubeLineColor, 1.0f);
                     ui.drawLine(bx + s, by + s, bx, by + s, cubeLineColor, 1.0f);
@@ -1530,23 +2451,35 @@ int runInteractive() {
                     ui.drawLine(bx + s, by, fx + s, fy, cubeLineColor, 1.0f);
                     ui.drawLine(bx + s, by + s, fx + s, fy + s, cubeLineColor, 1.0f);
                     ui.drawLine(bx, by + s, fx, fy + s, cubeLineColor, 1.0f);
-                    ui.drawText("REF CUBE", rX, legendBarY + legendBarH + 22.0f, 7.5f, glm::vec3(0.85f));
+                    ui.drawText("REF CUBE", rX, legendBarY + legendBarH + 22.0f, 7.5f,
+                                ui.themeColor(ui_design::ColorToken::Graphite),
+                                ui_design::FontRole::Interface);
 
                     char legendValue[64];
                     float scalarMid = 0.5f * (scalarMin + scalarMax);
                     snprintf(legendValue, sizeof(legendValue), "%.3f", scalarMax);
-                    ui.drawText(legendValue, legendBarX - 72.0f, legendBarY - 2.0f, 7.8f, glm::vec3(0.9f));
+                    ui.drawText(legendValue, legendBarX - 72.0f, legendBarY - 2.0f, 7.8f,
+                                ui.themeColor(ui_design::ColorToken::PrimaryInk),
+                                ui_design::FontRole::Data);
                     snprintf(legendValue, sizeof(legendValue), "%.3f", scalarMid);
-                    ui.drawText(legendValue, legendBarX - 72.0f, legendBarY + legendBarH * 0.5f - 4.0f, 7.8f, glm::vec3(0.9f));
+                    ui.drawText(legendValue, legendBarX - 72.0f, legendBarY + legendBarH * 0.5f - 4.0f, 7.8f,
+                                ui.themeColor(ui_design::ColorToken::PrimaryInk),
+                                ui_design::FontRole::Data);
                     snprintf(legendValue, sizeof(legendValue), "%.3f", scalarMin);
-                    ui.drawText(legendValue, legendBarX - 72.0f, legendBarY + legendBarH - 6.0f, 7.8f, glm::vec3(0.9f));
+                    ui.drawText(legendValue, legendBarX - 72.0f, legendBarY + legendBarH - 6.0f, 7.8f,
+                                ui.themeColor(ui_design::ColorToken::PrimaryInk),
+                                ui_design::FontRole::Data);
+                    rY = ui_design::extendContentBottom(
+                        rY, {rX, legendBarY, rW, legendBarH + 30.0f});
                 }
 
                 // fracture legends for the per-element views. The
                 // categorical legend mirrors the shader's categoricalColor() exactly.
                 if (hasFracture && model.fractureDeadView == FEAModel::DEAD_COLORED) {
                     if (model.fractureViewMode == 3 || model.fractureViewMode == 1) {
-                        ui.drawText("FAILURE MODE", rX, rY, 8.5f, glm::vec3(0.65f, 0.85f, 1.0f));
+                        ui.drawText("FAILURE MODE", rX, rY, 8.5f,
+                                    ui.themeColor(ui_design::ColorToken::PrimaryInk),
+                                    ui_design::FontRole::Interface);
                         rY += 16.0f;
                         struct LegItem { glm::vec3 c; const char* t; };
                         const LegItem items[3] = {
@@ -1555,13 +2488,17 @@ int runInteractive() {
                             { glm::vec3(1.00f, 0.92f, 0.10f), "INTRALAYER" } };
                         for (int i = 0; i < 3; ++i) {
                             ui.drawRect(rX, rY, 16.0f, 12.0f, items[i].c);
-                            ui.drawText(items[i].t, rX + 22.0f, rY + 2.0f, 7.8f, glm::vec3(0.9f));
+                            ui.drawText(items[i].t, rX + 22.0f, rY + 2.0f, 7.8f,
+                                        ui.themeColor(ui_design::ColorToken::PrimaryInk),
+                                        ui_design::FontRole::Interface);
                             rY += 16.0f;
                         }
                     } else if (model.fractureViewMode == 4 || model.fractureViewMode == 5) {
                         const char* title = (model.fractureViewMode == 4)
                             ? "CRACK ORDER (iter)" : "STRESS AT DEATH (Pa)";
-                        ui.drawText(title, rX, rY, 8.5f, glm::vec3(0.65f, 0.85f, 1.0f));
+                        ui.drawText(title, rX, rY, 8.5f,
+                                    ui.themeColor(ui_design::ColorToken::PrimaryInk),
+                                    ui_design::FontRole::Interface);
                         rY += 16.0f;
                         float barW = rW - 12.0f, barH = 14.0f;
                         for (int i = 0; i < 48; ++i) {
@@ -1572,45 +2509,57 @@ int runInteractive() {
                         char buf[80];
                         snprintf(buf, sizeof(buf), "%.3g  ..  %.3g",
                                  model.deadScalarMin, model.deadScalarMax);
-                        ui.drawText(buf, rX, rY, 7.8f, glm::vec3(0.9f));
+                        ui.drawText(buf, rX, rY, 7.8f,
+                                    ui.themeColor(ui_design::ColorToken::PrimaryInk),
+                                    ui_design::FontRole::Data);
                         rY += 16.0f;
                     }
                 }
             }
-            drawSliceControls(rX, rY, rW); // SLICE block (IMPORT)
-        }
+            inspectorContentHeights[static_cast<std::size_t>(ui_design::InspectorTab::Solve)] =
+                std::max(inspectorContentRect.h, rY - inspectorContentY + 16.0f);
+        } // end Solve tab
 
-        // End of the control panel: re-enable input for the left-side widgets
-        // (README, section slider, progress panel) and dim the locked panel.
+        ui.popClip();
+
+        // End of the inspector: re-enable input for Help, the section control,
+        // solver status and the cancellable progress surface.
         ui.setInputLocked(false);
         if (busy)
-            ui.drawRectA(panelX, 0, panelW, scrHeight, glm::vec3(0.06f, 0.06f, 0.07f), 0.55f);
+            ui.drawRectA(uiLayout.inspector.x, uiLayout.inspector.y,
+                         uiLayout.inspector.w, uiLayout.inspector.h,
+                         glm::vec3(ui.themeColor(
+                             ui_design::ColorToken::Graphite)), 0.22f);
 
-        static bool showReadme = false;
-        if (ui.button("README", 10.0f, 10.0f, 80.0f, 30.0f, showReadme)) {
-            showReadme = !showReadme;
-        }
+        auto drawHelpSurface = [&]() {
+            if (!g_helpOpen) return;
+            const float rw = std::min(540.0f, uiLayout.viewport.w - 32.0f);
+            const float rh = std::min(600.0f, static_cast<float>(scrHeight) - 64.0f);
+            const float rx = 16.0f;
+            const float ry = 52.0f;
+            const ui_design::Rect helpSurface{rx, ry, rw, rh};
+            ui.drawShadow(helpSurface, 14.0f, 1.0f);
+            ui.drawRoundedRect(helpSurface, 14.0f,
+                               ui.themeColor(ui_design::ColorToken::SnowSurface, 0.96f));
 
-        if (showReadme) {
-            float rw = 520.0f;
-            float rh = 540.0f;
-            float rx = 10.0f;
-            float ry = 50.0f;
-            ui.drawRect(rx, ry, rw, rh, glm::vec3(0.12f, 0.12f, 0.15f));
-            ui.drawRect(rx, ry, 2.0f, rh, glm::vec3(0.3f, 0.6f, 0.9f));
-
-            float textY = ry + 20.0f;
-            float textX = rx + 20.0f;
-            ui.drawText("FUNCTIONALITY README", textX, textY, 12.0f, glm::vec3(0.5f, 0.8f, 1.0f)); textY += 30.0f;
+            float textY = ry + 34.0f;
+            const float textX = rx + 20.0f;
+            ui.drawText("PolyFEA help", textX, textY, 18.0f,
+                        ui.themeColor(ui_design::ColorToken::PrimaryInk),
+                        ui_design::FontRole::Display);
+            textY += 30.0f;
 
             auto drawHelp = [&](const std::string& name, const std::string& desc) {
-                ui.drawText(name, textX, textY, 9.5f, glm::vec3(0.9f, 0.9f, 0.6f)); textY += 18.0f;
-                
-                std::string currentLine = "";
-                float maxW = rw - 40.0f;
-                float charW = 8.5f * 1.2f;
-                int charsPerLine = static_cast<int>(maxW / charW);
-                
+                ui.drawText(name, textX, textY, 12.0f,
+                            ui.themeColor(ui_design::ColorToken::PrimaryInk),
+                            ui_design::FontRole::Interface);
+                textY += 16.0f;
+
+                std::string currentLine;
+                const float maxW = rw - 40.0f;
+                const int charsPerLine = std::max(
+                    1, static_cast<int>(maxW / (11.0f * 0.62f)));
+
                 std::vector<std::string> words;
                 size_t pos = 0, found;
                 while((found = desc.find_first_of(' ', pos)) != std::string::npos) {
@@ -1625,14 +2574,18 @@ int runInteractive() {
                     } else if ((currentLine.length() + 1 + w.length()) <= charsPerLine) {
                         currentLine += " " + w;
                     } else {
-                        ui.drawText(currentLine, textX + 12.0f, textY, 8.5f, glm::vec3(0.8f, 0.8f, 0.8f));
-                        textY += 15.0f;
+                        ui.drawText(currentLine, textX, textY, 11.0f,
+                                    ui.themeColor(ui_design::ColorToken::Graphite),
+                                    ui_design::FontRole::Interface);
+                        textY += 14.0f;
                         currentLine = w;
                     }
                 }
                 if (!currentLine.empty()) {
-                    ui.drawText(currentLine, textX + 12.0f, textY, 8.5f, glm::vec3(0.8f, 0.8f, 0.8f));
-                    textY += 22.0f;
+                    ui.drawText(currentLine, textX, textY, 11.0f,
+                                ui.themeColor(ui_design::ColorToken::Graphite),
+                                ui_design::FontRole::Interface);
+                    textY += 21.0f;
                 }
             };
 
@@ -1646,9 +2599,9 @@ int runInteractive() {
             drawHelp("SHOWING: DEFORMED", "Toggles visualization of the post-simulation deformed structure.");
             drawHelp("FORCE MAP / REF CUBE", "Visualizes applied external force vectors and value contours.");
             drawHelp("SECTION SLIDER (LEFT)", "Drag up to cut the model with a horizontal XY plane; everything below the grey plane is hidden. Zero disables the cut.");
-        }
+        };
 
-        // ===== Sectional view slider (left edge, README down to mid-screen) =====
+        // ===== Sectional view slider (left edge, Help down to mid-screen) =====
         // Bottom = 0 (no cut), top = the part's real Z height in mm (from the
         // loaded file's physical bbox). Dragging up raises a translucent grey
         // XY plane; the volume below it is clipped in the shader, so it works
@@ -1666,20 +2619,38 @@ int runInteractive() {
             const float sx    = 26.0f;
             const float syTop = 96.0f;
             const float syBot = static_cast<float>(scrHeight) * 0.5f;
-            // The open README overlay occupies this exact strip; drawing the
+            // The open Help overlay occupies this exact strip; drawing the
             // slider then would paint it over the help text AND steal its
             // clicks (immediate-mode widgets hit-test regardless of draw
             // order). Keep the current cut state, just hide the control.
-            if (showReadme) {
+            if (g_helpOpen) {
                 // no slider this frame; the active cut (if any) stays as-is
             } else if (syBot - syTop > 60.0f) {
-                char zb[64];
-                snprintf(zb, sizeof(zb), "%.1f MM", zSpanMM);
-                ui.drawText("SECTION", sx - 12.0f, syTop - 28.0f, 7.0f, glm::vec3(0.35f, 0.40f, 0.45f));
-                ui.drawText(zb, sx - 12.0f, syTop - 15.0f, 6.5f, glm::vec3(0.45f, 0.50f, 0.55f));
-                ui.vslider("SECTION_Z", sectionHeightMM, 0.0f, zSpanMM,
-                           sx, syTop, 14.0f, syBot - syTop);
-                ui.drawText("0", sx + 3.0f, syBot + 8.0f, 7.5f, glm::vec3(0.45f, 0.50f, 0.55f));
+                char maximum[32];
+                snprintf(maximum, sizeof(maximum), "%.1f", zSpanMM);
+                ui.drawText("Section", sx - 12.0f, syTop - 28.0f, 11.0f,
+                            ui.themeColor(ui_design::ColorToken::PrimaryInk),
+                            ui_design::FontRole::Interface);
+                ui.drawText(maximum, sx + 18.0f, syTop - 14.0f, 11.0f,
+                            ui.themeColor(ui_design::ColorToken::PrimaryInk),
+                            ui_design::FontRole::Data);
+                ui.drawText("mm max", sx + 58.0f, syTop - 14.0f, 11.0f,
+                            ui.themeColor(ui_design::ColorToken::Graphite),
+                            ui_design::FontRole::Interface);
+                if (ui.vslider(ui_design::ControlId::EditSectionPosition,
+                               sectionHeightMM, 0.0f, zSpanMM,
+                               {sx - 12.0f, syTop, 24.0f, syBot - syTop})) {
+                    dispatchInspectorValue<
+                        ui_action_wiring::InspectorAction::EditSectionPosition>(
+                        {ui_design::ControlId::EditSectionPosition, 0},
+                        sectionHeightMM, [](const auto&) {});
+                }
+                ui.drawText("0.0", sx + 18.0f, syBot + 10.0f, 11.0f,
+                            ui.themeColor(ui_design::ColorToken::PrimaryInk),
+                            ui_design::FontRole::Data);
+                ui.drawText("mm", sx + 44.0f, syBot + 10.0f, 11.0f,
+                            ui.themeColor(ui_design::ColorToken::Graphite),
+                            ui_design::FontRole::Interface);
 
                 const bool cut = sectionHeightMM > 0.002f * zSpanMM;
                 model.sectionEnabled = cut;
@@ -1689,37 +2660,96 @@ int runInteractive() {
                     const float centerZ = 0.5f * (model.physicalMinMM.z + model.physicalMaxMM.z);
                     const float cutMM   = model.physicalMinMM.z + sectionHeightMM;
                     model.sectionZModel = (cutMM - centerZ) / std::max(1e-9f, model.modelToMM);
-                    char vb[64];
-                    snprintf(vb, sizeof(vb), "Z %.1f", sectionHeightMM);
+                    char vb[32];
+                    snprintf(vb, sizeof(vb), "%.1f", sectionHeightMM);
                     const float tFill = sectionHeightMM / zSpanMM;
-                    ui.drawText(vb, sx + 24.0f,
-                                syTop + (syBot - syTop) * (1.0f - tFill) - 5.0f,
-                                7.5f, glm::vec3(0.20f, 0.45f, 0.70f));
+                    const float currentY = syTop +
+                        (syBot - syTop) * (1.0f - tFill) + 4.0f;
+                    ui.drawText(vb, sx + 18.0f, currentY, 11.0f,
+                                ui.themeColor(ui_design::ColorToken::SystemBlue),
+                                ui_design::FontRole::Data);
+                    ui.drawText("mm", sx + 58.0f, currentY, 11.0f,
+                                ui.themeColor(ui_design::ColorToken::Graphite),
+                                ui_design::FontRole::Interface);
                 }
             } else {
                 model.sectionEnabled = false;
             }
         }
 
-        // ===== Solver stage overlay (bottom-right of the 3-D viewport) =====
-        drawSolverStatusOverlay(ui, panelX);
-
         // ===== Compute-progress panel (bottom-left, slides in) =====
         // Re-read `busy` here rather than reusing the value latched at the top
         // of the frame: a solver button pressed earlier in THIS frame has
         // already started its job, and the top-of-frame value would hide the
         // panel for one whole frame after the click that started the work.
-        if (computeBusy()) {
-            const float slideT = static_cast<float>((glfwGetTime() - g_job.startTime) / 0.25);
+        const bool showComputeProgress = computeBusy();
+        auto drawComputeProgressSurface = [&]() {
+            const auto motion = ui_interaction::motionDurations(g_reducedMotion);
+            const float slideT = motion.progressMs == 0
+                ? 1.0f
+                : static_cast<float>((glfwGetTime() - g_job.startTime) /
+                                     (static_cast<double>(motion.progressMs) / 1000.0));
             const std::string title = g_job.cancel.load()
                                           ? g_job.title + "  - CANCELLING..."
                                           : g_job.title;
             if (drawProgressPanel(ui, title, g_job.progress.load(),
                                   g_job.cancellable && !g_job.cancel.load(),
                                   slideT, glfwGetTime())) {
-                g_job.cancel = true;
-                std::cout << "[JOB] cancel requested by user." << std::endl;
+                dispatchInspectorAction<ui_action_wiring::InspectorAction::CancelJob>(
+                    {ui_design::ControlId::CancelJob, 0}, [&](const auto&) {
+                        g_job.cancel = true;
+                        std::cout << "[JOB] cancel requested by user." << std::endl;
+                    });
             }
+        };
+
+        // The layer contract keeps solver history behind Help while retaining
+        // the progress/Cancel surface as the topmost, actionable overlay.
+        for (const auto surface : ui_design::viewportSurfacePaintOrder(
+                 g_helpOpen, showComputeProgress)) {
+            switch (surface) {
+            case ui_design::ViewportSurface::SolverStatus:
+                drawSolverStatusOverlay(
+                    ui, uiLayout.viewport, showComputeProgress);
+                break;
+            case ui_design::ViewportSurface::Help:
+                drawHelpSurface();
+                break;
+            case ui_design::ViewportSurface::Tooltip:
+                ui.drawQueuedTooltip();
+                break;
+            case ui_design::ViewportSurface::Progress:
+                drawComputeProgressSurface();
+                break;
+            }
+        }
+
+        ui.endInteractionFrame();
+        if (const auto focused = ui.focusedWidget()) {
+            inspectorState.focused = focused->control;
+            const auto surface = ui_design::controlSurface(focused->control);
+            const bool belongsToActiveTab =
+                (surface == ui_design::ControlSurface::Model &&
+                 inspectorState.activeTab == ui_design::InspectorTab::Model) ||
+                (surface == ui_design::ControlSurface::Mesh &&
+                 inspectorState.activeTab == ui_design::InspectorTab::Mesh) ||
+                (surface == ui_design::ControlSurface::Solve &&
+                 inspectorState.activeTab == ui_design::InspectorTab::Solve);
+            if (belongsToActiveTab) {
+                if (const auto bounds = ui.focusedWidgetBounds()) {
+                    inspectorState.scrollOffset[activeTabIndex] =
+                        ui_interaction::revealFocusedScroll(
+                            inspectorState.scrollOffset[activeTabIndex], *bounds,
+                            inspectorContentRect,
+                            inspectorContentHeights[activeTabIndex]);
+                }
+            }
+            if (focused->control != ui_design::ControlId::EditShowcaseMagnitude) {
+                showcaseMagFocused = false;
+            }
+        } else {
+            inspectorState.focused.reset();
+            showcaseMagFocused = false;
         }
 
         prevMousePressed = mousePressed;
@@ -1746,6 +2776,7 @@ int runInteractive() {
     std::cout.flush();
     fflush(nullptr);
     drawBootFrame(window, ui, "CLOSING: RELEASING WINDOW", 0.85f);
+    ui.shutdown();
     glfwDestroyWindow(window);
     glfwTerminate();
     // The seconds-long exit was static-destructor + DLL-unload teardown
@@ -1756,8 +2787,6 @@ int runInteractive() {
 }
 
 void processInput(GLFWwindow* window) {
-    if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) glfwSetWindowShouldClose(window, true);
-
     static bool mPressed = false;
     if (glfwGetKey(window, GLFW_KEY_M) == GLFW_PRESS) {
         if (!mPressed) { showWireframe = !showWireframe; mPressed = true; }
@@ -1779,8 +2808,10 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
             mouseClickLatchY = mouseY;
         }
     }
-    if (button == GLFW_MOUSE_BUTTON_RIGHT) rightMousePressed = (action == GLFW_PRESS);
-    if (button == GLFW_MOUSE_BUTTON_MIDDLE) middleMousePressed = (action == GLFW_PRESS);
+    if (button == GLFW_MOUSE_BUTTON_RIGHT)
+        rightMousePressed = !g_helpOpen && (action == GLFW_PRESS);
+    if (button == GLFW_MOUSE_BUTTON_MIDDLE)
+        middleMousePressed = !g_helpOpen && (action == GLFW_PRESS);
 }
 
 void framebuffer_size_callback(GLFWwindow* window, int width, int height) { glViewport(0, 0, width, height); }
@@ -1789,8 +2820,11 @@ void mouse_callback(GLFWwindow* window, double xposIn, double yposIn) {
     float xpos = static_cast<float>(xposIn); float ypos = static_cast<float>(yposIn);
     mouseX = xpos; mouseY = ypos;
     
-    // UI Panel override: if hovering over panel, consume drag inputs
-    if (mouseX >= scrWidth - panelWidth) {
+    // Inspector override: if hovering over the computed inspector, consume drag inputs.
+    const auto layout = ui_design::computeWindowLayout(
+        static_cast<int>(scrWidth), static_cast<int>(scrHeight));
+    const bool inspectorOwns = ui_interaction::ownsPoint(layout, mouseX, mouseY);
+    if (!ui_interaction::allowsViewportNavigation(g_helpOpen, inspectorOwns)) {
         lastX = xpos; lastY = ypos;
         return;
     }
@@ -1803,7 +2837,14 @@ void mouse_callback(GLFWwindow* window, double xposIn, double yposIn) {
 }
 
 void scroll_callback(GLFWwindow* window, double xoffset, double yoffset) {
-    if (mouseX >= scrWidth - panelWidth) return;
+    const auto layout = ui_design::computeWindowLayout(
+        static_cast<int>(scrWidth), static_cast<int>(scrHeight));
+    const bool inspectorOwns = ui_interaction::ownsPoint(layout, mouseX, mouseY);
+    if (inspectorOwns) {
+        pendingInspectorWheel += static_cast<float>(yoffset);
+        return;
+    }
+    if (!ui_interaction::allowsViewportNavigation(g_helpOpen, false)) return;
     camera.ProcessMouseScroll(static_cast<float>(yoffset));
 }
 
@@ -1813,11 +2854,26 @@ void scroll_callback(GLFWwindow* window, double xoffset, double yoffset) {
 void char_callback(GLFWwindow*, unsigned int codepoint) {
     if (codepoint < 128) g_charInput.push_back(static_cast<char>(codepoint));
 }
-void key_callback(GLFWwindow*, int key, int, int action, int) {
+void key_callback(GLFWwindow*, int key, int, int action, int mods) {
     if (action == GLFW_PRESS || action == GLFW_REPEAT) {
-        if (key == GLFW_KEY_BACKSPACE) g_backspace = true;
-        if (key == GLFW_KEY_ENTER || key == GLFW_KEY_KP_ENTER) g_enter = true;
+        if (key == GLFW_KEY_BACKSPACE) {
+            g_backspace = true;
+            return;
+        }
+        if ((key == GLFW_KEY_ENTER || key == GLFW_KEY_KP_ENTER) &&
+            showcaseMagFocused) {
+            g_enter = true;
+            return;
+        }
+        const bool shift = (mods & GLFW_MOD_SHIFT) != 0;
+        ui_interaction::queueKeyIntent(
+            g_pendingKeyIntent,
+            ui_interaction::translateKey(mapGlfwKey(key), true, shift));
     }
+}
+
+void content_scale_callback(GLFWwindow*, float xscale, float yscale) {
+    g_contentScale = ui_interaction::effectiveContentScale(xscale, yscale);
 }
 
 // =============================================================================

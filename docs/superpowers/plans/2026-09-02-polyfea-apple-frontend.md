@@ -24,6 +24,7 @@
 - Keep numeric values right-aligned, use tabular figures, and display units separately from numbers.
 - Preserve the progress panel's reliable cancel path and the inspector's compute-time input lock.
 - Treat any numerical regression as a failure; frontend work does not authorize baseline updates.
+- Run project-owned CTest targets with `-R "^(load_physics_tests|ui_design_tests|ui_action_wiring_tests)$"`; the fetched Eigen project registers 915 unbuilt vendor tests in this configuration, so an unfiltered CTest run is not a valid project gate.
 
 ---
 
@@ -81,7 +82,7 @@ Run from the repository root. Persist the exact pre-implementation commit in the
 New-Item -ItemType Directory -Force build | Out-Null
 git rev-parse HEAD | Set-Content build/ui-baseline-commit.txt
 & .\build.bat build
-ctest --test-dir build --output-on-failure
+ctest --test-dir build -R "^load_physics_tests$" --output-on-failure
 Push-Location build
 & .\FEAPreProcessor.exe --regress all
 $regressionExit = $LASTEXITCODE
@@ -177,14 +178,19 @@ enum class ControlId {
     CancelJob, SelectCubeMode, SelectImportMode, SelectModelFile,
     PreviousModelPage, NextModelPage, SelectMaterial,
     ToggleVertexSmoothing, SelectSurfaceView, SelectVolumeView,
-    GenerateVolumeMesh, ToggleSlicing, SelectSliceAxisX,
-    SelectSliceAxisY, SelectSliceAxisZ, PreviewSlice,
+    GenerateVolumeMesh, EditSizeX, EditSizeY, EditSizeZ,
+    EditSubdivisions, EditMeshQuality, EditMaxVolumePercent,
+    ToggleSlicing, EditLayerThickness, SelectSliceAxisX,
+    SelectSliceAxisY, SelectSliceAxisZ, EditMaxSlabs,
+    EditWallWidth, PreviewSlice, SelectPreviewLayer,
     EditShowcaseMagnitude, ResetShowcaseMagnitude, RunShowcaseFracture,
     ToggleMultithreading, ToggleGpuAcceleration, SelectBuildAxis,
-    SelectLoadPreset, RunLinearAnalysis, RunNonlinearAnalysis,
+    SelectLoadPreset, EditLoadMagnitude, RunLinearAnalysis,
+    RunNonlinearAnalysis, EditCurvatureAngle, EditCurvatureFraction,
     RunAdaptiveAnalysis, ToggleFdmAnisotropy, RunBrittleFracture,
     SelectOriginalResult, SelectDeformedResult, SelectFractureView,
-    SelectDeadElementView, ToggleForceMap, OpenHelp, ResetView
+    SelectDeadElementView, ToggleForceMap, EditSectionPosition,
+    OpenHelp, ResetView
 };
 
 struct WidgetId {
@@ -207,6 +213,8 @@ std::string_view controlToken(ControlId id);
 }
 ```
 
+Every existing slider must use its dedicated stable identity above. Repeated renderings of the same physical parameter, such as mesh quality in Cube and Import modes, share the same `ControlId`; repeated list rows use `WidgetId::instance` to remain distinct.
+
 In `computeWindowLayout`, reject non-positive dimensions with `std::invalid_argument`, compute `panelW = std::clamp(widthPx * 0.28f, 320.0f, 380.0f)`, use a 44 px title bar, and make viewport plus inspector equal the full width without overlap.
 
 - [ ] **Step 5: Run focused tests and the full existing CTest set**
@@ -214,7 +222,7 @@ In `computeWindowLayout`, reject non-positive dimensions with `std::invalid_argu
 ```powershell
 & .\build.bat build
 ctest --test-dir build -R ui_design_tests --output-on-failure
-ctest --test-dir build --output-on-failure
+ctest --test-dir build -R "^(load_physics_tests|ui_design_tests)$" --output-on-failure
 ```
 
 Expected: all tests pass.
@@ -740,7 +748,7 @@ Consume and clear `pendingInspectorWheel` once per UI frame. Do not alter right-
 ```powershell
 & .\build.bat build
 ctest --test-dir build -R "ui_design_tests|ui_action_wiring_tests" --output-on-failure
-ctest --test-dir build --output-on-failure
+ctest --test-dir build -R "^(load_physics_tests|ui_design_tests|ui_action_wiring_tests)$" --output-on-failure
 Push-Location build
 & .\FEAPreProcessor.exe --regress all
 $regressionExit = $LASTEXITCODE
@@ -835,7 +843,7 @@ Render Linear, Nonlinear, Adaptive, and Brittle fracture actions even when disab
 ```powershell
 & .\build.bat build
 ctest --test-dir build -R ui_design_tests --output-on-failure
-ctest --test-dir build --output-on-failure
+ctest --test-dir build -R "^(load_physics_tests|ui_design_tests|ui_action_wiring_tests)$" --output-on-failure
 Push-Location build
 & .\FEAPreProcessor.exe --regress all
 $regressionExit = $LASTEXITCODE
@@ -1016,7 +1024,7 @@ Rebuild font atlases only when the effective content scale changes, so high-DPI 
 
 ```powershell
 & .\build.bat build
-ctest --test-dir build --output-on-failure
+ctest --test-dir build -R "^(load_physics_tests|ui_design_tests|ui_action_wiring_tests)$" --output-on-failure
 Push-Location build
 & .\FEAPreProcessor.exe --regress all
 $regressionExit = $LASTEXITCODE
@@ -1050,7 +1058,7 @@ git commit -m "Add accessible inspector interaction"
 ```powershell
 git diff --check
 & .\build.bat build
-ctest --test-dir build --output-on-failure
+ctest --test-dir build -R "^(load_physics_tests|ui_design_tests|ui_action_wiring_tests)$" --output-on-failure
 Push-Location build
 & .\FEAPreProcessor.exe --regress all
 $regressionExit = $LASTEXITCODE

@@ -116,3 +116,69 @@ uniform vec3 color;
 uniform float uiAlpha;   // set to 1.0 by every SimpleUI draw call; <1 for overlays
 void main() { FragColor = vec4(color, uiAlpha); }
 )";
+
+inline const char* roundedRectVertexShaderSource = R"(
+#version 330 core
+layout (location = 0) in vec2 aPos;
+layout (location = 1) in vec2 aLocalPos;
+out vec2 localPos;
+uniform mat4 projection;
+void main() {
+    localPos = aLocalPos;
+    gl_Position = projection * vec4(aPos, 0.0, 1.0);
+}
+)";
+
+inline const char* roundedRectFragmentShaderSource = R"(
+#version 330 core
+in vec2 localPos;
+out vec4 FragColor;
+uniform vec2 halfSize;
+uniform float radius;
+uniform vec4 color;
+uniform bool outlineOnly;
+uniform vec2 innerHalfSize;
+uniform float innerRadius;
+
+float roundedBoxSdf(vec2 p, vec2 halfSize, float radius) {
+    vec2 q = abs(p) - halfSize + vec2(radius);
+    return min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - radius;
+}
+
+void main() {
+    float distanceToEdge = roundedBoxSdf(localPos, halfSize, radius);
+    float coverage = 1.0 - smoothstep(-1.0, 1.0, distanceToEdge);
+    if (outlineOnly) {
+        float distanceToInnerEdge = roundedBoxSdf(
+            localPos, innerHalfSize, innerRadius);
+        float innerCoverage = 1.0 - smoothstep(
+            -1.0, 1.0, distanceToInnerEdge);
+        coverage = max(0.0, coverage - innerCoverage);
+    }
+    FragColor = vec4(color.rgb, color.a * coverage);
+}
+)";
+
+inline const char* fontVertexShaderSource = R"(
+#version 330 core
+layout (location = 0) in vec2 aPos;
+layout (location = 1) in vec2 aTexCoord;
+out vec2 texCoord;
+uniform mat4 projection;
+void main() {
+    texCoord = aTexCoord;
+    gl_Position = projection * vec4(aPos, 0.0, 1.0);
+}
+)";
+
+inline const char* fontFragmentShaderSource = R"(
+#version 330 core
+in vec2 texCoord;
+out vec4 FragColor;
+uniform sampler2D fontAtlas;
+uniform vec4 textColor;
+void main() {
+    float coverage = texture(fontAtlas, texCoord).r;
+    FragColor = vec4(textColor.rgb, textColor.a * coverage);
+}
+)";
