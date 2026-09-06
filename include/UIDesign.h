@@ -186,6 +186,12 @@ struct HorizontalSliderGeometry {
     Rect thumb;
 };
 
+struct SectionHeaderLayout {
+    float labelBaselineY;
+    float dividerY;
+    float nextContentBaselineY;
+};
+
 struct ViewportOverlayLayout {
     Rect solverStatus;
     Rect progress;
@@ -205,6 +211,8 @@ std::vector<std::string> wrapTextToWidth(
     std::string_view text, float maxWidth, float pixelSize);
 HorizontalSliderGeometry horizontalSliderGeometry(
     const Rect& field, float normalizedPosition);
+SectionHeaderLayout sectionHeaderLayout(
+    float topY, float requestedTextSize);
 BinarySegmentPresentation surfaceVolumePresentation(
     bool hasVolumetricMesh, bool showVolumetricMesh);
 SurfaceVolumeAction resolveSurfaceVolumeAction(

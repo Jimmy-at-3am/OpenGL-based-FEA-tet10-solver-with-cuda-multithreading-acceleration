@@ -431,6 +431,18 @@ void testHorizontalSliderUsesFourPixelTrackAndSixteenPixelThumb() {
                geometry.track.x + geometry.track.w * 0.25f);
 }
 
+void testSectionHeaderKeepsDividerOutOfTextBand() {
+    const auto layout = ui_design::sectionHeaderLayout(100.0f, 9.5f);
+
+    expectNear(layout.labelBaselineY, 111.0f);
+    expectNear(layout.dividerY, 117.0f);
+    expectNear(layout.nextContentBaselineY, 131.0f);
+    expectTrue(layout.dividerY - layout.labelBaselineY >= 6.0f,
+               "section divider must clear the accessible heading text band");
+    expectTrue(layout.nextContentBaselineY - layout.dividerY >= 14.0f,
+               "following content must clear the section divider");
+}
+
 void testViewportOverlayLayoutStacksStatusAboveProgress() {
     const auto window = ui_design::computeWindowLayout(1024, 768);
     const auto overlays = ui_design::computeViewportOverlayLayout(
@@ -784,6 +796,7 @@ int main() {
         {"surface volume segment", testSurfaceVolumeSegmentPreservesAvailability},
         {"surface volume action change gate", testSurfaceVolumeActionRequiresASelectionChange},
         {"horizontal slider geometry", testHorizontalSliderUsesFourPixelTrackAndSixteenPixelThumb},
+        {"section header clears divider", testSectionHeaderKeepsDividerOutOfTextBand},
         {"viewport overlay stacking", testViewportOverlayLayoutStacksStatusAboveProgress},
         {"cube routes to generic solve workflow", testSolvePresentationRoutesCubeToGenericWorkflow},
         {"empty import has no mesh source claim", testEmptyImportHasNoMeshSourceClaim},

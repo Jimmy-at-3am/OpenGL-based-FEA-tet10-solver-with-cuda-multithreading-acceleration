@@ -1752,11 +1752,16 @@ int runInteractive() {
             // Workflow: pick gcode model -> GENERATE 3D MESH -> type/accept the
             // magnitude -> RUN -> color-spectrum result + 3-D load arrows.
             if (solvePresentation.showToolpathWorkflow) {
-                ui.drawRect(rX, rY, rW, 1.5f, glm::vec3(ui.themeColor(
-                    ui_design::ColorToken::SystemBlue, 0.5f))); rY += 8.0f;
-                ui.drawText("GCODE SHOWCASE", rX, rY, 9.5f,
+                const auto showcaseHeader =
+                    ui_design::sectionHeaderLayout(rY, 9.5f);
+                ui.drawText("GCODE SHOWCASE", rX,
+                            showcaseHeader.labelBaselineY, 9.5f,
                             ui.themeColor(ui_design::ColorToken::PrimaryInk),
-                            ui_design::FontRole::Interface); rY += 16.0f;
+                            ui_design::FontRole::Interface);
+                ui.drawRect(rX, showcaseHeader.dividerY, rW, 1.5f,
+                            glm::vec3(ui.themeColor(
+                                ui_design::ColorToken::SystemBlue, 0.5f)));
+                rY = showcaseHeader.nextContentBaselineY;
                 char lbuf[96];
                 snprintf(lbuf, sizeof(lbuf), "LOAD: %s  (force in N)",
                          showcaseCfg.load.c_str());

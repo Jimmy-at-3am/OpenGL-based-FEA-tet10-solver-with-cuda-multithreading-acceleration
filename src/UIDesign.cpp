@@ -150,6 +150,14 @@ HorizontalSliderGeometry horizontalSliderGeometry(
     };
 }
 
+SectionHeaderLayout sectionHeaderLayout(
+    float topY, float requestedTextSize) {
+    const float effectiveTextSize = essentialTextPixelSize(requestedTextSize);
+    const float labelBaselineY = topY + effectiveTextSize;
+    const float dividerY = labelBaselineY + 6.0f;
+    return {labelBaselineY, dividerY, dividerY + 14.0f};
+}
+
 BinarySegmentPresentation surfaceVolumePresentation(
     bool hasVolumetricMesh, bool showVolumetricMesh) {
     return {
