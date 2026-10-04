@@ -1,0 +1,26 @@
+test,id,dim1_mm,dim2_mm,loads,defl_mm,fail,mode,location,notes
+# One row per specimen. Lines starting with # are ignored; delete these examples.
+# Loads: total hanging mass incl. loader/cord/frame, units allowed, parts joined with + (no spaces): 45lb+350g+1.2kg
+# loads/defl_mm: the elastic steps, space-separated, second loading pass. fail: total hanging mass at the break.
+# mode: interlayer | intralayer | mixed | fixture   (fixture = broke at a hole/clamp; excluded from strength)
+#
+# rig: aluminium bar 20 x 3, 150 mm free. dim1 = width, dim2 = thickness
+# rig,AL1,20.02,3.01,250g 500g 750g 1kg,0.88 1.77 2.66 3.54,,,,
+#
+# tension: dim1 = gauge width, dim2 = thickness
+# tension_flat,TF1,3.02,2.01,,,45lb+3.38kg,intralayer,gauge centre,
+# tension_standing,TS1,3.01,4.03,,,40lb+6.45kg,interlayer,gauge top,
+#
+# bars: dim1 = width, dim2 = height along the load. Elastic readings first; break only after predictions are committed.
+# bar_flat,BF1,8.01,7.98,500g 1kg 1.5kg 2kg,0.71 1.41 2.11 2.82,5lb+2.66kg,intralayer,root fillet,
+# bar_standing,BS1,8.02,8.00,250g 500g 750g 1kg,0.52 1.03 1.54 2.05,5lb+0.21kg,interlayer,root,
+#
+# twist: dim1 = shaft diameter. propped = rod under the lever on the axis (calibration); free = no rod (validation)
+# twist_propped,TP1,8.01,,180g 360g 540g 720g,1.22 2.45 3.67 4.90,1.62kg,interlayer,shaft root,
+# twist_free,TW1,7.99,,180g 360g 540g 720g,1.26 2.52 3.78 5.04,1.55kg,interlayer,shaft root,
+#
+# C-ring: dim1 = width (print height), dim2 = radial thickness. defl_mm = closing of the anvil-to-frame gap
+# cring,CR1,6.01,4.02,600g 1.2kg 1.8kg 2.4kg,0.28 0.56 0.84 1.12,10lb+2.4kg,intralayer,outer back,
+#
+# columns (optional): dim1 = width, dim2 = thickness. loads = both bottles together; defl_mm = sideways at the top
+# column80,C80,6.00,3.02,400g 800g 1.2kg 1.4kg 1.55kg,0.12 0.34 0.90 1.68 3.38,,,,
