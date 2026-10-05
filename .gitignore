@@ -197,4 +197,4 @@ $RECYCLE.BIN/
 # =============================================================
 # secrets.env
 # local_config.h
-# my_test_meshes/
+# my_test_meshes/__pycache__/
