@@ -107,6 +107,8 @@ stand flexing, the vise clamp rotating, or a mislabeled weight.
 - Condition every part 48 h at room temperature. Before testing, measure the
   critical dimensions (3 readings each).
 
+**Ready-made files:** `docs/validation/specimens/` has every part as print-ready STL and STEP, plus the simulation copies; see its README for how to print them.
+
 **Geometry.** Coordinates are in mm. The simulation depends on the origin and
 axes, so model the parts exactly like this and export STEP in mm.
 
@@ -114,7 +116,7 @@ axes, so model the parts exactly like this and export STEP in mm.
 |---|---|---|
 | **Dogbone** | Outline in XY, length along X: 25 × 25 tabs, each with a Ø6.4 hole 10 mm from its end; a 3.0-wide × 30-long gauge; R40 arcs from gauge to tab; about 135 overall. Extrude 2.0 (flat print) or 4.0 (standing print). For the standing simulation, put the length along Z. | 5 flat + 5 standing on a tab end |
 | **Bar** | Flat CAD: block x −12..0, y −15..15, z 0..16; bar x 0..84, y −4..4, z 0..8 (flush with the block bottom); R3 fillets where the bar meets the block. String groove 1.0 deep × 1.5 wide around the bar at x = 80. Standing CAD: the same part with block x 0..16, y −15..15, z 0..12 and bar x 0..8, y −4..4, z 12..96 (flush side faces −X, groove at z = 92). | 5 as the flat CAD, 5 as the standing CAD |
-| **Twist** | Block x −15..15, y −15..15, z 0..12; Ø8 shaft on the Z axis, z 12..32, R3 fillets at both ends; lever x −8..103, y −6..6, z 32..40; pad x 97..103, y −3..3, z 40..43, with a Ø2 hole along X at z = 41.5. Mark x = 0 (the shaft axis) on the lever face at y = −6, which faces down in the test. | 10 as modeled; supports under the lever only, none touching the shaft |
+| **Twist** | Block x −15..15, y −15..15, z 0..12; Ø8 shaft on the Z axis, z 12..32, R3 fillet at the block and R1.5 at the lever; lever x −8..103, y −6..6, z 32..40; pad x 97..103, y −3..3, z 40..43, with a Ø2 hole along X at z = 41.5. Mark x = 0 (the shaft axis) on the lever face at y = −6, which faces down in the test. | 10 as modeled; supports under the lever only, none touching the shaft |
 | **C-ring** | Ring in XY centred on the origin: inner R13, outer R17, z 0..6; a 6-wide gap centred on +X; outer surface cut flat at y = ±16.2. | 5 flat |
 | **Column** (optional) | Flat "T", 3 thick: a 6-wide stem whose length from the vise jaws to the crossbar centreline is 60, 80, or 100, plus 15 to clamp; an 80 × 8 crossbar with Ø3 holes at ±35. | 1 of each length, flat |
 | **Frame** (fixture) | Rectangle with a 45 × 60 interior and 12 × 12 bars, 100 % infill. | 1 |
