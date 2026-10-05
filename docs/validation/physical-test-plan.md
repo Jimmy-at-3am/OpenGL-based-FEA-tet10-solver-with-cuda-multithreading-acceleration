@@ -15,7 +15,7 @@
 ## Quick start
 
 1. **Rig check** (15 min, §3).
-2. **Print** the specimens in §4: four designs, about 40 prints, one profile.
+2. **Print** the specimens in §4: four designs, about 50 prints incl. fixtures, one profile.
 3. **Calibrate.** Break the tension dogbones and the propped twist specimens.
    For the bars, take elastic readings only — don't break them yet. Then run
    `validate.py calibrate`, which writes your `.mat`.
@@ -76,7 +76,7 @@ These estimates come from `validate.py estimate` with the literature
 | Bar, flat | 53 N (5.4 kg)\* | 4 × 540 g | ~3.8 kg, then water |
 | Bar, standing | 24 N (2.5 kg)\* | 4 × 250 g | ~1.7 kg, then water |
 | Twist (either) | 18 N (1.8 kg) | 4 × 180 g | ~1.3 kg, then water |
-| C-ring | 61 N (6.2 kg) | 4 × 620 g | ~4.4 kg, then water |
+| C-ring | 102 N (10.4 kg) | 4 × 1 kg | ~7.3 kg, then water |
 | Columns 60 / 80 / 100 | 32 / 18 / 12 N, split across two bottles | 165 / 95 / 60 g per bottle | — |
 
 \*Beam formula. The root fillet makes the real value 10–20 % lower.
@@ -107,28 +107,28 @@ stand flexing, the vise clamp rotating, or a mislabeled weight.
 - Condition every part 48 h at room temperature. Before testing, measure the
   critical dimensions (3 readings each).
 
-**Ready-made files:** `docs/validation/specimens/` has every part as print-ready STL and STEP, plus the simulation copies; see its README for how to print them.
+**Ready-made files:** `docs/validation/specimens/` has every part as print-ready STL and STEP, plus the simulation copies; see its README for how to print them. Clamp blocks and load points are oversized on purpose so standard hardware grips them; only the measured sections are small.
 
 **Geometry.** Coordinates are in mm. The simulation depends on the origin and
 axes, so model the parts exactly like this and export STEP in mm.
 
 | Part | Geometry | Print |
 |---|---|---|
-| **Dogbone** | Outline in XY, length along X: 25 × 25 tabs, each with a Ø6.4 hole 10 mm from its end; a 3.0-wide × 30-long gauge; R40 arcs from gauge to tab; about 135 overall. Extrude 2.0 (flat print) or 4.0 (standing print). For the standing simulation, put the length along Z. | 5 flat + 5 standing on a tab end |
-| **Bar** | Flat CAD: block x −12..0, y −15..15, z 0..16; bar x 0..84, y −4..4, z 0..8 (flush with the block bottom); R3 fillets where the bar meets the block. String groove 1.0 deep × 1.5 wide around the bar at x = 80. Standing CAD: the same part with block x 0..16, y −15..15, z 0..12 and bar x 0..8, y −4..4, z 12..96 (flush side faces −X, groove at z = 92). | 5 as the flat CAD, 5 as the standing CAD |
-| **Twist** | Block x −15..15, y −15..15, z 0..12; Ø8 shaft on the Z axis, z 12..32, R3 fillet at the block and R1.5 at the lever; lever x −8..103, y −6..6, z 32..40; pad x 97..103, y −3..3, z 40..43, with a Ø2 hole along X at z = 41.5. Mark x = 0 (the shaft axis) on the lever face at y = −6, which faces down in the test. | 10 as modeled; supports under the lever only, none touching the shaft |
-| **C-ring** | Ring in XY centred on the origin: inner R13, outer R17, z 0..6; a 6-wide gap centred on +X; outer surface cut flat at y = ±16.2. | 5 flat |
-| **Column** (optional) | Flat "T", 3 thick: a 6-wide stem whose length from the vise jaws to the crossbar centreline is 60, 80, or 100, plus 15 to clamp; an 80 × 8 crossbar with Ø3 holes at ±35. | 1 of each length, flat |
-| **Frame** (fixture) | Rectangle with a 45 × 60 interior and 12 × 12 bars, 100 % infill. | 1 |
+| **Dogbone** | Outline in XY, length along X: 30 × 40 tabs, each with a Ø8.5 hole (M8) 15 mm from its end; a 3.0-wide × 30-long gauge; R40 arcs from gauge to tab; 170 overall. Extrude 2.0 (flat print) or 4.0 (standing print). Each end is clamped between two printed grip plates (66 × 54 × 10, M8 through the tab hole, four M5 beside the tab, Ø14 carabiner hole). | 5 flat + 5 standing on a tab end; 4 grip plates |
+| **Bar** | Flat CAD: block x −25..0, y −20..20, z 0..24 (vise grip); 8 × 8 bar x 0..64, y −4..4, z 0..8 (flush with the block bottom), R3 fillets at the block; 45° taper x 64..72 into a 16 × 16 load head x 72..88 (z 0..16) with a Ø6.5 cross hole along Y at x = 80, z = 8. Standing CAD: the same part with the bar along +Z, block on the bed (x 0..24, z 0..25), flush side facing −X, load hole at z = 105. | 5 as the flat CAD, 5 as the standing CAD |
+| **Twist** | Block x −20..20, y −20..20, z 0..20 (vise grip); Ø8 shaft on the Z axis, z 20..40, R3 fillets at both ends; lever x −10..108, y −8..8, z 40..52; load block x 92..108, y −8..8, z 52..64 with a Ø6.5 hole along X at z = 58 (100 mm from the axis). A notch on the lever's y = −8 face marks the shaft axis; that face points down in the test. | 10 as modeled; supports under the lever only, none touching the shaft |
+| **C-ring** | Ring in XY centred on the origin: inner R13, outer R17, z 0..10; a 6-wide gap centred on +X; 16-wide flat load pads at y = ±19. | 5 flat |
+| **Column** (optional) | Flat "T": 25 × 30 × 10 clamp block, then a 6 × 3 stem whose free length from the block to the crossbar centreline is 60, 80, or 100; a 100 × 14 × 3 crossbar with Ø6 holes at ±44. | 1 of each length, flat |
+| **Frame** (fixture) | Rectangle with a 60 × 80 interior and 16 × 16 bars; 200 × 25 × 20 anvil bar with Ø8 cord holes. | 1 each |
 
 Print one spare per design to shake down the rigs.
 
 **Simulation copies.** The solver loads the end face of a part, so that face
-must sit where the string pulls. For the simulation STEP files:
+must sit on the axis of the load hole. For the simulation STEP files:
 
-- end the bar at the groove centre, x = 80 (z = 92 standing), without the
-  groove;
-- cut the pad at z = 41.5 (the hole centre), without the hole.
+- cut the bar's load head at the hole axis, x = 80 (z = 105 standing), without
+  the hole;
+- cut the twist load block at the hole axis, z = 58, without the hole.
 
 The dogbone and C-ring are simulated as printed.
 
@@ -138,25 +138,28 @@ The dogbone and C-ring are simulated as printed.
 TENSION                  VISE (bars, twist, columns)        C-RING
   ═══╤═══ overhead bar                                      ═══╤═════════════╤═══ overhead bar
      │ cord              ▐█ vise █▌▬▬▬▬▬▬▬▬ part               │ cord ┌───┐   │ cord   frame top bar
-   (bolt)                  block clamped   │ string            │      │ C │   │        on the ring
+   (grip)                  block clamped   │ hanger            │      │ C │   │        on the ring
   ▐dogbone▌                (table edge)    │                ═══╧══════╪═══╪═══╧═══ anvil, passes
-   (bolt)                                [load]                       └─┬─┘           through the frame
+   (grip)                                [load]                       └─┬─┘           through the frame
      │ carabiner                                                        │
   [bucket] ← 1–2 cm above a box                                       [load]
 ```
 
-- **Tension:** an M6 bolt goes through each hole. Tie the cord around the bolt
-  on *both* sides of the dogbone so the pull is centred. Keep a box 1–2 cm
+- **Tension:** clamp each tab between two grip plates (an M8 bolt through the
+  tab hole, four M5 bolts beside the tab), and hang each grip from a carabiner
+  through its Ø14 hole so the pull self-centres. Keep a box 1–2 cm
   under the bucket, so the weights drop no further than that when the coupon
   snaps.
 - **Vise:** mount it at the table edge so the load hangs clear.
-  - Bars: horizontal, flush side down, string in the groove.
-  - Twist: the shaft and lever both horizontal, string through the pad hole.
+  - Bars: horizontal, flush side down. Put an M6 bolt or rod through the load
+    head and loop the hanger over both ends so the load hangs centred.
+  - Twist: the shaft and lever both horizontal; an M6 bolt through the load
+    block, with the hanger looped over both ends.
     For the **propped** specimens, set a round rod (parallel to the shaft)
     under the lever exactly at the axis mark, just touching before you load.
     That makes the load a pure torque. The **free** specimens get no rod.
-- **C-ring:** hang a stiff bar about 200 mm long (wood, aluminium, or a printed
-  20 × 20 bar) from the overhead bar by two cords, after sliding the printed
+- **C-ring:** hang the anvil bar (printed, or any stiff 200 mm bar) from the
+  overhead bar by two cords through its end holes, after sliding the printed
   frame onto it. Stand the ring on the anvil with its flats up and down and its
   gap to the side, inside the frame. The frame's top bar rests on the ring and
   the load hangs from the frame's bottom. Gravity centres everything.

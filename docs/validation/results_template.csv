@@ -20,7 +20,7 @@ test,id,dim1_mm,dim2_mm,loads,defl_mm,fail,mode,location,notes
 # twist_free,TW1,7.99,,180g 360g 540g 720g,1.26 2.52 3.78 5.04,1.55kg,interlayer,shaft root,
 #
 # C-ring: dim1 = width (print height), dim2 = radial thickness. defl_mm = closing of the anvil-to-frame gap
-# cring,CR1,6.01,4.02,600g 1.2kg 1.8kg 2.4kg,0.28 0.56 0.84 1.12,10lb+2.4kg,intralayer,outer back,
+# cring,CR1,10.01,4.02,1kg 2kg 3kg 4kg,0.28 0.56 0.84 1.12,20lb+3.1kg,intralayer,outer back,
 #
 # columns (optional): dim1 = width, dim2 = thickness. loads = both bottles together; defl_mm = sideways at the top
 # column80,C80,6.00,3.02,400g 800g 1.2kg 1.4kg 1.55kg,0.12 0.34 0.90 1.68 3.38,,,,

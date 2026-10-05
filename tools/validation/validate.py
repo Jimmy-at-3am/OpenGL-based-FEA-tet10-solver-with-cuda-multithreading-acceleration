@@ -27,13 +27,13 @@ LB_KG = 0.45359237
 COUPON_W = 3.0                                    # dogbone gauge width
 COUPON_T = {"tension_flat": 2.0, "tension_standing": 4.0}
 BAR_B = BAR_H = 8.0                               # bar section
-BAR_L = 80.0                                      # grip-block face to string groove
+BAR_L = 80.0                                      # grip-block face to load-hole axis
 TW_D = 8.0                                        # twist shaft diameter
 TW_LG = 20.0                                      # block face to lever face
-TW_A = 100.0                                      # shaft axis to string (lever arm)
-TW_Z = 29.5                                       # block face to string line
-LEVER_W, LEVER_T = 12.0, 8.0                      # lever: in-plane width, thickness
-CR_R, CR_H, CR_B = 15.0, 4.0, 6.0                 # C-ring: mean radius, radial thk, width
+TW_A = 100.0                                      # shaft axis to load-hole axis (lever arm)
+TW_Z = 38.0                                       # block face to load-hole axis
+LEVER_W, LEVER_T = 16.0, 12.0                     # lever: in-plane width, thickness
+CR_R, CR_H, CR_B = 15.0, 4.0, 10.0                # C-ring: mean radius, radial thk, width
 COL_B, COL_T = 6.0, 3.0                           # column section, buckles across COL_T
 COLUMNS = {"column60": 60.0, "column80": 80.0, "column100": 100.0}
 RIG_B, RIG_H, RIG_L, RIG_E = 20.0, 3.0, 150.0, 69000.0  # aluminium rig check, E in MPa
@@ -43,16 +43,16 @@ RIG_B, RIG_H, RIG_L, RIG_E = 20.0, 3.0, 150.0, 69000.0  # aluminium rig check, E
 # dimension (mm) of the simulation CAD, used to convert --edge-mm to the
 # runner's normalized maxVolume. probe: (posMM from the bbox centre, axis).
 SIM = {
-    "tension_flat":     dict(preset="pullX", sign=1, lmax=135.0, probe=None),
-    "tension_standing": dict(preset="pullZ", sign=1, lmax=135.0, probe=None),
-    "bar_flat":         dict(preset="bendXZ", sign=-1, lmax=92.0,
-                             probe=((46.0, 0.0, -4.0), 2)),
-    "bar_standing":     dict(preset="bendZX", sign=-1, lmax=92.0,
-                             probe=((-4.0, 0.0, 46.0), 0)),
-    "twist_free":       dict(preset="bendZY", sign=-1, lmax=118.0,
-                             probe=((56.0, 0.0, 20.75), 1)),
-    "cring":            dict(preset="surfaceCompY", sign=1, lmax=34.0,
-                             probe=((0.13, 16.2, 0.0), 1)),
+    "tension_flat":     dict(preset="pullX", sign=1, lmax=170.0, probe=None),
+    "tension_standing": dict(preset="pullZ", sign=1, lmax=170.0, probe=None),
+    "bar_flat":         dict(preset="bendXZ", sign=-1, lmax=105.0,
+                             probe=((52.5, 0.0, -4.0), 2)),
+    "bar_standing":     dict(preset="bendZX", sign=-1, lmax=105.0,
+                             probe=((-4.0, 0.0, 52.5), 0)),
+    "twist_free":       dict(preset="bendZY", sign=-1, lmax=128.0,
+                             probe=((56.0, 0.0, 29.0), 1)),
+    "cring":            dict(preset="surfaceCompY", sign=1, lmax=38.0,
+                             probe=((0.13, 19.0, 0.0), 1)),
 }
 
 # ---- acceptance (plan section 9) ---------------------------------------------
