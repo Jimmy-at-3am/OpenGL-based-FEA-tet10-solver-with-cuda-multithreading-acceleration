@@ -58,7 +58,7 @@ def weights(ax, cx, ytop, label):
     ax.add_patch(Polygon([(cx - 22, ytop - 25), (cx + 22, ytop - 25),
                           (cx + 18, ytop - 75), (cx - 18, ytop - 75)],
                          facecolor="#e0e0e0", edgecolor="#333", lw=1.2, zorder=4))
-    ax.text(cx, ytop - 50, "plates /\nkit / water", ha="center", va="center", fontsize=8)
+    ax.text(cx, ytop - 50, "carrier\non screw\nstand", ha="center", va="center", fontsize=8)
     arrow(ax, (cx + 32, ytop - 20), (cx + 32, ytop - 70))
     ax.text(cx + 38, ytop - 45, label, color=LOAD_C, fontsize=10, va="center",
             fontweight="bold")
@@ -125,10 +125,10 @@ def fig_tension():
     note(ax, (-27, xe - 20), "Grip: 2 printed plates per end\n(fixture_dogbone_grip_plate)\nM8 bolt through tab hole +\n4 × M5 clamp bolts beside tab",
          (-140, xe - 10))
     note(ax, (1.5, 0), "Measured section:\n3 × 2 mm (flat print)\n3 × 4 mm (standing print)\nmust break here", (40, 5), "#1f4e8c")
-    note(ax, (0, -top - 14), "carabiner → bucket", (40, -top - 5))
+    note(ax, (0, -top - 14), "shackle → weight carrier (see 0_loading_method)", (40, -top - 5))
     dim(ax, (-15, xe - 50), (15, xe - 50), "30", (0, -5))
     dim(ax, (-60, -xe), (-60, xe), "170", (-9, 0))
-    ax.text(-140, -top - 175, "Load: plates to ~70 % (≈45 lb), then pour water slowly until it breaks.\n"
+    ax.text(-140, -top - 175, "Load in steps with the carrier + screw stand: start ≈40 lb, +5 lb per step, hold 30 s.\n"
             "Record total hanging mass. Break must be in the narrow section.\n"
             "No deflection reading (stiffness comes from the bars).", fontsize=9.5)
     ax.set_xlim(-150, 165); ax.set_ylim(-top - 190, top + 50)
@@ -175,7 +175,7 @@ def fig_bending():
         note(ax, (30, 10), "measured: 8 × 8 mm bar", (5, 30), "#1f4e8c")
         # hanger + load
         ax.plot([80, 80], [6, -20], color="#333", lw=1.5, zorder=5)
-        note(ax, (80, 10), "M6 bolt / 6 mm rod through load head,\nhanger looped over BOTH ends", (105, 45))
+        note(ax, (80, 10), "M6 bolt through load head; printed\nload yoke hangs on BOTH ends", (105, 45))
         weights(ax, 80, -20, "F = m·g ↓\n" + load)
         # indicator
         rect(ax, 76, 26, 8, 20, HW); ax.plot([80, 80], [18, 26], color="#222", lw=1.5)
@@ -183,7 +183,7 @@ def fig_bending():
         dim(ax, (0, -8), (80, -8), "80 mm (block face → load line)", (0, -5))
         ax.set_xlim(-115, 200); ax.set_ylim(-100, 80)
     fig.text(0.02, 0.01, "Elastic readings first (4 steps: ~500 g flat / ~250 g standing, read 10 s after each). "
-             "Break only after predictions are committed:\nhang ~70 %, then pour water. Expected break: at the root fillet next to the block.",
+             "Break only after predictions are committed:\nload in steps with the carrier (start ~3 kg / ~1.3 kg). Expected break: at the root fillet next to the block.",
              fontsize=9.5)
     return fig
 
@@ -205,7 +205,7 @@ def fig_twist():
     ax.text(62, 1, "shaft axis", fontsize=8)
     ax.add_patch(Circle((38, 100), 3, facecolor="white", edgecolor="#222", lw=1.5, zorder=6))
     ax.plot([36, 40], [98, 102], color=LOAD_C, lw=2, zorder=7); ax.plot([36, 40], [102, 98], color=LOAD_C, lw=2, zorder=7)
-    note(ax, (38, 100), "LOAD: M6 bolt through load block,\nhanger on both ends, F pulls DOWN\n(into the page)", (60, 110), LOAD_C)
+    note(ax, (38, 100), "LOAD: M6 bolt through load block,\nload yoke on both ends, F pulls DOWN\n(into the page)", (60, 110), LOAD_C)
     note(ax, (-10, -20), "FIXED SUPPORT: 40×40×20 block\nclamped in the vise", (-60, -70), SUP_C)
     note(ax, (10, 4), "measured: Ø8 shaft\n(20 mm long)", (55, 30), "#1f4e8c")
     dim(ax, (80, 0), (80, 100), "100 mm\nlever arm", (16, 0))
@@ -232,7 +232,7 @@ def fig_twist():
             fontsize=9.5, fontweight="bold")
     dim(ax, (0, 22), (100, 22), "100 mm", (0, 4))
     ax.set_xlim(-75, 160); ax.set_ylim(-125, 60)
-    fig.text(0.02, 0.01, "Elastic: 4 steps of ~180 g, dial indicator on the load block. Break: hang ~1.3 kg, pour water. "
+    fig.text(0.02, 0.01, "Elastic: 4 steps of ~180 g, dial indicator on the load block. Break: carrier steps from ~1 kg, +100 g. "
              "Expected ≈18 N (1.8 N·m), flat break across a layer at the shaft root.", fontsize=9.5)
     return fig
 
@@ -289,7 +289,7 @@ def fig_cring():
     note(ax, (-2, -30), "strap around the frame's\nbottom bar", (-125, -75))
     ax.set_xlim(-130, 115); ax.set_ylim(-160, 95)
     fig.text(0.02, 0.01, "Elastic: 4 steps of ~1 kg; measure the anvil-to-frame gap beside the ring with calipers. "
-             "Break: hang ~7.3 kg, pour water. Expected ≈ 10 kg (102 N).\n"
+             "Break: carrier steps from ~4.5 kg, +5 lb. Expected ≈ 10 kg (102 N).\n"
              "The frame's own mass is part of the load.", fontsize=9.5)
     return fig
 
@@ -311,7 +311,7 @@ def fig_buckling():
         ax.plot([x, x], [L, L - 120], color="#333", lw=1.4)
         ax.add_patch(Rectangle((x - 9, L - 155), 18, 35, facecolor="#bbdefb", edgecolor="#333", zorder=4))
         arrow(ax, (x + (14 if x > 0 else -14), L - 125), (x + (14 if x > 0 else -14), L - 150))
-    ax.text(0, L - 172, "two IDENTICAL water bottles (add water equally)", ha="center", fontsize=8.5)
+    ax.text(0, L - 172, "two kit slotted-mass hangers (add equal masses)", ha="center", fontsize=8.5)
     ax.text(62, L - 138, "P/2 each", color=LOAD_C, fontsize=10, fontweight="bold")
     note(ax, (-10, -12), "FIXED SUPPORT: 25×30×10 block\nclamped in the vise, stem UP", (55, -45), SUP_C)
     note(ax, (3, L / 2), "measured: 6 × 3 mm stem", (20, 45), "#1f4e8c")
@@ -331,14 +331,74 @@ def fig_buckling():
     dim(ax, (0, L + 12), (12, L + 12), "δ", (0, 5))
     rect(ax, 30, 0, 4, L + 10, FIX); ax.text(38, L / 2, "ruler fixed\nbehind;\nphoto each\nstep", fontsize=8.5)
     ax.set_xlim(-40, 90); ax.set_ylim(-85, 110)
-    fig.text(0.02, 0.01, "Add water in small steps (~165 / 95 / 60 g per bottle for L = 60 / 80 / 100). Photograph δ each step;\n"
-             "stop when it keeps bending without more water. verdict computes the buckling load (Southwell).", fontsize=9.5)
+    fig.text(0.02, 0.01, "Add equal kit masses in small steps (~165 / 95 / 60 g per hanger for L = 60 / 80 / 100). Photograph δ each step;\n"
+             "stop when it keeps bending without more mass. verdict computes the buckling load (Southwell).", fontsize=9.5)
+    return fig
+
+
+# ------------------------------------------------------ shock-free loading
+def _loader(ax, x0, gap, broken=False, plates=3):
+    """Carrier + screw stand at x0. gap = carrier lift-off from the cup (mm)."""
+    floor = 0
+    rect(ax, x0 - 70, floor, 140, 30, FIX)                       # stand base
+    rod_top = 120 - (gap if not broken else 0)
+    cup_top = rod_top
+    rect(ax, x0 - 6, 30, 12, rod_top - 30 - 30, dict(facecolor="#9e9e9e", edgecolor="#555", lw=1, zorder=2))
+    rect(ax, x0 - 35, 70, 70, 16, HW)                             # knob
+    rect(ax, x0 - 32, cup_top - 30, 64, 30, FIX)                  # cup
+    car_bottom = cup_top + (gap if not broken else 0)
+    # carrier: nut+washer, tray, boss, plates, rod, eye nut
+    rect(ax, x0 - 25, car_bottom, 50, 3, HW)
+    rect(ax, x0 - 115, car_bottom + 3, 230, 14, FIX, alpha=0.95)
+    for i in range(plates):
+        rect(ax, x0 - 100, car_bottom + 17 + i * 16, 200, 14, dict(facecolor="#424242", edgecolor="#111", lw=1, zorder=3))
+    top = car_bottom + 17 + plates * 16 + 30
+    rect(ax, x0 - 5, car_bottom, 10, top - car_bottom, dict(facecolor="#bdbdbd", edgecolor="#555", lw=1, zorder=4))
+    ax.add_patch(Circle((x0, top + 8), 8, fill=False, ec="#222", lw=3, zorder=5))   # eye nut
+    return car_bottom, top + 16
+
+
+def fig_loading():
+    fig, axs = plt.subplots(1, 3, figsize=(16, 9))
+    fig.suptitle("Shock-free loading — the specimen only ever feels the weight through the screw stand, never your hands",
+                 fontsize=13.5, fontweight="bold", x=0.02, ha="left")
+    steps = [("1. Stand UP: carrier rests on the cup.\nAdd plates by hand — the stand carries them,\nthe specimen carries nothing.", 0, False),
+             ("2. Turn the knob DOWN slowly (≈1.75 mm/turn)\nuntil a 3–5 mm gap shows under the carrier.\nNow the specimen holds the full load. Hold 30 s.", 5, False),
+             ("3a. Survived → turn the stand back UP until it\ncarries the load, add the next plate, repeat 2.\n3b. Broke → carrier drops only the 3–5 mm gap\nonto the cup. Record that load.", 5, True)]
+    for ax, (txt, gap, broken) in zip(axs, steps):
+        ax.set_aspect("equal"); ax.axis("off")
+        cb, eye_top = _loader(ax, 0, gap, broken)
+        # shackle + specimen above
+        spec_bot = eye_top + 14
+        ax.add_patch(matplotlib.patches.Ellipse((0, eye_top + 7), 14, 22, fill=False, ec="#222", lw=2.4, zorder=5))
+        if broken:
+            ax.add_patch(Polygon([(-6, spec_bot), (6, spec_bot), (3, spec_bot + 40), (-3, spec_bot + 40)], **PART))
+            ax.add_patch(Polygon([(-3, spec_bot + 55), (3, spec_bot + 55), (6, spec_bot + 95), (-6, spec_bot + 95)], **PART))
+            ax.text(14, spec_bot + 46, "break", color=LOAD_C, fontsize=10, fontweight="bold")
+        else:
+            ax.add_patch(Polygon([(-6, spec_bot), (6, spec_bot), (3, spec_bot + 40), (3, spec_bot + 55),
+                                  (6, spec_bot + 95), (-6, spec_bot + 95), (-3, spec_bot + 55), (-3, spec_bot + 40)], **PART))
+        ax.plot([-40, 40], [spec_bot + 100, spec_bot + 100], color="#222", lw=6)
+        ax.text(0, spec_bot + 108, "fixed support", ha="center", color=SUP_C, fontsize=9)
+        ax.text(-120, -55, txt, fontsize=9.5, va="top")
+        if gap and not broken:
+            dim(ax, (60, cb - gap), (60, cb), "gap", (14, 0))
+            arrow(ax, (95, cb + 60), (95, cb + 10))
+            ax.text(100, cb + 40, "W", color=LOAD_C, fontsize=12, fontweight="bold")
+        ax.set_xlim(-125, 125); ax.set_ylim(-140, spec_bot + 125)
+    a = axs[0]
+    note(a, (35, 78), "hand wheel (turn to\nraise / lower)", (40, 20))
+    note(a, (0, 105), "cup: catches the carrier", (-120, 150))
+    note(a, (100, 140), "plates slide over the\nboss onto the tray", (20, 215))
+    note(a, (0, 250), "steel shackle + M10 eye nut\n(no nylon string)", (-120, 290))
+    fig.text(0.02, 0.01, "Load path is steel: specimen → shackle → M10 eye nut → M10 rod → fender washer + nut under the tray. "
+             "Printed parts only carry, centre and catch the plates.", fontsize=9.5)
     return fig
 
 
 def main():
     os.makedirs(OUT, exist_ok=True)
-    figs = {"1_tension": fig_tension, "2_bending": fig_bending, "3_twist": fig_twist,
+    figs = {"0_loading_method": fig_loading, "1_tension": fig_tension, "2_bending": fig_bending, "3_twist": fig_twist,
             "4_compression_cring": fig_cring, "5_buckling": fig_buckling}
     for name, fn in figs.items():
         fig = fn()

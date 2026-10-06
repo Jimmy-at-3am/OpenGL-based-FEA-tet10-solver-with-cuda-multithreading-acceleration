@@ -6,7 +6,7 @@
   fracture with three modes: interlayer tension, interlayer shear, and in-plane
   von Mises.
 - **Equipment:** education-kit masses (5 g steps), exercise weights (5 lb
-  steps), water, a bench vise, an overhead bar
+  steps), a printed weight carrier on a screw stand, a bench vise, an overhead bar
 - **Tool:** `tools/validation/validate.py` (Python 3, standard library only),
   with four commands: `estimate`, `predict`, `calibrate`, `verdict`
 - **Last reviewed:** 2026-10-04 (the earlier, exhaustive version is in git
@@ -58,26 +58,34 @@ datasheet-style inputs.
   weights are often 2–5 % off, and that error goes straight into every result.
 - **Education kit (5 g steps):** for elastic steps and fine control on the
   light tests.
-- **Water:** fills every gap and gives a smooth ramp to failure. 1 mL = 1 g.
-  Use a bottle for light tests and a bucket for tension. Measure it with a
-  measuring cup or a kitchen scale.
-- **One loader:** a bucket or sturdy bag on a carabiner. Weigh the empty
-  loader, carabiner, cord, and any frame once; they are part of every load.
+- **Weight carrier on a screw stand (printed, `loader_*` files):** plates
+  slide onto the carrier while it rests on the stand, so your hands never
+  load the specimen. Turning the stand's hand wheel down lowers the carrier
+  until the specimen picks up the weight gently. When the specimen breaks, the
+  carrier drops only a few mm onto the stand. The load path is steel:
+  specimen → shackle → M10 eye nut → M10 rod → washer and nut under the tray.
+  Replace nylon strings with steel shackles or the printed load yoke.
+- **Weigh once:** the carrier with its rod, nuts and eye nut, the shackle, and
+  the yoke or frame. They are part of every load.
 - **Write loads as sums with units**, for example `45lb+350g+1.2kg`. The tool
   converts them.
 
 These estimates come from `validate.py estimate` with the literature
 `pla.mat`. Rerun it with your calibrated `.mat`:
 
-| Test | Breaks near | Elastic steps | Final ramp |
+| Test | Breaks near | Elastic steps | Break steps (each held 30 s) |
 |---|---|---|---|
-| Tension, flat | 300 N (67 lb) | — | Plates to ~45 lb, then water |
-| Tension, standing | 274 N (61 lb) | — | Plates to ~40 lb, then water |
-| Bar, flat | 53 N (5.4 kg)\* | 4 × 540 g | ~3.8 kg, then water |
-| Bar, standing | 24 N (2.5 kg)\* | 4 × 250 g | ~1.7 kg, then water |
-| Twist (either) | 18 N (1.8 kg) | 4 × 180 g | ~1.3 kg, then water |
-| C-ring | 102 N (10.4 kg) | 4 × 1 kg | ~7.3 kg, then water |
-| Columns 60 / 80 / 100 | 32 / 18 / 12 N, split across two bottles | 165 / 95 / 60 g per bottle | — |
+| Tension, flat | 300 N (67 lb) | — | Start at 40 lb, then +5 lb |
+| Tension, standing | 274 N (61 lb) | — | Start at 35 lb, then +5 lb |
+| Bar, flat | 53 N (5.4 kg)\* | 4 × 540 g | Start at 3 kg, then +250 g |
+| Bar, standing | 24 N (2.5 kg)\* | 4 × 250 g | Start at 1.3 kg, then +100 g |
+| Twist (either) | 18 N (1.8 kg) | 4 × 180 g | Start at 1 kg, then +100 g |
+| C-ring | 102 N (10.4 kg) | 4 × 1 kg | Start at 10 lb (4.5 kg), then +5 lb, kit masses near the end |
+| Columns 60 / 80 / 100 | 32 / 18 / 12 N, split across two kit hangers | 165 / 95 / 60 g per hanger | — |
+
+The starting load includes the carrier and hardware. Near the expected value,
+use smaller steps (kit masses on top of the plates), because the step size is
+your measurement resolution.
 
 \*Beam formula. The root fillet makes the real value 10–20 % lower.
 
@@ -142,14 +150,14 @@ TENSION                  VISE (bars, twist, columns)        C-RING
   ▐dogbone▌                (table edge)    │                ═══╧══════╪═══╪═══╧═══ anvil, passes
    (grip)                                [load]                       └─┬─┘           through the frame
      │ carabiner                                                        │
-  [bucket] ← 1–2 cm above a box                                       [load]
+  [carrier on screw stand]                                              [load]
 ```
 
 - **Tension:** clamp each tab between two grip plates (an M8 bolt through the
   tab hole, four M5 bolts beside the tab), and hang each grip from a carabiner
-  through its Ø14 hole so the pull self-centres. Keep a box 1–2 cm
-  under the bucket, so the weights drop no further than that when the coupon
-  snaps.
+  through its Ø14 hole so the pull self-centres. The lower grip connects
+  by shackle to the weight carrier on its screw stand; the stand catches the
+  carrier when the coupon snaps.
 - **Vise:** mount it at the table edge so the load hangs clear.
   - Bars: horizontal, flush side down. Put an M6 bolt or rod through the load
     head and loop the hanger over both ends so the load hangs centred.
@@ -179,12 +187,18 @@ TENSION                  VISE (bars, twist, columns)        C-RING
 3. **Elastic readings** (not for the dogbones). Take 4 steps up to about 40 %,
    reading 10 s after each step; PLA creeps, so keep that timing identical.
    Unload, repeat, and record the second pass.
-4. **Break it.** Remove the indicator. Hang about 70 % quickly, then pour water
-   at roughly 1 % of the expected load every 3 s until it breaks, so it fails
-   1–3 minutes into the ramp. Never leave a load hanging near failure, because
-   PLA creep-ruptures.
+4. **Break it, in steps** (see `setup/0_loading_method.png`). Remove the
+   indicator.
+   - Raise the stand so it carries the carrier.
+   - Load the starting weight, then turn the wheel down until a 3–5 mm gap
+     opens under the carrier.
+   - Hold 30 s, the same for every step and specimen; PLA creeps, so timing
+     matters.
+   - If it survives, raise the stand back up, add one step, and lower again.
+   - Never add or remove weight while the specimen holds it.
 5. **Record:**
-   - everything that was hanging (as a sum with units);
+   - the load it broke at (as a sum with units), and in `notes` the last load
+     it survived;
    - where it broke;
    - how it broke: *interlayer* is a flat break along one layer line;
      *intralayer* is rough and tears through the beads.
@@ -193,7 +207,8 @@ TENSION                  VISE (bars, twist, columns)        C-RING
 
 - **Valid tension breaks** are in the gauge or the arcs. Log a break at a hole
   as `fixture`; the tool excludes it.
-- **Columns:** add equal water to both bottles in small steps and photograph
+- **Columns:** hang one kit slotted-mass hanger from each crossbar hole and
+  add equal masses to both in small steps. Photograph
   the top's sideways deflection against a ruler each time. Stop when it keeps
   bending without more load.
 
@@ -317,6 +332,6 @@ pass, and only for your printer, material, and settings.
 ## 11. Safety
 
 - Wear glasses for every break; PLA shatters.
-- Keep a box 1–2 cm under every hanging load, and your feet out from under it.
+- Keep the screw stand under every hanging load (it is the catch), and your feet out from under it.
 - Check the overhead bar before every tension session; those tests hang about
   60 lb.

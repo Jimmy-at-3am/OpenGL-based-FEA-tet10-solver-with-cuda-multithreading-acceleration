@@ -169,6 +169,75 @@ def anvil():
     return p
 
 
+# ------------------------------------------------- shock-free loading kit ---
+# The load path is steel: specimen -> shackle -> M10 eye nut -> M10 threaded rod
+# -> 50 mm fender washer + nut under the tray. The printed parts carry the
+# plates (tray), guide them (boss / sleeve), give you handles, and hold the
+# carrier on a screw stand while you add weight, so your hands never load the
+# specimen.
+
+def carrier_tray():
+    """150 mm tray, 14 thick, with two hand loops and a 25 mm boss that standard
+    1-inch plates slide over; M10 rod through the centre."""
+    tray = cq.Workplane("XY").circle(75).extrude(14)
+    for sx in (-1, 1):
+        loop = box(min(sx * 60, sx * 115), max(sx * 60, sx * 115), -55, 55, 0, 14)
+        loop = loop.cut(box(min(sx * 78, sx * 103), max(sx * 78, sx * 103), -42, 42, -1, 15))
+        tray = tray.union(loop)
+    tray = tray.union(cq.Workplane("XY").workplane(offset=14).circle(12.5).extrude(40))
+    tray = tray.cut(hole_z(0, 0, 10.6))
+    return tray
+
+
+def plate_sleeve_olympic():
+    """Slips over the 25 mm boss so 2-inch (Olympic) plates sit centred."""
+    return cq.Workplane("XY").circle(25.0).circle(12.9).extrude(38)
+
+
+def stand_base():
+    """140 x 140 x 30 base with a captive M12 nut (hex pocket from the top)."""
+    b = box(-70, 70, -70, 70, 0, 30).edges("|Z").fillet(8)
+    b = b.cut(hole_z(0, 0, 13.0))
+    hexp = cq.Workplane("XY").workplane(offset=18).polygon(6, 19.6 / math.cos(math.pi / 6)) \
+        .extrude(13)
+    return b.cut(hexp)
+
+
+def stand_knob():
+    """70 mm hand wheel; an M12 nut sits in the hex pocket (lock it with a
+    second nut) so turning the wheel turns the threaded rod."""
+    k = cq.Workplane("XY").circle(35).extrude(16)
+    for i in range(10):
+        a = 2 * math.pi * i / 10
+        k = k.cut(cq.Workplane("XY").center(37 * math.cos(a), 37 * math.sin(a))
+                  .circle(5).extrude(16))
+    k = k.cut(hole_z(0, 0, 13.0))
+    hexp = cq.Workplane("XY").workplane(offset=6).polygon(6, 19.6 / math.cos(math.pi / 6)) \
+        .extrude(11)
+    return k.cut(hexp)
+
+
+def stand_cup():
+    """Sits on top of the threaded rod; the carrier's bottom nut drops into the
+    30 mm recess and the fender washer rests on the 64 mm face."""
+    c = cq.Workplane("XY").circle(32).extrude(30)
+    c = c.cut(cq.Workplane("XY").workplane(offset=12).circle(15.5).extrude(19))   # nut recess
+    c = c.cut(cq.Workplane("XY").workplane(offset=-1).circle(6.4).extrude(11))    # rod socket
+    return c
+
+
+def load_yoke():
+    """U-yoke that hangs from both ends of the M6 rod through a bar or twist
+    load head (cradles open upward), with a 10.5 mm eye for the shackle."""
+    y = (box(-19, -11, 0, 70, 0, 12).union(box(11, 19, 0, 70, 0, 12))   # arms
+         .union(box(-19, 19, -16, 0, 0, 12)))                          # crossbar
+    for x in (-15, 15):
+        y = y.cut(box(x - 3.4, x + 3.4, 62, 71, -1, 13))
+        y = y.cut(cq.Workplane("XY").center(x, 62).circle(3.4).extrude(12))
+    y = y.cut(hole_z(0, -8, 10.5, -1, 13))
+    return y
+
+
 PARTS = {
     "dogbone_flat_t2":      (lambda: dogbone(2.0), "both"),
     "dogbone_standing_t4":  (lambda: dogbone(4.0).rotate((0, 0, 0), (0, 1, 0), -90), "both"),
@@ -185,6 +254,12 @@ PARTS = {
     "fixture_dogbone_grip_plate": (lambda: grip_plate(), "print"),
     "fixture_cring_frame":  (lambda: frame(), "print"),
     "fixture_anvil_bar":    (lambda: anvil(), "print"),
+    "loader_carrier_tray":  (lambda: carrier_tray(), "print"),
+    "loader_plate_sleeve_olympic": (lambda: plate_sleeve_olympic(), "print"),
+    "loader_stand_base":    (lambda: stand_base(), "print"),
+    "loader_stand_knob":    (lambda: stand_knob(), "print"),
+    "loader_stand_cup":     (lambda: stand_cup(), "print"),
+    "loader_load_yoke":     (lambda: load_yoke(), "print"),
 }
 
 

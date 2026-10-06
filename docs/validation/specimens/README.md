@@ -67,6 +67,50 @@ at least 170 mm of build height.
 - **Twist, propped tests:** a round rod as the prop under the axis notch on the
   lever's underside.
 
+## Shock-free loading kit (`loader_*`)
+
+Discrete weights hung by hand jerk the specimen and can break it early. With
+this kit your hands never carry the load: plates go onto a carrier while it
+rests on a screw stand, and turning the hand wheel down lowers the carrier
+until the specimen picks up the weight gently. When the specimen breaks, the
+carrier drops only a few mm onto the stand. See `setup/0_loading_method.png`.
+
+| File | Qty | What it is |
+|---|---|---|
+| `loader_carrier_tray.stl` | 1 | 150 mm tray with two hand loops and a 25 mm boss; 1-inch plates slide over the boss |
+| `loader_plate_sleeve_olympic.stl` | 1 | Slips over the boss for 2-inch (Olympic) plates |
+| `loader_stand_base.stl` | 1 | 140 × 140 × 30 base with a pocket for a captive M12 nut |
+| `loader_stand_knob.stl` | 1 | 70 mm hand wheel; an M12 nut in its hex pocket turns the rod |
+| `loader_stand_cup.stl` | 1 | Sits on the rod top; the carrier's bottom nut drops into it |
+| `loader_load_yoke.stl` | 2 | U-yoke that hangs on both ends of the M6 bolt in a bar or twist load head, with an eye for the shackle |
+
+Print the loader parts in PETG if you have it (PLA works): 100 % infill and
+6 walls. Print the tray flat with the boss up, and the base, knob and cup
+flat.
+
+**Steel hardware (the load path; don't substitute printed parts or nylon):**
+
+- M10 threaded rod, about 150 mm, with an M10 eye nut on top. Under the tray,
+  one M10 nut and one 50 mm fender washer.
+- M12 threaded rod, about 150 mm, with 3 M12 nuts: one captive in the base, and
+  two locked together in the knob.
+- Two or three steel shackles or quick links. A carabiner is fine for the
+  dogbone grips.
+- For the bars and twist piece: an M6 × 50 bolt and nut through the load head.
+  The printed yoke hangs on both protruding ends.
+
+**Assembly:**
+
+1. Press an M12 nut into the base pocket.
+2. Thread the M12 rod in from the top.
+3. Fit the knob about 40 mm up the rod and lock it with two nuts.
+4. Put the cup on top of the rod.
+5. Bolt the M10 rod through the tray: eye nut on top, washer and nut under the
+   tray.
+
+The carrier weighs about 0.7 kg with its hardware. Weigh it, and count it in
+every load.
+
 ## Simulation copies (`sim/`)
 
 The solver loads a part's end face, so these copies end exactly on the axis of
