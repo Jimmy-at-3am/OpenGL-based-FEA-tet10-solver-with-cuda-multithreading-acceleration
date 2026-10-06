@@ -6,7 +6,8 @@
   fracture with three modes: interlayer tension, interlayer shear, and in-plane
   von Mises.
 - **Equipment:** education-kit masses (5 g steps), exercise weights (5 lb
-  steps), a printed weight carrier on a screw stand, a bench vise, an overhead bar
+  steps), a printed all-PLA loading kit (wedge lowerer, clevis grips, PLA pins),
+  nylon cord, a bench vise, an overhead bar
 - **Tool:** `tools/validation/validate.py` (Python 3, standard library only),
   with four commands: `estimate`, `predict`, `calibrate`, `verdict`
 - **Last reviewed:** 2026-10-04 (the earlier, exhaustive version is in git
@@ -58,15 +59,18 @@ datasheet-style inputs.
   weights are often 2–5 % off, and that error goes straight into every result.
 - **Education kit (5 g steps):** for elastic steps and fine control on the
   light tests.
-- **Weight carrier on a screw stand (printed, `loader_*` files):** plates
-  slide onto the carrier while it rests on the stand, so your hands never
-  load the specimen. Turning the stand's hand wheel down lowers the carrier
-  until the specimen picks up the weight gently. When the specimen breaks, the
-  carrier drops only a few mm onto the stand. The load path is steel:
-  specimen → shackle → M10 eye nut → M10 rod → washer and nut under the tray.
-  Replace nylon strings with steel shackles or the printed load yoke.
-- **Weigh once:** the carrier with its rod, nuts and eye nut, the shackle, and
-  the yoke or frame. They are part of every load.
+- **Wedge lowerer (printed, `loader_*` files, PLA only, no screws):** the
+  plates sit on the flat platform of a top wedge that rests on a 1:8 bottom
+  wedge. A doubled nylon cord runs from the specimen down through the plate
+  holes to a toggle bar under the plates. Pulling the bottom wedge out by
+  hand lowers the platform 1 mm per 8 mm of pull, so the specimen picks the
+  plates up gently and your hands never carry the load. When the specimen
+  breaks, the plates drop only the 3–5 mm gap back onto the platform. The
+  wedges only see contact pressure (≈0.04 MPa); the printed parts in the load
+  path (clevis, pins, yoke, toggle bar) stay at least 7× below PLA strength at
+  1.5× the heaviest load, and none of them is loaded as a one-point cantilever.
+- **Weigh once:** the toggle bar, cord, lower clevis and pin, or the yoke or
+  frame. They hang with the plates and are part of every load.
 - **Write loads as sums with units**, for example `45lb+350g+1.2kg`. The tool
   converts them.
 
@@ -83,7 +87,7 @@ These estimates come from `validate.py estimate` with the literature
 | C-ring | 102 N (10.4 kg) | 4 × 1 kg | Start at 10 lb (4.5 kg), then +5 lb, kit masses near the end |
 | Columns 60 / 80 / 100 | 32 / 18 / 12 N, split across two kit hangers | 165 / 95 / 60 g per hanger | — |
 
-The starting load includes the carrier and hardware. Near the expected value,
+The starting load includes the toggle bar, cord and lower grip. Near the expected value,
 use smaller steps (kit masses on top of the plates), because the step size is
 your measurement resolution.
 
@@ -122,7 +126,7 @@ axes, so model the parts exactly like this and export STEP in mm.
 
 | Part | Geometry | Print |
 |---|---|---|
-| **Dogbone** | Outline in XY, length along X: 30 × 40 tabs, each with a Ø8.5 hole (M8) 15 mm from its end; a 3.0-wide × 30-long gauge; R40 arcs from gauge to tab; 170 overall. Extrude 2.0 (flat print) or 4.0 (standing print). Each end is clamped between two printed grip plates (66 × 54 × 10, M8 through the tab hole, four M5 beside the tab, Ø14 carabiner hole). | 5 flat + 5 standing on a tab end; 4 grip plates |
+| **Dogbone** | Outline in XY, length along X: 30 × 40 tabs, each with a Ø8.5 hole (for the Ø8 PLA pin) 15 mm from its end; a 3.0-wide × 30-long gauge; R40 arcs from gauge to tab; 170 overall. Extrude 2.0 (flat print) or 4.0 (standing print). Each tab slides into a printed clevis grip and is held by a Ø8 PLA pin through the tab hole (double shear). | 5 flat + 5 standing on a tab end; 2 clevis grips of each slot width |
 | **Bar** | Flat CAD: block x −25..0, y −20..20, z 0..24 (vise grip); 8 × 8 bar x 0..64, y −4..4, z 0..8 (flush with the block bottom), R3 fillets at the block; 45° taper x 64..72 into a 16 × 16 load head x 72..88 (z 0..16) with a Ø6.5 cross hole along Y at x = 80, z = 8. Standing CAD: the same part with the bar along +Z, block on the bed (x 0..24, z 0..25), flush side facing −X, load hole at z = 105. | 5 as the flat CAD, 5 as the standing CAD |
 | **Twist** | Block x −20..20, y −20..20, z 0..20 (vise grip); Ø8 shaft on the Z axis, z 20..40, R3 fillets at both ends; lever x −10..108, y −8..8, z 40..52; load block x 92..108, y −8..8, z 52..64 with a Ø6.5 hole along X at z = 58 (100 mm from the axis). A notch on the lever's y = −8 face marks the shaft axis; that face points down in the test. | 10 as modeled; supports under the lever only, none touching the shaft |
 | **C-ring** | Ring in XY centred on the origin: inner R13, outer R17, z 0..10; a 6-wide gap centred on +X; 16-wide flat load pads at y = ±19. | 5 flat |
@@ -149,20 +153,21 @@ TENSION                  VISE (bars, twist, columns)        C-RING
    (grip)                  block clamped   │ hanger            │      │ C │   │        on the ring
   ▐dogbone▌                (table edge)    │                ═══╧══════╪═══╪═══╧═══ anvil, passes
    (grip)                                [load]                       └─┬─┘           through the frame
-     │ carabiner                                                        │
-  [carrier on screw stand]                                              [load]
+     │ cord                                                             │
+  [plates on wedge lowerer]                                             [load]
 ```
 
-- **Tension:** clamp each tab between two grip plates (an M8 bolt through the
-  tab hole, four M5 bolts beside the tab), and hang each grip from a carabiner
-  through its Ø14 hole so the pull self-centres. The lower grip connects
-  by shackle to the weight carrier on its screw stand; the stand catches the
-  carrier when the coupon snaps.
+- **Tension:** slide each tab into a clevis grip and push a Ø8 PLA pin
+  through the clevis and the tab hole. Tie a doubled cord through each
+  grip's Ø12 eye: the upper one to the overhead bar, the lower one down
+  through the plate holes to the toggle bar under the plates on the wedge
+  lowerer. The cords let the pull self-centre; the pin sits in double shear.
 - **Vise:** mount it at the table edge so the load hangs clear.
-  - Bars: horizontal, flush side down. Put an M6 bolt or rod through the load
-    head and loop the hanger over both ends so the load hangs centred.
-  - Twist: the shaft and lever both horizontal; an M6 bolt through the load
-    block, with the hanger looped over both ends.
+  - Bars: horizontal, flush side down. Push the Ø6 PLA pin through the load
+    head and hang the load yoke on both pin ends, so the load hangs centred
+    and the pin is loaded symmetrically, not as a cantilever.
+  - Twist: the shaft and lever both horizontal; the Ø6 PLA pin through the
+    load block, with the yoke hung on both ends.
     For the **propped** specimens, set a round rod (parallel to the shaft)
     under the lever exactly at the axis mark, just touching before you load.
     That makes the load a pure torque. The **free** specimens get no rod.
@@ -189,12 +194,13 @@ TENSION                  VISE (bars, twist, columns)        C-RING
    Unload, repeat, and record the second pass.
 4. **Break it, in steps** (see `setup/0_loading_method.png`). Remove the
    indicator.
-   - Raise the stand so it carries the carrier.
-   - Load the starting weight, then turn the wheel down until a 3–5 mm gap
-     opens under the carrier.
+   - Push the bottom wedge fully in so the platform is at its highest and
+     the cord is just slack.
+   - Put the starting weight on the platform, then pull the bottom wedge out
+     slowly until a 3–5 mm gap opens under the plates.
    - Hold 30 s, the same for every step and specimen; PLA creeps, so timing
      matters.
-   - If it survives, raise the stand back up, add one step, and lower again.
+   - If it survives, push the wedge back in, add one step, and lower again.
    - Never add or remove weight while the specimen holds it.
 5. **Record:**
    - the load it broke at (as a sum with units), and in `notes` the last load
@@ -332,6 +338,6 @@ pass, and only for your printer, material, and settings.
 ## 11. Safety
 
 - Wear glasses for every break; PLA shatters.
-- Keep the screw stand under every hanging load (it is the catch), and your feet out from under it.
+- Keep the wedge lowerer under every hanging load (it is the catch), and your feet out from under the plates.
 - Check the overhead bar before every tension session; those tests hang about
   60 lb.

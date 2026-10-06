@@ -58,7 +58,7 @@ def weights(ax, cx, ytop, label):
     ax.add_patch(Polygon([(cx - 22, ytop - 25), (cx + 22, ytop - 25),
                           (cx + 18, ytop - 75), (cx - 18, ytop - 75)],
                          facecolor="#e0e0e0", edgecolor="#333", lw=1.2, zorder=4))
-    ax.text(cx, ytop - 50, "carrier\non screw\nstand", ha="center", va="center", fontsize=8)
+    ax.text(cx, ytop - 50, "plates on\nwedge\nlowerer", ha="center", va="center", fontsize=8)
     arrow(ax, (cx + 32, ytop - 20), (cx + 32, ytop - 70))
     ax.text(cx + 38, ytop - 45, label, color=LOAD_C, fontsize=10, va="center",
             fontweight="bold")
@@ -100,35 +100,30 @@ def fig_tension():
     outline, xe = dogbone_outline()
     pts = [(y, x) for x, y in outline]          # rotate: length vertical
     ax.add_patch(Polygon(pts, **PART))
-    # grips (two plates seen face-on, slightly wider than the tab)
-    for s in (1, -1):
-        y0 = s * xe - (40 if s > 0 else -40) - (26 if s > 0 else 0)
-        y_lo = xe - 40 if s > 0 else -xe - 26
-        rect(ax, -27, y_lo, 54, 66, FIX, alpha=0.55)
-        hole_y = s * (xe - 15)
-        ax.add_patch(Circle((0, hole_y), 4.25, **HW))
-        for dy in (-15, 9) if s > 0 else (-9, 15):
-            for dx in (-21, 21):
-                ax.add_patch(Circle((dx, hole_y + dy), 2.75, **HW))
-        cy = s * (xe + 14)
-        ax.add_patch(Circle((0, cy), 7, facecolor="white", edgecolor="#444", lw=1.2, zorder=4))
-    # overhead bar + carabiners
+    # grips: PLA clevis (U-block) over each tab end, Ø8 PLA pin, Ø12 cord eye
+    for sgn in (1, -1):
+        y0 = sgn * xe - sgn * 32            # clevis open end (inner)
+        y1 = sgn * xe + sgn * 30            # clevis outer end
+        rect(ax, -20, min(y0, y1), 40, abs(y1 - y0), FIX, alpha=0.55)
+        ax.add_patch(Circle((0, sgn * (xe - 15)), 4.3, **HW))                 # pin
+        ax.add_patch(Circle((0, sgn * (xe + 15)), 6, facecolor="white", edgecolor="#444", lw=1.2, zorder=4))
+    # overhead bar + cord loops through the clevis eyes
     top = xe + 14
     ax.add_patch(Circle((0, top + 30), 9, **HW))
     ax.plot([-30, 30], [top + 30, top + 30], color="#222", lw=6, zorder=1)
-    ax.add_patch(matplotlib.patches.Ellipse((0, top + 14), 12, 30, fill=False, ec="#222", lw=2.2, zorder=5))
-    ax.add_patch(matplotlib.patches.Ellipse((0, -top - 14), 12, 30, fill=False, ec="#222", lw=2.2, zorder=5))
+    ax.add_patch(matplotlib.patches.Ellipse((0, top + 14), 12, 30, fill=False, ec="#8d6e63", lw=2.2, zorder=5))
+    ax.add_patch(matplotlib.patches.Ellipse((0, -top - 14), 12, 30, fill=False, ec="#8d6e63", lw=2.2, zorder=5))
     weights(ax, 0, -top - 29, "F = m·g\n(pulls along axis)")
     catch_box(ax, 0, -top - 110)
-    note(ax, (0, top + 30), "FIXED SUPPORT: overhead bar\n(pull-up bar / beam), carabiner =\nfree pin → self-aligning",
+    note(ax, (0, top + 30), "FIXED SUPPORT: overhead bar\n(pull-up bar / beam); doubled nylon\ncord loop = free pin → self-aligning",
          (45, top + 10), SUP_C)
-    note(ax, (-27, xe - 20), "Grip: 2 printed plates per end\n(fixture_dogbone_grip_plate)\nM8 bolt through tab hole +\n4 × M5 clamp bolts beside tab",
+    note(ax, (-27, xe - 20), "Grip: PLA clevis per end\n(loader_grip_clevis_*), tab slid in\nto the slot bottom, Ø8 PLA pin\nthrough the tab hole",
          (-140, xe - 10))
     note(ax, (1.5, 0), "Measured section:\n3 × 2 mm (flat print)\n3 × 4 mm (standing print)\nmust break here", (40, 5), "#1f4e8c")
-    note(ax, (0, -top - 14), "shackle → weight carrier (see 0_loading_method)", (40, -top - 5))
+    note(ax, (0, -top - 14), "cord → toggle bar under the plates\n(plates on the wedge lowerer)", (40, -top - 5))
     dim(ax, (-15, xe - 50), (15, xe - 50), "30", (0, -5))
     dim(ax, (-60, -xe), (-60, xe), "170", (-9, 0))
-    ax.text(-140, -top - 175, "Load in steps with the carrier + screw stand: start ≈40 lb, +5 lb per step, hold 30 s.\n"
+    ax.text(-140, -top - 175, "Load in steps with the wedge lowerer: start ≈40 lb, +5 lb per step, hold 30 s.\n"
             "Record total hanging mass. Break must be in the narrow section.\n"
             "No deflection reading (stiffness comes from the bars).", fontsize=9.5)
     ax.set_xlim(-150, 165); ax.set_ylim(-top - 190, top + 50)
@@ -175,7 +170,7 @@ def fig_bending():
         note(ax, (30, 10), "measured: 8 × 8 mm bar", (5, 30), "#1f4e8c")
         # hanger + load
         ax.plot([80, 80], [6, -20], color="#333", lw=1.5, zorder=5)
-        note(ax, (80, 10), "M6 bolt through load head; printed\nload yoke hangs on BOTH ends", (105, 45))
+        note(ax, (80, 10), "Ø6 PLA pin through load head; PLA\nload yoke hangs on BOTH ends", (105, 45))
         weights(ax, 80, -20, "F = m·g ↓\n" + load)
         # indicator
         rect(ax, 76, 26, 8, 20, HW); ax.plot([80, 80], [18, 26], color="#222", lw=1.5)
@@ -183,7 +178,7 @@ def fig_bending():
         dim(ax, (0, -8), (80, -8), "80 mm (block face → load line)", (0, -5))
         ax.set_xlim(-115, 200); ax.set_ylim(-100, 80)
     fig.text(0.02, 0.01, "Elastic readings first (4 steps: ~500 g flat / ~250 g standing, read 10 s after each). "
-             "Break only after predictions are committed:\nload in steps with the carrier (start ~3 kg / ~1.3 kg). Expected break: at the root fillet next to the block.",
+             "Break only after predictions are committed:\nload in steps with the wedge lowerer (start ~3 kg / ~1.3 kg). Expected break: at the root fillet next to the block.",
              fontsize=9.5)
     return fig
 
@@ -205,7 +200,7 @@ def fig_twist():
     ax.text(62, 1, "shaft axis", fontsize=8)
     ax.add_patch(Circle((38, 100), 3, facecolor="white", edgecolor="#222", lw=1.5, zorder=6))
     ax.plot([36, 40], [98, 102], color=LOAD_C, lw=2, zorder=7); ax.plot([36, 40], [102, 98], color=LOAD_C, lw=2, zorder=7)
-    note(ax, (38, 100), "LOAD: M6 bolt through load block,\nload yoke on both ends, F pulls DOWN\n(into the page)", (60, 110), LOAD_C)
+    note(ax, (38, 100), "LOAD: Ø6 PLA pin through load block,\nload yoke on both ends, F pulls DOWN\n(into the page)", (60, 110), LOAD_C)
     note(ax, (-10, -20), "FIXED SUPPORT: 40×40×20 block\nclamped in the vise", (-60, -70), SUP_C)
     note(ax, (10, 4), "measured: Ø8 shaft\n(20 mm long)", (55, 30), "#1f4e8c")
     dim(ax, (80, 0), (80, 100), "100 mm\nlever arm", (16, 0))
@@ -232,7 +227,7 @@ def fig_twist():
             fontsize=9.5, fontweight="bold")
     dim(ax, (0, 22), (100, 22), "100 mm", (0, 4))
     ax.set_xlim(-75, 160); ax.set_ylim(-125, 60)
-    fig.text(0.02, 0.01, "Elastic: 4 steps of ~180 g, dial indicator on the load block. Break: carrier steps from ~1 kg, +100 g. "
+    fig.text(0.02, 0.01, "Elastic: 4 steps of ~180 g, dial indicator on the load block. Break: wedge-lowerer steps from ~1 kg, +100 g. "
              "Expected ≈18 N (1.8 N·m), flat break across a layer at the shaft root.", fontsize=9.5)
     return fig
 
@@ -289,7 +284,7 @@ def fig_cring():
     note(ax, (-2, -30), "strap around the frame's\nbottom bar", (-125, -75))
     ax.set_xlim(-130, 115); ax.set_ylim(-160, 95)
     fig.text(0.02, 0.01, "Elastic: 4 steps of ~1 kg; measure the anvil-to-frame gap beside the ring with calipers. "
-             "Break: carrier steps from ~4.5 kg, +5 lb. Expected ≈ 10 kg (102 N).\n"
+             "Break: wedge-lowerer steps from ~4.5 kg, +5 lb. Expected ≈ 10 kg (102 N).\n"
              "The frame's own mass is part of the load.", fontsize=9.5)
     return fig
 
@@ -337,62 +332,72 @@ def fig_buckling():
 
 
 # ------------------------------------------------------ shock-free loading
-def _loader(ax, x0, gap, broken=False, plates=3):
-    """Carrier + screw stand at x0. gap = carrier lift-off from the cup (mm)."""
-    floor = 0
-    rect(ax, x0 - 70, floor, 140, 30, FIX)                       # stand base
-    rod_top = 120 - (gap if not broken else 0)
-    cup_top = rod_top
-    rect(ax, x0 - 6, 30, 12, rod_top - 30 - 30, dict(facecolor="#9e9e9e", edgecolor="#555", lw=1, zorder=2))
-    rect(ax, x0 - 35, 70, 70, 16, HW)                             # knob
-    rect(ax, x0 - 32, cup_top - 30, 64, 30, FIX)                  # cup
-    car_bottom = cup_top + (gap if not broken else 0)
-    # carrier: nut+washer, tray, boss, plates, rod, eye nut
-    rect(ax, x0 - 25, car_bottom, 50, 3, HW)
-    rect(ax, x0 - 115, car_bottom + 3, 230, 14, FIX, alpha=0.95)
-    for i in range(plates):
-        rect(ax, x0 - 100, car_bottom + 17 + i * 16, 200, 14, dict(facecolor="#424242", edgecolor="#111", lw=1, zorder=3))
-    top = car_bottom + 17 + plates * 16 + 30
-    rect(ax, x0 - 5, car_bottom, 10, top - car_bottom, dict(facecolor="#bdbdbd", edgecolor="#555", lw=1, zorder=4))
-    ax.add_patch(Circle((x0, top + 8), 8, fill=False, ec="#222", lw=3, zorder=5))   # eye nut
-    return car_bottom, top + 16
+def _wedges(ax, x0, pulled):
+    """Side view of the wedge lowerer. The bottom wedge's thick end is at the
+    pull end (x0); pulling it out by `pulled` mm toward -X drops the top wedge
+    pulled/8. Floor weights beside the bottom wedge box the top wedge in X.
+    Returns the platform top."""
+    xl = x0 - pulled                                     # bottom wedge, moved left
+    for sx in (x0 - 22, x0 + 140):                       # stops, behind the bottom wedge
+        ax.add_patch(Rectangle((sx, 0), 22, 30, facecolor="#9e9e9e", edgecolor="#333",
+                               hatch="xx", alpha=0.55, zorder=1))
+    ax.add_patch(Polygon([(xl, 0), (xl + 140, 0), (xl + 140, 4), (xl, 4 + 140 / 8)], **FIX))
+    ax.add_patch(Rectangle((xl - 36, 0), 37, 9, **FIX))  # pull lug with hand hole
+    ax.add_patch(Rectangle((xl - 28, 2), 20, 5, facecolor="white", edgecolor="#444", lw=0.8, zorder=2))
+    top = 40 - pulled / 8.0
+    ax.add_patch(Polygon([(x0, top - 40 + 4 + 140 / 8), (x0 + 140, top - 36), (x0 + 140, top), (x0, top)],
+                         facecolor="#d6d6d6", edgecolor="#444", lw=1.2, zorder=2))
+    ax.add_patch(Rectangle((x0 + 58, top - 18), 24, 18, facecolor="white", edgecolor="#444", lw=1, zorder=2))
+    ax.plot([x0 - 90, x0 + 185], [0, 0], color="#333", lw=1.5, zorder=1)
+    return top
 
 
 def fig_loading():
-    fig, axs = plt.subplots(1, 3, figsize=(16, 9))
-    fig.suptitle("Shock-free loading — the specimen only ever feels the weight through the screw stand, never your hands",
-                 fontsize=13.5, fontweight="bold", x=0.02, ha="left")
-    steps = [("1. Stand UP: carrier rests on the cup.\nAdd plates by hand — the stand carries them,\nthe specimen carries nothing.", 0, False),
-             ("2. Turn the knob DOWN slowly (≈1.75 mm/turn)\nuntil a 3–5 mm gap shows under the carrier.\nNow the specimen holds the full load. Hold 30 s.", 5, False),
-             ("3a. Survived → turn the stand back UP until it\ncarries the load, add the next plate, repeat 2.\n3b. Broke → carrier drops only the 3–5 mm gap\nonto the cup. Record that load.", 5, True)]
-    for ax, (txt, gap, broken) in zip(axs, steps):
+    fig, axs = plt.subplots(1, 3, figsize=(17, 8.5))
+    fig.suptitle("Shock-free loading with two PLA wedges — your hands never carry the load",
+                 fontsize=14, fontweight="bold", x=0.02, ha="left")
+    steps = [("1. Plates sit on the top wedge; the cord to the\nspecimen is just slack. Your hands load the\nwedges, not the specimen.", 0, False),
+             ("2. Pull the bottom wedge out slowly by its lug\n(floor weights stop the top wedge): 8 mm of\npull = 1 mm of drop. When a 3–5 mm gap opens\nunder the plates, the specimen holds them. Hold 30 s.", 40, False),
+             ("3a. Survived: push the bottom wedge back in,\nadd the next weight, repeat step 2.\n3b. Broke: the plates fall only the 3–5 mm gap\nback onto the platform. Record the load.", 40, True)]
+    for ax, (txt, pulled, broken) in zip(axs, steps):
         ax.set_aspect("equal"); ax.axis("off")
-        cb, eye_top = _loader(ax, 0, gap, broken)
-        # shackle + specimen above
-        spec_bot = eye_top + 14
-        ax.add_patch(matplotlib.patches.Ellipse((0, eye_top + 7), 14, 22, fill=False, ec="#222", lw=2.4, zorder=5))
+        top = _wedges(ax, 0, pulled)
+        hang = 0 if (pulled == 0 or broken) else 5
+        base = top + hang
+        ax.add_patch(Rectangle((58, base - 18 + (0 if hang else 2)), 24, 16, **PART if False else dict(
+            facecolor="#ffcc80", edgecolor="#e65100", lw=1, zorder=4)))           # toggle bar
+        for i in range(3):
+            ax.add_patch(Rectangle((10, base + i * 14), 120, 12,
+                                   facecolor="#424242", edgecolor="#111", lw=1, zorder=3))
+        cord_top = base + 3 * 14 + 40
+        ax.plot([70, 70], [base - 10, cord_top], color="#8d6e63", lw=2, zorder=5)
+        ax.add_patch(Rectangle((60, cord_top), 20, 31, facecolor="#c9c9c9", edgecolor="#444", zorder=4))  # clevis
+        spec0 = cord_top + 31
         if broken:
-            ax.add_patch(Polygon([(-6, spec_bot), (6, spec_bot), (3, spec_bot + 40), (-3, spec_bot + 40)], **PART))
-            ax.add_patch(Polygon([(-3, spec_bot + 55), (3, spec_bot + 55), (6, spec_bot + 95), (-6, spec_bot + 95)], **PART))
-            ax.text(14, spec_bot + 46, "break", color=LOAD_C, fontsize=10, fontweight="bold")
+            ax.add_patch(Polygon([(64, spec0), (76, spec0), (73, spec0 + 30), (67, spec0 + 30)], **PART))
+            ax.add_patch(Polygon([(67, spec0 + 45), (73, spec0 + 45), (76, spec0 + 75), (64, spec0 + 75)], **PART))
+            ax.text(82, spec0 + 37, "break", color=LOAD_C, fontweight="bold")
         else:
-            ax.add_patch(Polygon([(-6, spec_bot), (6, spec_bot), (3, spec_bot + 40), (3, spec_bot + 55),
-                                  (6, spec_bot + 95), (-6, spec_bot + 95), (-3, spec_bot + 55), (-3, spec_bot + 40)], **PART))
-        ax.plot([-40, 40], [spec_bot + 100, spec_bot + 100], color="#222", lw=6)
-        ax.text(0, spec_bot + 108, "fixed support", ha="center", color=SUP_C, fontsize=9)
-        ax.text(-120, -55, txt, fontsize=9.5, va="top")
-        if gap and not broken:
-            dim(ax, (60, cb - gap), (60, cb), "gap", (14, 0))
-            arrow(ax, (95, cb + 60), (95, cb + 10))
-            ax.text(100, cb + 40, "W", color=LOAD_C, fontsize=12, fontweight="bold")
-        ax.set_xlim(-125, 125); ax.set_ylim(-140, spec_bot + 125)
+            ax.add_patch(Polygon([(64, spec0), (76, spec0), (73, spec0 + 30), (73, spec0 + 45), (76, spec0 + 75),
+                                  (64, spec0 + 75), (67, spec0 + 45), (67, spec0 + 30)], **PART))
+        ax.plot([40, 100], [spec0 + 80, spec0 + 80], color="#222", lw=6)
+        ax.text(70, spec0 + 87, "fixed support", ha="center", color=SUP_C, fontsize=9)
+        if pulled and not broken:
+            arrow(ax, (-80, 5), (-118, 5), color="#1565c0")
+            ax.text(-118, 13, "pull", color="#1565c0", fontsize=10, fontweight="bold")
+            dim(ax, (138, top), (138, base), "gap", (10, 0))
+            arrow(ax, (150, base + 50), (150, base + 10))
+            ax.text(153, base + 32, "W", color=LOAD_C, fontsize=12, fontweight="bold")
+        ax.text(-125, -18, txt, fontsize=9.5, va="top")
+        ax.set_xlim(-130, 185); ax.set_ylim(-95, spec0 + 100)
     a = axs[0]
-    note(a, (35, 78), "hand wheel (turn to\nraise / lower)", (40, 20))
-    note(a, (0, 105), "cup: catches the carrier", (-120, 150))
-    note(a, (100, 140), "plates slide over the\nboss onto the tray", (20, 215))
-    note(a, (0, 250), "steel shackle + M10 eye nut\n(no nylon string)", (-120, 290))
-    fig.text(0.02, 0.01, "Load path is steel: specimen → shackle → M10 eye nut → M10 rod → fender washer + nut under the tray. "
-             "Printed parts only carry, centre and catch the plates.", fontsize=9.5)
+    note(a, (110, 30), "top wedge: flat platform,\nchannel for the toggle bar", (120, 115))
+    note(a, (20, 12), "bottom wedge, 1:8 slope,\nthick end + lug at the pull end", (-125, 100))
+    note(a, (-11, 25), "floor weights at both ends,\nbeside the bottom wedge", (-125, 45))
+    note(a, (70, 30), "toggle bar under the plates;\ncord loops around it, up\nthrough the plate holes", (-125, 155))
+    note(a, (70, 210), "PLA clevis + Ø8 PLA pin\n(dogbone) or load yoke", (95, 230))
+    fig.text(0.02, 0.01, "Everything is PLA and works far below its strength: wedges only see compression (≈0.04 MPa); pins, clevis and toggle stay "
+             "≥7× below PLA strength at 1.5× the heaviest test load.\nRub pencil graphite between the wedges (not under them): the bottom wedge then stays put when you let go of it.", fontsize=9.5)
     return fig
 
 

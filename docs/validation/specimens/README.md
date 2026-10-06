@@ -10,13 +10,14 @@ without rotating or scaling. `preview.png` shows every part.
 
 The sections being measured are deliberately small: the 3 mm dogbone gauge, the
 8 × 8 bar, the Ø8 shaft and the 4 mm ring wall. Everything you clamp or hang
-a load from is oversized, so ordinary hardware grips it firmly.
+a load from is oversized, so a vise, nylon cord and the printed PLA loading
+kit grip it firmly. No steel hardware is needed.
 
 | Part | Clamp / support | Load point |
 |---|---|---|
-| Dogbone | 30 × 40 tabs, Ø8.5 hole for an M8 bolt, clamped between two printed grip plates | Grip plate's Ø14 hole for a carabiner or shackle |
-| Bar | 25 × 40 × 24 block for the vise | 16 × 16 head with a Ø6.5 cross hole (M6 bolt or rod) on the load line, 80 mm from the block |
-| Twist | 40 × 40 × 20 block for the vise | 16 × 16 × 12 block on the lever tip with a Ø6.5 hole, 100 mm from the shaft axis |
+| Dogbone | 30 × 40 tabs, slid into a PLA clevis grip and held by a Ø8 PLA pin through the Ø8.5 hole | Clevis's Ø12 eye, doubled nylon cord |
+| Bar | 25 × 40 × 24 block for the vise | 16 × 16 head with a Ø6.5 cross hole on the load line, 80 mm from the block: Ø6 PLA pin + load yoke |
+| Twist | 40 × 40 × 20 block for the vise | 16 × 16 × 12 block on the lever tip with a Ø6.5 hole, 100 mm from the shaft axis: Ø6 PLA pin + load yoke |
 | C-ring | 16 × 10 flat pad on the anvil | 16 × 10 flat pad under the frame |
 | Column | 25 × 30 × 10 block for the vise | 100 mm crossbar with Ø6 holes for two bottle hooks |
 
@@ -35,8 +36,8 @@ a load from is oversized, so ordinary hardware grips it firmly.
 | Standing parts | Minimum layer time ≥ 8 s, 5 mm brim |
 
 Keep the profile identical for every part and save each plate's `.gcode.3mf`.
-Let parts rest 48 h before testing. Fixtures can be PETG; give them 100 %
-infill too.
+Let parts rest 48 h before testing. Fixtures and loader parts use their own,
+cheaper settings (see the loading kit below); they are not measured.
 
 ## What to print
 
@@ -49,67 +50,89 @@ infill too.
 | `twist.stl` | 10 + 1 | As imported, block on the bed. **Use tree supports, but only under the lever arm** (paint or block them elsewhere). Nothing may touch the round shaft. |
 | `cring.stl` | 5 + 1 | Flat as imported |
 | `column60/80/100.stl` | 1 each (optional) | Flat as imported |
-| `fixture_dogbone_grip_plate.stl` | 4 | Flat. Two plates per dogbone end; reusable for every dogbone. |
 | `fixture_cring_frame.stl` | 1 | Flat |
 | `fixture_anvil_bar.stl` | 1 | Flat. Skip it if you have a stiff 200 mm bar of wood or aluminium. |
 
-About 50 parts. Everything fits a 256 × 256 mm bed. The standing dogbones need
+About 45 test pieces plus 10 fixture and loader parts. Everything fits a 256 × 256 mm bed. The standing dogbones need
 at least 170 mm of build height.
 
-## Hardware
+## Other things you need
 
-- **Dogbones:** per end, one M8 bolt (≥ 30 mm), four M5 bolts (≥ 30 mm) with
-  nuts and washers, and one carabiner or shackle.
-- **Bars and twist:** an M6 bolt or a 6 mm steel rod through the load hole, with
-  a cord or wire loop over both ends, so the load hangs centred under the part.
+- Nylon cord (any 2–3 mm braided line). Always use it **doubled**: 450 N on
+  one strand is close to what cheap line holds.
+- A vise or a C-clamp for the bar, twist and column blocks.
 - **C-ring:** cord through the anvil's two Ø8 end holes up to the overhead bar;
-  a strap around the frame's bottom bar carries the load.
-- **Twist, propped tests:** a round rod as the prop under the axis notch on the
-  lever's underside.
+  a cord loop around the frame's bottom bar goes down to the toggle bar.
+- **Twist, propped tests:** any round rod (a pencil works) as the prop under the
+  axis notch on the lever's underside.
 
-## Shock-free loading kit (`loader_*`)
+## Shock-free loading kit (`loader_*`, all PLA, no screws)
 
-Discrete weights hung by hand jerk the specimen and can break it early. With
-this kit your hands never carry the load: plates go onto a carrier while it
-rests on a screw stand, and turning the hand wheel down lowers the carrier
-until the specimen picks up the weight gently. When the specimen breaks, the
-carrier drops only a few mm onto the stand. See `setup/0_loading_method.png`.
+Hanging discrete weights by hand jerks the specimen and can break it early.
+With this kit your hands never carry the load: the plates sit on a wedge
+platform, and pulling the bottom wedge out lowers them 1 mm per 8 mm of pull
+until the specimen picks them up. When it breaks, the plates drop only the
+3–5 mm gap back onto the platform. See `setup/0_loading_method.png`.
 
-| File | Qty | What it is |
-|---|---|---|
-| `loader_carrier_tray.stl` | 1 | 150 mm tray with two hand loops and a 25 mm boss; 1-inch plates slide over the boss |
-| `loader_plate_sleeve_olympic.stl` | 1 | Slips over the boss for 2-inch (Olympic) plates |
-| `loader_stand_base.stl` | 1 | 140 × 140 × 30 base with a pocket for a captive M12 nut |
-| `loader_stand_knob.stl` | 1 | 70 mm hand wheel; an M12 nut in its hex pocket turns the rod |
-| `loader_stand_cup.stl` | 1 | Sits on the rod top; the carrier's bottom nut drops into it |
-| `loader_load_yoke.stl` | 2 | U-yoke that hangs on both ends of the M6 bolt in a bar or twist load head, with an eye for the shackle |
+| File | Qty | Size (mm) | What it is |
+|---|---|---|---|
+| `loader_wedge_upper.stl` | 1 | 140 × 88 × 36 | Top wedge: flat platform for the plates, an 18 mm channel for the toggle bar, 1:8 underside with a groove |
+| `loader_wedge_lower.stl` | 1 | 176 × 50 × 24 | Bottom wedge: 1:8 slope with an alignment rib, thick end at the pull lug (hand hole) |
+| `loader_toggle_bar.stl` | 1 | 110 × 20 × 16 | Lies in the channel under the plates; the cord loops around its notch and runs up through the plate holes (1-inch or 2-inch plates) |
+| `loader_grip_clevis_flat_t2.stl` | 2 | 62 × 24 × 40 | Dogbone grip, 2.4 mm slot (flat dogbones) |
+| `loader_grip_clevis_standing_t4.stl` | 2 | 62 × 24 × 40 | Dogbone grip, 4.4 mm slot (standing dogbones) |
+| `loader_pin_d8.stl` | 3 | Ø8 × 28 | Pin through clevis and tab (one spare) |
+| `loader_pin_d6.stl` | 2 | Ø6 × 44 | Pin through the bar or twist load hole (one spare) |
+| `loader_load_yoke.stl` | 1 | 38 × 86 × 12 | Hangs on both ends of the Ø6 pin, so the pin is never a one-sided cantilever; Ø10.5 eye for the cord |
 
-Print the loader parts in PETG if you have it (PLA works): 100 % infill and
-6 walls. Print the tray flat with the boss up, and the base, knob and cup
-flat.
+**Why plastic can carry this.** None of these parts carries load the way the
+test pieces do. At 1.5× the heaviest test (about 450 N):
 
-**Steel hardware (the load path; don't substitute printed parts or nylon):**
+| Part | How it is loaded | Stress | PLA strength |
+|---|---|---|---|
+| Wedges | Contact pressure over 140 × 50 mm | ≈ 0.04 MPa | ≈ 50 MPa compression |
+| Ø8 pin | Double shear, short span inside the clevis | ≈ 4.5 MPa shear, ≈ 5 MPa bending | ≈ 30 MPa shear |
+| Clevis | Tension in two 20 mm side walls | < 3 MPa | ≈ 40 MPa |
+| Toggle bar | Bending across a 1-inch (2-inch) plate hole | 3.3 (6.6) MPa | ≈ 50 MPa |
+| Dogbone gauge, for comparison | — | ≈ 50 MPa | — |
 
-- M10 threaded rod, about 150 mm, with an M10 eye nut on top. Under the tray,
-  one M10 nut and one 50 mm fender washer.
-- M12 threaded rod, about 150 mm, with 3 M12 nuts: one captive in the base, and
-  two locked together in the knob.
-- Two or three steel shackles or quick links. A carabiner is fine for the
-  dogbone grips.
-- For the bars and twist piece: an M6 × 50 bolt and nut through the load head.
-  The printed yoke hangs on both protruding ends.
+The weak link is always the test piece, by a factor of 7 or more.
 
-**Assembly:**
+**Print settings and time** (0.4 nozzle, 0.2 layers, PLA):
 
-1. Press an M12 nut into the base pocket.
-2. Thread the M12 rod in from the top.
-3. Fit the knob about 40 mm up the rod and lock it with two nuts.
-4. Put the cup on top of the rod.
-5. Bolt the M10 rod through the tray: eye nut on top, washer and nut under the
-   tray.
+| Part | Orientation | Walls / infill | Approx. filament, time |
+|---|---|---|---|
+| Top wedge | As imported (platform on the bed) | 3 walls, 15 % gyroid | ≈ 110 g, 5 h |
+| Bottom wedge | As imported (flat side down) | 3 walls, 15 % gyroid | ≈ 45 g, 2 h |
+| Toggle bar | Flat as imported | 4 walls, 50 % | ≈ 30 g, 1 h |
+| Clevis grips (4) | Flat as imported | 4 walls, 40 % | ≈ 35 g, 1.5 h each |
+| Yoke | Flat as imported | 4 walls, 50 % | ≈ 15 g, 40 min |
+| Pins | Lying on the flat as imported | 100 % | 2 g, 10 min each |
 
-The carrier weighs about 0.7 kg with its hardware. Weigh it, and count it in
-every load.
+About 15 h of printing in total, most of it the two wedges; all parts fit a
+180 × 180 mm bed. No supports. Pins: if one is tight, sand it rather than
+drilling the hole, and print a spare.
+
+**Use:**
+
+1. Put the bottom wedge on the floor, rib up, lug toward you. Rub pencil
+   graphite on its slope (only there: the floor side must grip). Set the top
+   wedge on it, groove over the rib, and push the bottom wedge fully in.
+2. Put one heavy weight on the floor against each end of the top wedge,
+   beside the bottom wedge (not in its path). The top wedge can now move only
+   up and down.
+3. Lay the toggle bar in the channel, stack the plates on the platform over
+   it, and run the doubled cord from the specimen's lower grip down through the
+   plate holes and around the toggle notch. Tie it just slack.
+4. Pull the lug slowly toward you. At 8 mm per 1 mm of drop the cord tightens
+   and the specimen takes the plates. Stop when a 3–5 mm gap shows under the
+   plates and hold 30 s.
+5. Survived: push the wedge back in (the platform lifts the plates off the
+   specimen), add the next step, repeat. Broke: record the load.
+
+The 1:8 slope is self-locking: the wedge stays where you let go of it.
+Weigh the toggle bar, cord, lower grip and pin once; they are part of every
+load.
 
 ## Simulation copies (`sim/`)
 
