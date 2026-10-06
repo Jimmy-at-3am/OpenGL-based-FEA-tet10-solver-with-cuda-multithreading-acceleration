@@ -6,6 +6,7 @@ without rotating or scaling. `preview.png` shows every part.
 
 - `print/`: what you print (`.stl`), plus the same parts as exact CAD (`.step`)
 - `sim/`: simulation copies for `validate.py predict --geometry ...`
+- `setup/`: one figure per test showing the part, its supports and where and how the load is applied (from `tools/validation/draw_setups.py`)
 
 The sections being measured are deliberately small: the 3 mm dogbone gauge, the
 8 × 8 bar, the Ø8 shaft and the 4 mm ring wall. Everything you clamp or hang
