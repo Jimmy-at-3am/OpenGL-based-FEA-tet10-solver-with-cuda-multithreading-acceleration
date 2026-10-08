@@ -333,22 +333,26 @@ def fig_buckling():
 
 # ------------------------------------------------------ shock-free loading
 def _wedges(ax, x0, pulled):
-    """Side view of the wedge lowerer. The bottom wedge's thick end is at the
-    pull end (x0); pulling it out by `pulled` mm toward -X drops the top wedge
-    pulled/8. Floor weights beside the bottom wedge box the top wedge in X.
-    Returns the platform top."""
+    """Side view of the wedge lowerer (make_specimens.py geometry). The bottom
+    wedge's thick end and lug are at the pull end (x0); pulling it out by
+    `pulled` mm toward -X drops the top wedge pulled/8. Base posts (pull end)
+    and the base end wall hold the top wedge in X. Returns the platform top."""
+    B = 4                                                # base plate
+    ax.add_patch(Rectangle((x0 - 14.5, 0), 169, B, facecolor="#e6d3b3", edgecolor="#444", lw=1, zorder=1))
+    ax.add_patch(Rectangle((x0 - 14.5, B), 14, 40, facecolor="#e6d3b3", edgecolor="#444", lw=1,
+                           alpha=0.6, zorder=1))         # post, beside the bottom wedge (behind it)
+    ax.add_patch(Rectangle((x0 + 140.5, B), 14, 30, facecolor="#e6d3b3", edgecolor="#444", lw=1, zorder=1))
     xl = x0 - pulled                                     # bottom wedge, moved left
-    for sx in (x0 - 22, x0 + 140):                       # stops, behind the bottom wedge
-        ax.add_patch(Rectangle((sx, 0), 22, 30, facecolor="#9e9e9e", edgecolor="#333",
-                               hatch="xx", alpha=0.55, zorder=1))
-    ax.add_patch(Polygon([(xl, 0), (xl + 140, 0), (xl + 140, 4), (xl, 4 + 140 / 8)], **FIX))
-    ax.add_patch(Rectangle((xl - 36, 0), 37, 9, **FIX))  # pull lug with hand hole
-    ax.add_patch(Rectangle((xl - 28, 2), 20, 5, facecolor="white", edgecolor="#444", lw=0.8, zorder=2))
-    top = 40 - pulled / 8.0
-    ax.add_patch(Polygon([(x0, top - 40 + 4 + 140 / 8), (x0 + 140, top - 36), (x0 + 140, top), (x0, top)],
+    ax.add_patch(Polygon([(xl, B), (xl + 140, B), (xl + 140, B + 12), (xl, B + 29.5)], **FIX))
+    ax.add_patch(Rectangle((xl - 36, B), 37, 9, **FIX))  # pull lug with hand hole
+    ax.add_patch(Rectangle((xl - 28, B + 2), 20, 5, facecolor="white", edgecolor="#444", lw=0.8, zorder=2))
+    ax.add_patch(Rectangle((xl + 64, B), 8, 8, facecolor="#9e9e9e", edgecolor="#444", lw=0.8, zorder=2))  # stop tab
+    d = pulled / 8.0
+    top = B + 52 - d
+    ax.add_patch(Polygon([(x0, B + 29.5 - d), (x0 + 140, B + 12 - d), (x0 + 140, top), (x0, top)],
                          facecolor="#d6d6d6", edgecolor="#444", lw=1.2, zorder=2))
-    ax.add_patch(Rectangle((x0 + 58, top - 18), 24, 18, facecolor="white", edgecolor="#444", lw=1, zorder=2))
-    ax.plot([x0 - 90, x0 + 185], [0, 0], color="#333", lw=1.5, zorder=1)
+    ax.add_patch(Rectangle((x0 + 44, top - 18), 24, 18, facecolor="white", edgecolor="#444", lw=1, zorder=2))
+    ax.plot([x0 - 125, x0 + 185], [0, 0], color="#333", lw=1.5, zorder=1)
     return top
 
 
@@ -357,47 +361,50 @@ def fig_loading():
     fig.suptitle("Shock-free loading with two PLA wedges — your hands never carry the load",
                  fontsize=14, fontweight="bold", x=0.02, ha="left")
     steps = [("1. Plates sit on the top wedge; the cord to the\nspecimen is just slack. Your hands load the\nwedges, not the specimen.", 0, False),
-             ("2. Pull the bottom wedge out slowly by its lug\n(floor weights stop the top wedge): 8 mm of\npull = 1 mm of drop. When a 3–5 mm gap opens\nunder the plates, the specimen holds them. Hold 30 s.", 40, False),
+             ("2. Pull the bottom wedge out slowly with the cord\non its lug: 8 mm of pull = 1 mm of drop. When a\n3–5 mm gap opens under the plates, the specimen\nholds them. Hold 30 s. (Stop tabs: max 64 mm.)", 40, False),
              ("3a. Survived: push the bottom wedge back in,\nadd the next weight, repeat step 2.\n3b. Broke: the plates fall only the 3–5 mm gap\nback onto the platform. Record the load.", 40, True)]
+    cx = 56                                              # toggle channel / cord axis
     for ax, (txt, pulled, broken) in zip(axs, steps):
         ax.set_aspect("equal"); ax.axis("off")
         top = _wedges(ax, 0, pulled)
-        hang = 0 if (pulled == 0 or broken) else 5
+        hang = 0 if (pulled == 0 or broken) else 4
         base = top + hang
-        ax.add_patch(Rectangle((58, base - 18 + (0 if hang else 2)), 24, 16, **PART if False else dict(
-            facecolor="#ffcc80", edgecolor="#e65100", lw=1, zorder=4)))           # toggle bar
+        ax.add_patch(Rectangle((cx - 12, base - 18 + (0 if hang else 2)), 24, 16,
+                               facecolor="#ffcc80", edgecolor="#e65100", lw=1, zorder=4))   # toggle bar
         for i in range(3):
-            ax.add_patch(Rectangle((10, base + i * 14), 120, 12,
+            ax.add_patch(Rectangle((cx - 60, base + i * 14), 120, 12,
                                    facecolor="#424242", edgecolor="#111", lw=1, zorder=3))
         cord_top = base + 3 * 14 + 40
-        ax.plot([70, 70], [base - 10, cord_top], color="#8d6e63", lw=2, zorder=5)
-        ax.add_patch(Rectangle((60, cord_top), 20, 31, facecolor="#c9c9c9", edgecolor="#444", zorder=4))  # clevis
+        ax.plot([cx, cx], [base - 10, cord_top], color="#8d6e63", lw=2, zorder=5)
+        ax.add_patch(Rectangle((cx - 10, cord_top), 20, 31, facecolor="#c9c9c9", edgecolor="#444", zorder=4))  # clevis
         spec0 = cord_top + 31
         if broken:
-            ax.add_patch(Polygon([(64, spec0), (76, spec0), (73, spec0 + 30), (67, spec0 + 30)], **PART))
-            ax.add_patch(Polygon([(67, spec0 + 45), (73, spec0 + 45), (76, spec0 + 75), (64, spec0 + 75)], **PART))
-            ax.text(82, spec0 + 37, "break", color=LOAD_C, fontweight="bold")
+            ax.add_patch(Polygon([(cx - 6, spec0), (cx + 6, spec0), (cx + 3, spec0 + 30), (cx - 3, spec0 + 30)], **PART))
+            ax.add_patch(Polygon([(cx - 3, spec0 + 45), (cx + 3, spec0 + 45), (cx + 6, spec0 + 75), (cx - 6, spec0 + 75)], **PART))
+            ax.text(cx + 12, spec0 + 37, "break", color=LOAD_C, fontweight="bold")
         else:
-            ax.add_patch(Polygon([(64, spec0), (76, spec0), (73, spec0 + 30), (73, spec0 + 45), (76, spec0 + 75),
-                                  (64, spec0 + 75), (67, spec0 + 45), (67, spec0 + 30)], **PART))
-        ax.plot([40, 100], [spec0 + 80, spec0 + 80], color="#222", lw=6)
-        ax.text(70, spec0 + 87, "fixed support", ha="center", color=SUP_C, fontsize=9)
+            ax.add_patch(Polygon([(cx - 6, spec0), (cx + 6, spec0), (cx + 3, spec0 + 30), (cx + 3, spec0 + 45), (cx + 6, spec0 + 75),
+                                  (cx - 6, spec0 + 75), (cx - 3, spec0 + 45), (cx - 3, spec0 + 30)], **PART))
+        ax.plot([cx - 30, cx + 30], [spec0 + 80, spec0 + 80], color="#222", lw=6)
+        ax.text(cx, spec0 + 87, "fixed support", ha="center", color=SUP_C, fontsize=9)
         if pulled and not broken:
-            arrow(ax, (-80, 5), (-118, 5), color="#1565c0")
-            ax.text(-118, 13, "pull", color="#1565c0", fontsize=10, fontweight="bold")
-            dim(ax, (138, top), (138, base), "gap", (10, 0))
-            arrow(ax, (150, base + 50), (150, base + 10))
-            ax.text(153, base + 32, "W", color=LOAD_C, fontsize=12, fontweight="bold")
+            ax.plot([-pulled - 32, -pulled - 90], [8, 14], color="#8d6e63", lw=2, zorder=5)
+            arrow(ax, (-pulled - 50, 22), (-pulled - 85, 22), color="#1565c0")
+            ax.text(-pulled - 88, 30, "pull", color="#1565c0", fontsize=10, fontweight="bold")
+            dim(ax, (cx + 64, top), (cx + 64, base), "gap", (12, 0))
+            arrow(ax, (cx + 80, base + 60), (cx + 80, base + 20))
+            ax.text(cx + 83, base + 40, "W", color=LOAD_C, fontsize=12, fontweight="bold")
         ax.text(-125, -18, txt, fontsize=9.5, va="top")
-        ax.set_xlim(-130, 185); ax.set_ylim(-95, spec0 + 100)
+        ax.set_xlim(-135, 190); ax.set_ylim(-95, spec0 + 100)
     a = axs[0]
-    note(a, (110, 30), "top wedge: flat platform,\nchannel for the toggle bar", (120, 115))
-    note(a, (20, 12), "bottom wedge, 1:8 slope,\nthick end + lug at the pull end", (-125, 100))
-    note(a, (-11, 25), "floor weights at both ends,\nbeside the bottom wedge", (-125, 45))
-    note(a, (70, 30), "toggle bar under the plates;\ncord loops around it, up\nthrough the plate holes", (-125, 155))
-    note(a, (70, 210), "PLA clevis + Ø8 PLA pin\n(dogbone) or load yoke", (95, 230))
-    fig.text(0.02, 0.01, "Everything is PLA and works far below its strength: wedges only see compression (≈0.04 MPa); pins, clevis and toggle stay "
-             "≥7× below PLA strength at 1.5× the heaviest test load.\nRub pencil graphite between the wedges (not under them): the bottom wedge then stays put when you let go of it.", fontsize=9.5)
+    note(a, (115, 40), "top wedge: flat platform,\nchannel for the toggle bar", (110, 130))
+    note(a, (15, 20), "bottom wedge, 1:8 slope,\nthick end + lug at the pull end", (-130, 105))
+    note(a, (-7, 40), "base: posts at the pull end and\nan end wall hold the top wedge", (-130, 60))
+    note(a, (cx, 45), "toggle bar under the plates;\ncord loops around it, up\nthrough the plate holes", (-130, 165))
+    note(a, (cx, 240), "PLA clevis + Ø8 PLA pin\n(dogbone) or load yoke", (85, 255))
+    fig.text(0.02, 0.01, "Everything is PLA and works far below its strength: wedges only see contact pressure (≈0.1 MPa); pins, clevis and toggle stay "
+             "≥7× below PLA strength at 1.5× the heaviest test load.\nRub pencil graphite between the wedges only. The 1:8 slope is self-locking: the bottom wedge stays put when you let go. "
+             "Full 3D views: 6_assembly_tension.png, 7_assembly_vise.png.", fontsize=9.5)
     return fig
 
 

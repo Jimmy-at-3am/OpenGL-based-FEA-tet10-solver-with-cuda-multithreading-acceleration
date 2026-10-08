@@ -61,12 +61,14 @@ datasheet-style inputs.
   light tests.
 - **Wedge lowerer (printed, `loader_*` files, PLA only, no screws):** the
   plates sit on the flat platform of a top wedge that rests on a 1:8 bottom
-  wedge. A doubled nylon cord runs from the specimen down through the plate
+  wedge; a printed base with posts and an end wall holds the top wedge so it
+  only moves up and down. A doubled nylon cord runs from the specimen down through the plate
   holes to a toggle bar under the plates. Pulling the bottom wedge out by
   hand lowers the platform 1 mm per 8 mm of pull, so the specimen picks the
   plates up gently and your hands never carry the load. When the specimen
   breaks, the plates drop only the 3–5 mm gap back onto the platform. The
-  wedges only see contact pressure (≈0.04 MPa); the printed parts in the load
+  stroke is 8 mm (stop tabs at 64 mm of pull), so keep the cords short. The
+  wedges only see contact pressure (≤0.12 MPa); the printed parts in the load
   path (clevis, pins, yoke, toggle bar) stay at least 7× below PLA strength at
   1.5× the heaviest load, and none of them is loaded as a one-point cantilever.
 - **Weigh once:** the toggle bar, cord, lower clevis and pin, or the yoke or
@@ -159,7 +161,8 @@ TENSION                  VISE (bars, twist, columns)        C-RING
 
 - **Tension:** slide each tab into a clevis grip and push a Ø8 PLA pin
   through the clevis and the tab hole. Tie a doubled cord through each
-  grip's Ø12 eye: the upper one to the overhead bar, the lower one down
+  grip's Ø12 eye: the upper one in a short loop to the overhead bar (about
+  0.45 m above the floor, so the cords stay short), the lower one down
   through the plate holes to the toggle bar under the plates on the wedge
   lowerer. The cords let the pull self-centre; the pin sits in double shear.
 - **Vise:** mount it at the table edge so the load hangs clear.

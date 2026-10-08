@@ -6,7 +6,7 @@ without rotating or scaling. `preview.png` shows every part.
 
 - `print/`: what you print (`.stl`), plus the same parts as exact CAD (`.step`)
 - `sim/`: simulation copies for `validate.py predict --geometry ...`
-- `setup/`: one figure per test showing the part, its supports and where and how the load is applied (from `tools/validation/draw_setups.py`)
+- `setup/`: one figure per test showing the part, its supports and where and how the load is applied (from `tools/validation/draw_setups.py`), plus 3D views of the assembled rigs (`6_assembly_tension.png`, `7_assembly_vise.png`, from `tools/validation/draw_assembly.py`)
 
 The sections being measured are deliberately small: the 3 mm dogbone gauge, the
 8 × 8 bar, the Ø8 shaft and the 4 mm ring wall. Everything you clamp or hang
@@ -72,12 +72,15 @@ Hanging discrete weights by hand jerks the specimen and can break it early.
 With this kit your hands never carry the load: the plates sit on a wedge
 platform, and pulling the bottom wedge out lowers them 1 mm per 8 mm of pull
 until the specimen picks them up. When it breaks, the plates drop only the
-3–5 mm gap back onto the platform. See `setup/0_loading_method.png`.
+3–5 mm gap back onto the platform. See `setup/0_loading_method.png` for the
+steps and `setup/6_assembly_tension.png` / `setup/7_assembly_vise.png` for
+3D views of the fully assembled rigs.
 
 | File | Qty | Size (mm) | What it is |
 |---|---|---|---|
-| `loader_wedge_upper.stl` | 1 | 140 × 88 × 36 | Top wedge: flat platform for the plates, an 18 mm channel for the toggle bar, 1:8 underside with a groove |
-| `loader_wedge_lower.stl` | 1 | 176 × 50 × 24 | Bottom wedge: 1:8 slope with an alignment rib, thick end at the pull lug (hand hole) |
+| `loader_wedge_base.stl` | 1 | 169 × 88 × 44 | Base plate the bottom wedge slides on; two posts at the pull end and a wall at the far end hold the top wedge, so it can only move up and down |
+| `loader_wedge_upper.stl` | 1 | 140 × 88 × 40 | Top wedge: flat platform for the plates, an 18 mm channel for the toggle bar, 1:8 underside with a groove |
+| `loader_wedge_lower.stl` | 1 | 176 × 80 × 32 | Bottom wedge: 1:8 slope (29.5 → 12 mm) with an alignment rib, pull lug with hand hole, two stop tabs that limit the pull to 64 mm (8 mm drop) |
 | `loader_toggle_bar.stl` | 1 | 110 × 20 × 16 | Lies in the channel under the plates; the cord loops around its notch and runs up through the plate holes (1-inch or 2-inch plates) |
 | `loader_grip_clevis_flat_t2.stl` | 2 | 62 × 24 × 40 | Dogbone grip, 2.4 mm slot (flat dogbones) |
 | `loader_grip_clevis_standing_t4.stl` | 2 | 62 × 24 × 40 | Dogbone grip, 4.4 mm slot (standing dogbones) |
@@ -90,7 +93,8 @@ test pieces do. At 1.5× the heaviest test (about 450 N):
 
 | Part | How it is loaded | Stress | PLA strength |
 |---|---|---|---|
-| Wedges | Contact pressure over 140 × 50 mm | ≈ 0.04 MPa | ≈ 50 MPa compression |
+| Wedges | Contact pressure, at least 76 × 50 mm even at full pull | ≤ 0.12 MPa | ≈ 50 MPa compression |
+| Base posts | Hold the top wedge sideways (≤ 0.2 × load) | ≈ 2 MPa | ≈ 20 MPa across layers |
 | Ø8 pin | Double shear, short span inside the clevis | ≈ 4.5 MPa shear, ≈ 5 MPa bending | ≈ 30 MPa shear |
 | Clevis | Tension in two 20 mm side walls | < 3 MPa | ≈ 40 MPa |
 | Toggle bar | Bending across a 1-inch (2-inch) plate hole | 3.3 (6.6) MPa | ≈ 50 MPa |
@@ -102,35 +106,45 @@ The weak link is always the test piece, by a factor of 7 or more.
 
 | Part | Orientation | Walls / infill | Approx. filament, time |
 |---|---|---|---|
-| Top wedge | As imported (platform on the bed) | 3 walls, 15 % gyroid | ≈ 110 g, 5 h |
-| Bottom wedge | As imported (flat side down) | 3 walls, 15 % gyroid | ≈ 45 g, 2 h |
+| Top wedge | As imported (platform on the bed) | 3 walls, 15 % gyroid | ≈ 150 g, 6 h |
+| Bottom wedge | As imported (flat side down) | 3 walls, 15 % gyroid | ≈ 65 g, 3 h |
+| Base | As imported (posts up) | 3 walls, 20 % gyroid | ≈ 55 g, 2.5 h |
 | Toggle bar | Flat as imported | 4 walls, 50 % | ≈ 30 g, 1 h |
 | Clevis grips (4) | Flat as imported | 4 walls, 40 % | ≈ 35 g, 1.5 h each |
 | Yoke | Flat as imported | 4 walls, 50 % | ≈ 15 g, 40 min |
 | Pins | Lying on the flat as imported | 100 % | 2 g, 10 min each |
 
-About 15 h of printing in total, most of it the two wedges; all parts fit a
+About 19 h of printing in total, most of it the wedges and base; all parts fit a
 180 × 180 mm bed. No supports. Pins: if one is tight, sand it rather than
 drilling the hole, and print a spare.
 
 **Use:**
 
-1. Put the bottom wedge on the floor, rib up, lug toward you. Rub pencil
-   graphite on its slope (only there: the floor side must grip). Set the top
-   wedge on it, groove over the rib, and push the bottom wedge fully in.
-2. Put one heavy weight on the floor against each end of the top wedge,
-   beside the bottom wedge (not in its path). The top wedge can now move only
-   up and down.
+1. Put the base on the floor on a towel or rubber mat, posts toward you. Set
+   the bottom wedge on it, rib up, lug between the posts, and push it in
+   until it touches the far wall. Rub pencil graphite on its slope (only
+   there). Set the top wedge on it, groove over the rib, between the posts
+   and the wall: it can now move only up and down.
+2. Tie a short cord through the lug's hand hole to pull with, so your hands
+   stay clear of the plates.
 3. Lay the toggle bar in the channel, stack the plates on the platform over
    it, and run the doubled cord from the specimen's lower grip down through the
    plate holes and around the toggle notch. Tie it just slack.
-4. Pull the lug slowly toward you. At 8 mm per 1 mm of drop the cord tightens
-   and the specimen takes the plates. Stop when a 3–5 mm gap shows under the
-   plates and hold 30 s.
+4. Pull slowly toward you. At 8 mm per 1 mm of drop the cord tightens and
+   the specimen takes the plates. Stop when a 3–5 mm gap shows under the
+   plates and hold 30 s. The stop tabs end the stroke at 8 mm of drop; if the
+   specimen has not taken the plates by then, push back and tie the cord
+   shorter.
 5. Survived: push the wedge back in (the platform lifts the plates off the
    specimen), add the next step, repeat. Broke: record the load.
 
 The 1:8 slope is self-locking: the wedge stays where you let go of it.
+
+**Keep the cords short.** Nylon stretches several percent under load, and the
+stroke is only 8 mm, so hang the tension rig from a bar about 0.45 m above the
+floor (short loops at both ends, as in `setup/6_assembly_tension.png`), not
+from a doorway pull-up bar.
+
 Weigh the toggle bar, cord, lower grip and pin once; they are part of every
 load.
 

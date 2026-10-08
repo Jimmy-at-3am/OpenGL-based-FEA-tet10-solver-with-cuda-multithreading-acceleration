@@ -193,40 +193,62 @@ def load_yoke():
 
 
 SLOPE = 8.0          # wedge drop: 1 mm per 8 mm of pull
+THIN = 12.0          # bottom-wedge thin end; the top wedge's lowest edge sits this high
+PLATFORM = 52.0      # top-wedge platform height above the base plate
+CH_X = 56.0          # toggle-bar channel centre, kept toward the thick end so the
+                     # load stays over the contact patch at full pull
+MAX_PULL = 64.0      # stop tabs hit the base posts here: 8 mm of drop
 
 
 def _slope_z(x):
-    """Bottom-wedge top surface: thick end (21.5) at x = 0 near the pull loop,
-    thin end (4) at x = 140."""
-    return 4 + (140 - x) / SLOPE
+    """Bottom-wedge top surface: thick end (29.5) at x = 0 near the pull lug,
+    thin end (12) at x = 140."""
+    return THIN + (140 - x) / SLOPE
 
 
 def wedge_lower():
     """Bottom wedge, 140 x 50: top falls 1:8 from the pull end (x = 0) to
     x = 140, with a 3 mm alignment rib along the middle. Pulling it toward you
-    (-X) brings its thin part under the top wedge, so the platform LOWERS."""
+    (-X) brings its thin part under the top wedge, so the platform LOWERS.
+    Two stop tabs hit the base posts after MAX_PULL mm, so it cannot be pulled
+    far enough for the top wedge to tip or touch the base."""
     w = (cq.Workplane("XZ").polyline([(0, 0), (140, 0), (140, _slope_z(140)), (0, _slope_z(0))])
          .close().extrude(25, both=True))
     rib = (cq.Workplane("XZ").polyline([(6, _slope_z(6) - 1), (134, _slope_z(134) - 1),
                                          (134, _slope_z(134) + 3), (6, _slope_z(6) + 3)])
            .close().extrude(4, both=True))
     lug = box(-36, 1, -25, 25, 0, 9).cut(box(-28, -8, -17, 17, -1, 10))
-    return w.union(rib).union(lug)
+    w = w.union(rib).union(lug)
+    for s in (1, -1):
+        w = w.union(box(MAX_PULL, MAX_PULL + 8, *sorted((s * 24, s * 40)), 0, 8))
+    return w
 
 
 def wedge_upper():
-    """Top wedge, 140 x 88 (overhangs the bottom wedge 19 mm each side so its
-    -X face can rest against two weights placed on the floor), underside on
-    the 1:8 slope with a groove for the rib, flat platform at z = 40, and an
-    18-deep channel across the middle for the toggle bar. Printed upside down
+    """Top wedge, 140 x 88 (overhangs the bottom wedge 19 mm each side, so its
+    end faces bear on the base posts beside the bottom wedge), underside on
+    the 1:8 slope with a groove for the rib, flat platform at PLATFORM, and an
+    18-deep channel across it at CH_X for the toggle bar. Printed upside down
     (platform on the bed)."""
-    w = (cq.Workplane("XZ").polyline([(0, _slope_z(0)), (140, _slope_z(140)), (140, 40.0), (0, 40.0)])
+    w = (cq.Workplane("XZ").polyline([(0, _slope_z(0)), (140, _slope_z(140)), (140, PLATFORM), (0, PLATFORM)])
          .close().extrude(44, both=True))
     groove = (cq.Workplane("XZ").polyline([(-1, _slope_z(-1) - 1), (141, _slope_z(141) - 1),
                                             (141, _slope_z(141) + 3.6), (-1, _slope_z(-1) + 3.6)])
               .close().extrude(4.6, both=True))
     w = w.cut(groove)
-    return w.cut(box(58, 82, -50, 50, 40.0 - 18, 41))
+    return w.cut(box(CH_X - 12, CH_X + 12, -50, 50, PLATFORM - 18, PLATFORM + 1))
+
+
+def wedge_base():
+    """Base plate the bottom wedge slides on (4 mm, 168 x 88). Two posts at the
+    pull end (beside the 54 mm lane for the bottom wedge and its lug) and a
+    wall at the far end hold the top wedge in X, so it can only move up and
+    down; the wall is also the push-in stop for the bottom wedge. The full
+    load presses the base onto the floor, so it does not walk."""
+    b = box(-14.5, 154.5, -44, 44, 0, 4)
+    for s in (1, -1):
+        b = b.union(box(-14.5, -0.5, *sorted((s * 27, s * 44)), 4, 44))
+    return b.union(box(140.5, 154.5, -44, 44, 4, 34))
 
 
 def toggle_bar():
@@ -259,6 +281,7 @@ PARTS = {
     "loader_wedge_lower":   (lambda: wedge_lower(), "print"),
     "loader_wedge_upper":   (lambda: wedge_upper().rotate((0, 0, 0), (1, 0, 0), 180), "print"),
     "loader_toggle_bar":    (lambda: toggle_bar(), "print"),
+    "loader_wedge_base":    (lambda: wedge_base(), "print"),
 }
 
 
