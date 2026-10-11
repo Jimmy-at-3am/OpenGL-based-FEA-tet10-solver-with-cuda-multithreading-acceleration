@@ -1,0 +1,53 @@
+<section id="m-model" data-transition="fade" style="background:#FFFFFF;color:#1B1B1F;font-family:'Inter', Arial, sans-serif;padding:200px 64px 40px 64px;display:flex;flex-direction:column;gap:24px">
+<div style="position:absolute;left:40px;top:14px;width:1840px;height:40px;display:flex;flex-direction:row;justify-content:center;align-items:center;gap:22px">
+<p style="font-size:24px;font-weight:700;color:#0078D4;white-space:nowrap">2 · Modules &amp; methods</p>
+<p style="font-size:24px;color:#C8CDD3">|</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Overview</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Input</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Toolpaths</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Meshing</p>
+<p style="font-size:24px;font-weight:700;color:#E3008C;border-bottom:3px solid #E3008C;white-space:nowrap">Data model</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Picking</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Load transfer</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Solver</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Parallel</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Results</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Timeline</p>
+</div>
+<img src="/_blob/61feb4ed29835b5d5f563f3adcc6ff22" alt="" data-build-in="left" style="position:absolute;left:0px;top:62px;width:1920px;height:104px">
+<h2 style="position:absolute;left:0px;top:62px;width:1920px;height:104px;font-size:54px;line-height:104px;font-weight:600;color:#FFFFFF;text-align:center;text-shadow:0px 2px 6px rgba(0,30,60,0.45)">The shared model: one object, every stage</h2>
+<img src="/_blob/992fc9455063263851655eebb7222283" alt="Graph: FEAModel in the centre, seven field groups around it, and the modules that read or write each group on the outside" style="position:absolute;left:40px;top:200px;width:1150px;height:860px">
+<p style="position:absolute;left:540px;top:614px;width:120px;font-size:24px;font-weight:700;color:#FFFFFF;text-align:center">FEAModel</p>
+<p style="position:absolute;left:371px;top:449px;width:260px;font-size:24px;line-height:1.15;font-weight:700;color:#B0006C;background:rgba(255,255,255,0.85);border-radius:6px;text-align:center">Surface for drawing<br><span style="color:#6B7280">vertices · indices</span></p>
+<p style="position:absolute;left:100px;top:536px;width:240px;font-size:24px;line-height:1.15;font-weight:700;color:#B0006C;background:rgba(255,255,255,0.85);border-radius:6px;text-align:right">Real size<br><span style="color:#6B7280">modelToMM</span></p>
+<p style="position:absolute;left:430px;top:296px;width:290px;font-size:24px;line-height:1.15;font-weight:700;color:#B0006C;background:rgba(255,255,255,0.85);border-radius:6px;text-align:right">Sources<br><span style="color:#6B7280">toolpath · sliced · brep</span></p>
+<p style="position:absolute;left:870px;top:600px;width:300px;font-size:24px;line-height:1.15;font-weight:700;color:#B0006C;background:rgba(255,255,255,0.85);border-radius:6px;text-align:left">Volume mesh<br><span style="color:#6B7280">tetrahedra (4 / 10)</span></p>
+<p style="position:absolute;left:631px;top:840px;width:240px;font-size:24px;line-height:1.15;font-weight:700;color:#B0006C;background:rgba(255,255,255,0.85);border-radius:6px;text-align:center">Printed structure<br><span style="color:#6B7280">LayerStack · ties</span></p>
+<p style="position:absolute;left:370px;top:800px;width:190px;font-size:24px;line-height:1.15;font-weight:700;color:#B0006C;background:rgba(255,255,255,0.85);border-radius:6px;text-align:right">Results<br><span style="color:#6B7280">u · σ · failure</span></p>
+<p style="position:absolute;left:140px;top:690px;width:240px;font-size:24px;line-height:1.15;font-weight:700;color:#B0006C;background:rgba(255,255,255,0.85);border-radius:6px;text-align:right">Display state<br><span style="color:#6B7280">scalarMode</span></p>
+<p style="position:absolute;left:164px;top:318px;width:260px;font-size:24px;color:#2D3138;background:rgba(255,255,255,0.85);border-radius:6px;text-align:center;font-family:'JetBrains Mono', 'Courier New', monospace">processRawGeometry</p>
+<p style="position:absolute;left:624px;top:195px;width:200px;font-size:24px;color:#2D3138;background:rgba(255,255,255,0.85);border-radius:6px;text-align:center;font-family:'JetBrains Mono', 'Courier New', monospace">SlicedPackage</p>
+<p style="position:absolute;left:962px;top:404px;width:200px;font-size:24px;color:#2D3138;background:rgba(255,255,255,0.85);border-radius:6px;text-align:left;font-family:'JetBrains Mono', 'Courier New', monospace">LoadTransfer</p>
+<p style="position:absolute;left:880px;top:722px;width:300px;font-size:24px;color:#2D3138;background:rgba(255,255,255,0.85);border-radius:6px;text-align:center;font-family:'JetBrains Mono', 'Courier New', monospace">generateMidEdgeNodes</p>
+<p style="position:absolute;left:830px;top:892px;width:160px;font-size:24px;color:#2D3138;background:rgba(255,255,255,0.85);border-radius:6px;text-align:center;font-family:'JetBrains Mono', 'Courier New', monospace">SlabMesher</p>
+<p style="position:absolute;left:720px;top:972px;width:160px;font-size:24px;color:#2D3138;background:rgba(255,255,255,0.85);border-radius:6px;text-align:left;font-family:'JetBrains Mono', 'Courier New', monospace">FEASolver</p>
+<p style="position:absolute;left:200px;top:1004px;width:300px;font-size:24px;color:#2D3138;background:rgba(255,255,255,0.85);border-radius:6px;text-align:center;font-family:'JetBrains Mono', 'Courier New', monospace">StressVisualization</p>
+<p style="position:absolute;left:84px;top:802px;width:300px;font-size:24px;color:#2D3138;background:rgba(255,255,255,0.85);border-radius:6px;text-align:center;font-family:'JetBrains Mono', 'Courier New', monospace">selectDefaultResult</p>
+<p style="position:absolute;left:80px;top:652px;width:240px;font-size:24px;color:#2D3138;background:rgba(255,255,255,0.85);border-radius:6px;text-align:center;font-family:'JetBrains Mono', 'Courier New', monospace">SimulationRecord</p>
+<div style="position:absolute;left:1214px;top:204px;width:642px;height:836px;background:#F7F9FB;border-radius:16px"></div>
+<div style="position:absolute;left:1240px;top:220px;width:596px;display:flex;flex-direction:column;gap:8px">
+<h3 style="font-size:30px;font-weight:700;color:#0078D4">Background maths</h3>
+<p style="font-size:24px;line-height:1.3"><b>Volume mesh → element blocks</b> <span style="color:#0078D4">[16, 17]</span></p>
+<img src="/_blob/97d0296fe99a743c3c00cd3da806d3da" alt="K_e for Tet4 and Tet10" style="width:590px;height:66px;object-fit:contain">
+<p style="font-size:24px;line-height:1.3;color:#4A4F57"><i>V</i>e element volume · <i>B</i> strain–displacement matrix · <i>D</i> material matrix · <i>w</i>g, <i>J</i>g weight and Jacobian at Gauss point <i>g</i></p>
+<p style="font-size:24px;line-height:1.3"><b>Printed structure → weld ties</b></p>
+<img src="/_blob/442a8b3b01f252a7975fa5165a048ec2" alt="k_t equals tieAlpha E_z A_tie over t" style="width:412px;height:61px;object-fit:contain">
+<p style="font-size:24px;line-height:1.3;color:#4A4F57"><i>E</i>z stiffness across layers · <i>A</i>tie area per tie · <i>t</i> slab thickness</p>
+<p style="font-size:24px;line-height:1.3"><b>Results → colour scale top</b> <span style="color:#0078D4">[20]</span></p>
+<img src="/_blob/5ac8f118fa42afee9f93b784bf2a8d95" alt="sorted exterior stresses; the top is the nearest-rank 99th percentile when n is over 100, else the maximum" style="width:573px;height:69px;object-fit:contain">
+<img src="/_blob/4dba173600a424d41546d503bd2b6495" alt="clamped value, PEAK equals the maximum, plus sign when the maximum exceeds the top" style="width:590px;height:28px;object-fit:contain">
+<p style="font-size:24px;line-height:1.3;color:#4A4F57"><i>s</i>(k) sorted exterior-face stresses · <i>n</i> their count · <i>s</i>top top of the legend</p>
+<p style="font-size:24px;line-height:1.3;border-top:1px solid #D5DAE0;padding:8px 0px 0px 0px">On opening a finished run, the default view is stress when it exists, otherwise deformation, with broken elements in magenta.</p>
+</div>
+<aside>FEAModel (+ FEAData) is the one object every stage reads and writes. Field groups (magenta) with example fields: surface for drawing (vertices, indices, render buffers); real size (physicalMinMM, physicalMaxMM, modelToMM); volume mesh (originalVolumetricPositions, tetrahedra with 4 nodes, tetrahedraQuadratic with 10); printed structure (layers: LayerStack slab planes, elemSlabIndex, weld interfaces, tieAlpha); sources (toolpath, sliced package, plain model, brep); results (displacements, element stress, failure mode, failure step, appliedForces arrows); display state (active scalarMode, dead-element view, section plane). Grey nodes are modules: an edge means the module writes or reads that group. SimulationRecord (dashed) captures and restores the whole model. selectDefaultResult opens a finished run on the most useful view.</aside>
+</section>

@@ -1,0 +1,54 @@
+<section id="m-mesh-math" data-transition="fade" style="background:#FFFFFF;color:#1B1B1F;font-family:'Inter', Arial, sans-serif;padding:200px 64px 40px 64px;display:flex;flex-direction:column;gap:24px">
+<div style="position:absolute;left:40px;top:14px;width:1840px;height:40px;display:flex;flex-direction:row;justify-content:center;align-items:center;gap:22px">
+<p style="font-size:24px;font-weight:700;color:#0078D4;white-space:nowrap">2 · Modules &amp; methods</p>
+<p style="font-size:24px;color:#C8CDD3">|</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Overview</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Input</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Toolpaths</p>
+<p style="font-size:24px;font-weight:700;color:#E3008C;border-bottom:3px solid #E3008C;white-space:nowrap">Meshing</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Data model</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Picking</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Load transfer</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Solver</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Parallel</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Results</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Timeline</p>
+</div>
+<img src="/_blob/61feb4ed29835b5d5f563f3adcc6ff22" alt="" data-build-in="left" style="position:absolute;left:0px;top:62px;width:1920px;height:104px">
+<h2 style="position:absolute;left:0px;top:62px;width:1920px;height:104px;font-size:54px;line-height:104px;font-weight:600;color:#FFFFFF;text-align:center;text-shadow:0px 2px 6px rgba(0,30,60,0.45)">The maths behind the mesh</h2>
+<div style="position:absolute;left:1111px;top:212px;width:2px;height:820px;background:#D5DAE0"></div>
+<div style="position:absolute;left:64px;top:198px;width:1016px;display:flex;flex-direction:column;gap:8px">
+<h3 style="font-size:32px;font-weight:700;color:#E3008C">Weld ties between slabs, derived</h3>
+<p style="font-size:24px;line-height:1.3"><b>1 · Hooke's law across one slab</b> of thickness <i>t</i> <span style="color:#0078D4">[15]</span></p>
+<img src="/_blob/0a225c18f8af2f307002d0dd52c0f6c3" alt="sigma equals E_z epsilon, epsilon equals delta over t, F equals sigma A, so F equals E_z A over t times delta, so k_slab equals E_z A over t" style="width:926px;height:72px;object-fit:contain">
+<p style="font-size:24px;line-height:1.3"><b>2 · The tie is a spring α times stiffer</b> than the slab it bridges</p>
+<img src="/_blob/442a8b3b01f252a7975fa5165a048ec2" alt="k_t equals alpha k_slab equals tieAlpha times E_z times A_tie over t" style="width:489px;height:72px;object-fit:contain">
+<p style="font-size:24px;line-height:1.3"><b>3 · Slab and tie act in series</b>, so with α = 100 a layer stack stretches only about 1 % more</p>
+<img src="/_blob/69f5fd65299b5197d2e46cea2b3cb839" alt="one over k_total equals one over k_slab plus one over k_t equals t over E_z A times one plus one over alpha, which is plus one percent at alpha equals 100" style="width:738px;height:75px;object-fit:contain">
+<p style="font-size:24px;line-height:1.3"><b>4 · The tie gap</b> joins a top node to a barycentric point inside the triangle below <span style="color:#0078D4">[12]</span></p>
+<div style="display:flex;flex-direction:row;gap:40px;align-items:center">
+<img src="/_blob/6aaecfeb250f3a50bfd8891b3b2ae9fb" alt="p equals sum of w_i x_b_i, weights sum to one and are non-negative" style="width:445px;height:82px;object-fit:contain">
+<img src="/_blob/d7b186926cba55fe64adfba2b451aa56" alt="g equals u_top minus sum of w_i u_b_i, U_t equals one half k_t g squared" style="width:439px;height:82px;object-fit:contain">
+</div>
+<p style="font-size:24px;line-height:1.3"><b>5 · Differentiate the spring energy twice</b>: the entries added to <i>K</i></p>
+<img src="/_blob/6c0db20eec491b8c4f931d68e4c0732f" alt="second derivative of U_t: K top-top plus equals k_t, K top-b_i minus equals k_t w_i, K b_i b_j plus equals k_t w_i w_j" style="width:966px;height:76px;object-fit:contain">
+<p style="font-size:24px;line-height:1.35;color:#4A4F57"><i>E</i>z stiffness across layers · <i>A</i>, <i>A</i>tie area one tie carries · <i>t</i> slab thickness · <i>δ</i> stretch · α = tieAlpha · <i>w</i>ᵢ barycentric weights · <i>u</i> nodal displacements · <i>U</i>t tie energy</p>
+</div>
+<div style="position:absolute;left:1144px;top:198px;width:712px;display:flex;flex-direction:column;gap:8px">
+<h3 style="font-size:32px;font-weight:700;color:#0078D4">Element stiffness <span style="color:#0078D4">[16, 17]</span></h3>
+<p style="font-size:24px;line-height:1.3"><b>Takes</b> node positions and the material matrix <i>D</i> · <b>Gives</b> the element block <i>K</i>e</p>
+<img src="/_blob/97d0296fe99a743c3c00cd3da806d3da" alt="K_e equals V_e B transpose D B for Tet4; K_e equals the sum over four Gauss points of w_g det J_g B_g transpose D B_g for Tet10" style="width:682px;height:76px;object-fit:contain">
+<p style="font-size:24px;line-height:1.3"><b>Implies</b> Tet4 strain is constant inside each element, so it is too stiff in bending; the 4-point rule is exact for Tet10's degree-2 integrand, so Tet10 bends accurately</p>
+<h3 style="font-size:32px;font-weight:700;color:#0078D4;padding:10px 0px 0px 0px">Mesh quality <span style="color:#0078D4">[14, 18, 19]</span></h3>
+<p style="font-size:24px;line-height:1.3"><b>Takes</b> each element's corner edges <i>e</i>₁, <i>e</i>₂, <i>e</i>₃ and volume <i>V</i> · <b>Gives</b> one score per metric</p>
+<div style="display:grid;grid-template-columns:repeat(2, 1fr);gap:6px;align-items:center">
+<img src="/_blob/e309bc11b751f7e7a96eb0e225bddf19" alt="Knupp shape q" style="width:325px;height:64px;object-fit:contain">
+<img src="/_blob/bf99bcddcfc1df61e6ab8b0fd3b08922" alt="scaled Jacobian" style="width:255px;height:61px;object-fit:contain">
+<img src="/_blob/158ab0851c8bbbd213fb3ba3c31d3ddf" alt="radius ratio rho" style="width:262px;height:55px;object-fit:contain">
+<img src="/_blob/0be0c0a5f090645202539db5ef2c31d7" alt="equiangular skew S" style="width:350px;height:65px;object-fit:contain">
+</div>
+<img src="/_blob/9eb89d7ee4f1ebe3a4fc4b156de06477" alt="symmetric Hausdorff distance" style="width:694px;height:43px;object-fit:contain">
+<p style="font-size:24px;line-height:1.3"><b>Implies</b> a regular tet scores <i>q</i> = <i>SJ</i> = <i>ρ</i> = 1 and <i>S</i> = 0; <i>SJ</i> ≤ 0 is an inverted element (FAIL); a dihedral angle under 10° is a sliver; the mesh passes when <i>d</i>H &lt; 1 % of the box diagonal</p>
+</div>
+<aside>Weld ties: the code adds K_top,top += k_t, K_top,bi -= k_t w_i, K_bi,bj += k_t w_i w_j for every tie, with k_t = tieAlpha · E_z · A_tie / t. The derivation shows where those three updates come from: Hooke's law gives the slab's own axial stiffness, the tie is defined as alpha times that, the series rule shows why alpha = 100 only adds about 1 % stretch, and the Hessian of the tie energy gives the matrix entries. Mesh quality also checks the 95th-percentile normal deviation (< 15°).</aside>
+</section>

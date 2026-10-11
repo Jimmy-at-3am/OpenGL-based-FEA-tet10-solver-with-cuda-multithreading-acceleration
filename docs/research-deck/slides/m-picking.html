@@ -1,0 +1,67 @@
+<section id="m-picking" data-transition="fade" style="background:#FFFFFF;color:#1B1B1F;font-family:'Inter', Arial, sans-serif;padding:200px 64px 40px 64px;display:flex;flex-direction:column;gap:24px">
+<div style="position:absolute;left:40px;top:14px;width:1840px;height:40px;display:flex;flex-direction:row;justify-content:center;align-items:center;gap:22px">
+<p style="font-size:24px;font-weight:700;color:#0078D4;white-space:nowrap">2 · Modules &amp; methods</p>
+<p style="font-size:24px;color:#C8CDD3">|</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Overview</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Input</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Toolpaths</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Meshing</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Data model</p>
+<p style="font-size:24px;font-weight:700;color:#E3008C;border-bottom:3px solid #E3008C;white-space:nowrap">Picking</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Load transfer</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Solver</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Parallel</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Results</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Timeline</p>
+</div>
+<img src="/_blob/61feb4ed29835b5d5f563f3adcc6ff22" alt="" data-build-in="left" style="position:absolute;left:0px;top:62px;width:1920px;height:104px">
+<h2 style="position:absolute;left:0px;top:62px;width:1920px;height:104px;font-size:54px;line-height:104px;font-weight:600;color:#FFFFFF;text-align:center;text-shadow:0px 2px 6px rgba(0,30,60,0.45)">Picking loads on the clean CAD model</h2>
+<div style="position:absolute;left:903px;top:212px;width:2px;height:820px;background:#D5DAE0"></div>
+<div style="position:absolute;left:64px;top:198px;width:812px;display:flex;flex-direction:column;gap:8px">
+<p style="font-size:26px;font-weight:600;color:#0078D4;font-family:'JetBrains Mono', 'Courier New', monospace">groupIntoCadFaces(mesh)</p>
+<p style="font-size:24px;line-height:1.3"><b>Job</b>  split the clean CAD triangles into the faces a person expects, by fixed rules: same result every time</p>
+<p style="font-size:24px;line-height:1.3"><b>1</b>  weld vertices that share a position</p>
+<p style="font-size:24px;line-height:1.3"><b>2</b>  a <b>sharp edge</b> bends more than 30° (30.01° with rounding slack) and always separates faces</p>
+<img src="/_blob/eab6a485d223742a4467fc9f0d492e0b" alt="angle between n_a and n_b over 30 degrees means a sharp edge" style="width:614px;height:30px;object-fit:contain">
+<p style="font-size:24px;line-height:1.3"><b>3</b>  <b>flat face</b>: corners lie within 10⁻⁴ × part diagonal of one plane; area-weighted normals within 1°</p>
+<img src="/_blob/50576365df753ed68297d322b34bb8e1" alt="distance of every corner from the plane at most 1e-4 D, every normal within 1 degree of the mean" style="width:519px;height:34px;object-fit:contain">
+<p style="font-size:24px;line-height:1.3"><b>4</b>  <b>round face</b> (hole, shaft, fillet): normals at right angles to one axis within 1°, corners equally far from it; at least 5 distinct corners, since 3 or 4 points always fit a circle</p>
+<img src="/_blob/9d548e4f96a283ceccf8cce23fb692f4" alt="normal dot axis at most sin 1 degree, every corner at radius r from the axis, at least five corners" style="width:615px;height:30px;object-fit:contain">
+<p style="font-size:24px;line-height:1.3"><b>5</b>  designed flats inside a round region (a D-shaft's flat) become separate flat faces</p>
+<p style="font-size:24px;line-height:1.3"><b>6</b>  anything else becomes planar pieces or one <b>curved face</b>; regions are grouped with union-find <span style="color:#0078D4">[21]</span></p>
+<p style="font-size:24px;line-height:1.3;color:#0078D4"><b>Result</b>  box → 6 faces · round hole → 1 face · sphere → 1 face</p>
+<p style="font-size:24px;line-height:1.35;color:#4A4F57"><i>n</i> face normal · <i>x</i>c corner · <i>D</i> part diagonal · <i>a</i> round-face axis · <i>r</i> its radius</p>
+</div>
+<div style="position:absolute;left:936px;top:198px;width:920px;display:flex;flex-direction:column;gap:10px">
+<h3 style="font-size:30px;font-weight:700;color:#1B1B1F">What each picking tool runs</h3>
+<div style="display:flex;flex-direction:row;gap:16px;align-items:flex-start">
+<p style="width:170px;font-size:24px;font-weight:700;color:#FFFFFF;background:#E3008C;border-radius:10px;padding:4px 10px;text-align:center">Point</p>
+<p style="flex:1;font-size:24px;line-height:1.3"><span style="color:#0078D4">pickUnderCursor(ray)</span> → nearest point on the hit triangle <span style="color:#0078D4">[12]</span>; it turns yellow under the mouse</p>
+</div>
+<div style="display:flex;flex-direction:row;gap:16px;align-items:flex-start">
+<p style="width:170px;font-size:24px;font-weight:700;color:#FFFFFF;background:#E3008C;border-radius:10px;padding:4px 10px;text-align:center">Face</p>
+<p style="flex:1;font-size:24px;line-height:1.3"><span style="color:#0078D4">pickUnderCursor(ray)</span> → <span style="color:#0078D4">faceOfTriangle(t)</span>: the whole CAD face lights up; Shift+click adds or removes faces</p>
+</div>
+<div style="display:flex;flex-direction:row;gap:16px;align-items:flex-start">
+<p style="width:170px;font-size:24px;font-weight:700;color:#FFFFFF;background:#E3008C;border-radius:10px;padding:4px 10px;text-align:center">Create plane</p>
+<p style="flex:1;font-size:24px;line-height:1.3"><span style="color:#0078D4">placePlaneAt(hit)</span>: on a flat face the plane lies on the face; on a round or curved face it touches at the clicked point (<span style="color:#0078D4">nearestFaceTo(point, normal)</span>)</p>
+</div>
+<div style="display:flex;flex-direction:row;gap:16px;align-items:flex-start">
+<p style="width:170px;font-size:24px;font-weight:700;color:#FFFFFF;background:#E3008C;border-radius:10px;padding:4px 10px;text-align:center">Move in ℝ³</p>
+<div style="flex:1;display:flex;flex-direction:column;gap:4px">
+<p style="font-size:24px;line-height:1.3">plane handle: 3 arrows slide along X, Y, Z; 3 rings turn it; Ctrl snaps 1 mm and 15°</p>
+<img src="/_blob/9f2e5f7719c00e697909f3f99554f111" alt="plane through p with normal n; move p by s along axis k, turn n by R_k of theta; snapped steps of 1 mm and 15 degrees" style="width:718px;height:63px;object-fit:contain">
+</div>
+</div>
+<div style="display:flex;flex-direction:row;gap:16px;align-items:flex-start">
+<p style="width:170px;font-size:24px;font-weight:700;color:#FFFFFF;background:#E3008C;border-radius:10px;padding:4px 10px;text-align:center">Pieces</p>
+<p style="flex:1;font-size:24px;line-height:1.3"><span style="color:#0078D4">intersectPlane(plane)</span>: line (cuts a face) → force per length · area (lies on a face) → force per area · touch line (round face) → line load · touch point (curved face) → point load</p>
+</div>
+<div style="display:flex;flex-direction:column;gap:6px;border-top:2px solid #0078D4;padding:10px 0px 0px 0px">
+<p style="font-size:24px;line-height:1.3"><b>Draw</b>  plane geometry builds the plane square, touch piece and hovered face; they render translucent yellow and blue</p>
+<p style="font-size:24px;line-height:1.3"><b>Load Setup panel</b>  “+” adds a condition; Choose where it acts arms picking; typing a number keeps hover alive; undo / redo; the receipt redraws every frame; a new mesh rebuilds its data on the worker thread</p>
+<p style="font-size:24px;line-height:1.3;color:#4A4F57"><b>Older picker</b>  worked on the mesh surface (flat face, hole wall, single facet); still compiled and unit-tested</p>
+</div>
+</div>
+<aside>Real names: PlainModel with build(mesh), pick(ray), faceOf(triangle), nearestFace(point, normal), placePlane(hit), meet(plane); PlaneHandle (kMoveSnapMM = 1 mm, kTurnSnapDeg = 15°), PlaneGeometry, PlaneRender; LoadSetupUI with buildMeshState(); LoadSetupSelection is the older picker. Picking always happens on the plain CAD model; the next slide moves each pick onto the printed mesh.</aside>
+</section>

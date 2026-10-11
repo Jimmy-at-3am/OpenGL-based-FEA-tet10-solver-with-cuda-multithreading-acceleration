@@ -1,0 +1,74 @@
+<section id="m-input" data-transition="fade" style="background:#FFFFFF;color:#1B1B1F;font-family:'Inter', Arial, sans-serif;padding:200px 64px 40px 64px;display:flex;flex-direction:column;gap:24px">
+<div style="position:absolute;left:40px;top:14px;width:1840px;height:40px;display:flex;flex-direction:row;justify-content:center;align-items:center;gap:22px">
+<p style="font-size:24px;font-weight:700;color:#0078D4;white-space:nowrap">2 · Modules &amp; methods</p>
+<p style="font-size:24px;color:#C8CDD3">|</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Overview</p>
+<p style="font-size:24px;font-weight:700;color:#E3008C;border-bottom:3px solid #E3008C;white-space:nowrap">Input</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Toolpaths</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Meshing</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Data model</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Picking</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Load transfer</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Solver</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Parallel</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Results</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Timeline</p>
+</div>
+<img src="/_blob/61feb4ed29835b5d5f563f3adcc6ff22" alt="" data-build-in="left" style="position:absolute;left:0px;top:62px;width:1920px;height:104px">
+<h2 style="position:absolute;left:0px;top:62px;width:1920px;height:104px;font-size:54px;line-height:104px;font-weight:600;color:#FFFFFF;text-align:center;text-shadow:0px 2px 6px rgba(0,30,60,0.45)">Geometry input and the Bambu Studio bridge</h2>
+<div style="position:absolute;left:959px;top:212px;width:2px;height:820px;background:#D5DAE0"></div>
+<div style="position:absolute;left:64px;top:200px;width:868px;display:flex;flex-direction:column;gap:14px">
+<h3 style="font-size:32px;font-weight:700;color:#1B1B1F">Geometry input</h3>
+<div style="display:flex;flex-direction:column;gap:2px">
+<p style="font-size:26px;font-weight:600;color:#0078D4;font-family:'JetBrains Mono', 'Courier New', monospace">loadPartAsTriangles(path)</p>
+<p style="font-size:24px;line-height:1.3"><b>Job</b>  read one part file into a triangle soup, in the file's own units</p>
+<p style="font-size:24px;line-height:1.3"><b>In → Out</b>  .stl / .3mf / .step → positions + indices</p>
+<p style="font-size:24px;line-height:1.3"><b>How</b>  reader picked by file extension · STL: binary or ASCII, duplicate vertices welded · 3MF: build items + components; normal parts kept, modifiers ignored, negative parts rejected · STEP: OpenCASCADE, exact B-rep kept for nearest-point queries <span style="color:#0078D4">[1, 2, 3]</span></p>
+</div>
+<div style="display:flex;flex-direction:column;gap:2px">
+<p style="font-size:26px;font-weight:600;color:#0078D4;font-family:'JetBrains Mono', 'Courier New', monospace">openPackageArchive(path)</p>
+<p style="font-size:24px;line-height:1.3"><b>Job</b>  open .3mf zip packages, Unicode paths included · <b>Out</b>  miniz reader</p>
+</div>
+<div style="display:flex;flex-direction:column;gap:2px">
+<p style="font-size:26px;font-weight:600;color:#0078D4;font-family:'JetBrains Mono', 'Courier New', monospace">normalizeRawGeometry(mesh)</p>
+<p style="font-size:24px;line-height:1.3"><b>Job</b>  clean every loaded mesh before use</p>
+<p style="font-size:24px;line-height:1.3"><b>How</b>  weld vertices → optional decimation (meshoptimizer) <span style="color:#0078D4">[4]</span> → recompute normals → keep the real size in mm → centre and scale into the 3-unit render space</p>
+</div>
+<div style="display:flex;flex-direction:column;gap:2px">
+<p style="font-size:26px;font-weight:600;color:#0078D4;font-family:'JetBrains Mono', 'Courier New', monospace">writeSlicerInputStl(triangles)</p>
+<p style="font-size:24px;line-height:1.3"><b>In → Out</b>  triangles → temporary binary STL in mm, for Bambu Studio</p>
+</div>
+<div style="display:flex;flex-direction:column;gap:2px">
+<p style="font-size:26px;font-weight:600;color:#0078D4;font-family:'JetBrains Mono', 'Courier New', monospace">rebuildSphereAsIcosphere(mesh)</p>
+<p style="font-size:24px;line-height:1.3"><b>Job</b>  detect badly tessellated spheres and rebuild them (legacy path)</p>
+</div>
+</div>
+<div style="position:absolute;left:988px;top:200px;width:868px;display:flex;flex-direction:column;gap:10px">
+<h3 style="font-size:32px;font-weight:700;color:#1B1B1F">Bambu Studio bridge</h3>
+<div style="display:flex;flex-direction:column;gap:2px">
+<p style="font-size:26px;font-weight:600;color:#E3008C;font-family:'JetBrains Mono', 'Courier New', monospace">locateSlicer()</p>
+<p style="font-size:24px;line-height:1.3"><b>How</b>  saved bambuStudioExe in %LOCALAPPDATA%\PolyFEA\settings.json → Windows installed-programs list → Locate Bambu Studio… (remembered)</p>
+</div>
+<div style="display:flex;flex-direction:column;gap:2px">
+<p style="font-size:26px;font-weight:600;color:#E3008C;font-family:'JetBrains Mono', 'Courier New', monospace">runHeadlessSlice(request, cancelFlag)</p>
+<p style="font-size:24px;line-height:1.3"><b>In → Out</b>  project or temp STL → sliced package .3mf + result.json</p>
+<p style="font-size:24px;line-height:1.3"><b>How</b>  bambu-studio.exe --slice 1 --export-3mf; STL adds --load-settings, --load-filaments, --arrange 1, --orient 0 · read return_code / error_string · Cancel ends the process</p>
+<p style="font-size:24px;line-height:1.3"><b>Why</b>  Bambu's own code is AGPL and needs Boost, TBB, CGAL and OpenVDB; the installed program slices exactly as the printer will <span style="color:#0078D4">[5]</span></p>
+</div>
+<div style="display:flex;flex-direction:column;gap:2px">
+<p style="font-size:26px;font-weight:600;color:#E3008C;font-family:'JetBrains Mono', 'Courier New', monospace">listPrinterPresets(printer)</p>
+<p style="font-size:24px;line-height:1.3"><b>How</b>  read Bambu's BBL profiles → keep "instantiation": "true" → filter process and filament by printer</p>
+</div>
+<div style="display:flex;flex-direction:column;gap:2px">
+<p style="font-size:26px;font-weight:600;color:#E3008C;font-family:'JetBrains Mono', 'Courier New', monospace">unpackSlicedPackage(path)</p>
+<p style="font-size:24px;line-height:1.3"><b>In → Out</b>  .3mf → plain model, placement, settings, G-code, print summary</p>
+<p style="font-size:24px;line-height:1.3"><b>How</b>  plain-language error for several parts, wrong plate, several filaments, negative parts</p>
+</div>
+<div style="display:flex;flex-direction:column;gap:4px">
+<p style="font-size:26px;font-weight:600;color:#E3008C;font-family:'JetBrains Mono', 'Courier New', monospace">mapCoordinateFrames(x)</p>
+<p style="font-size:24px;line-height:1.3"><b>Job</b>  the only converter between frames; every number comes from the package</p>
+<img src="/_blob/6123bfa3b2a07c553084d386581a1c07" alt="Frame chain: part to plate by the build transform, plate to G-code minus extruder offset, G-code to FE millimetres minus the plain-model centre, FE millimetres to model space divided by s" style="width:829px;height:75px;object-fit:contain">
+</div>
+</div>
+<aside>Method names are descriptive, not the identifiers in the source. Real modules: IGeometryLoader, GeometryLoaderDispatch, STLLoader, ThreeMFLoader, StepLoader + BRepHandle, ZipReader, StlWriter, GeometryUtils, FEAModel::processRawGeometry; BambuSlicer (locate, slice), BambuPresets, SlicedPackage::load, PartPlacement. s = modelToMM, the largest bounding-box side divided by 3. The solver converts back to metres and works in SI units on the real part size.</aside>
+</section>

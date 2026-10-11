@@ -1,0 +1,37 @@
+<section id="steps34" data-transition="fade" style="background:#FFFFFF;color:#1B1B1F;font-family:'Inter', Arial, sans-serif;padding:200px 64px 40px 64px;display:flex;flex-direction:column;gap:24px">
+<div style="position:absolute;left:64px;top:14px;width:1792px;height:40px;display:flex;flex-direction:row;justify-content:center;align-items:center;gap:48px">
+<p style="font-size:24px;font-weight:700;color:#0078D4;border-bottom:3px solid #0078D4;white-space:nowrap">1 · User walkthrough</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">2 · Modules, methods &amp; algorithms</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">3 · Testing &amp; validation</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Appendix &amp; citations</p>
+</div>
+<img src="/_blob/61feb4ed29835b5d5f563f3adcc6ff22" alt="" data-build-in="left" style="position:absolute;left:0px;top:62px;width:1920px;height:104px">
+<h2 style="position:absolute;left:0px;top:62px;width:1920px;height:104px;font-size:54px;line-height:104px;font-weight:600;color:#FFFFFF;text-align:center;text-shadow:0px 2px 6px rgba(0,30,60,0.45)">Set up the load, then run</h2>
+<div style="position:absolute;left:959px;top:212px;width:2px;height:820px;background:#D5DAE0"></div>
+<div style="position:absolute;left:64px;top:204px;width:864px;display:flex;flex-direction:column;gap:12px">
+<h3 style="font-size:32px;font-weight:700;color:#0078D4">Step 3 · Loads and supports <span style="color:#8A8F98">(Solve tab)</span></h3>
+<ol style="font-size:24px;line-height:1.32;color:#1B1B1F">
+<li>Add conditions: + Push / pull, + Bend, + Twist, + Hold / support, + Pressure, + Gravity. All of them add up to one load case.</li>
+<li>Pick Point or Surface (Face or Plane), click Choose where it acts, click the yellow highlight; Shift+click adds faces; Done picking.</li>
+<li>A plane goes on a clicked face; drag its 3 arrows and 3 rings (Ctrl snaps 1 mm, 15°) and keep only the pieces you need.</li>
+<li>Type the size in mm, N or N mm, then read the receipt: total force, moment, held directions, warnings.</li>
+</ol>
+</div>
+<div style="position:absolute;left:64px;top:552px;width:864px;height:480px;background:#F3F6F9;border:2px dashed #AEB8C4;border-radius:12px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px">
+<p style="font-size:28px;font-weight:600;color:#4A4F57">GIF placeholder</p>
+<p style="font-size:24px;color:#8A8F98">Add a support and a load → pick faces → read the receipt</p>
+</div>
+<div style="position:absolute;left:992px;top:204px;width:864px;display:flex;flex-direction:column;gap:12px">
+<h3 style="font-size:32px;font-weight:700;color:#0078D4">Step 4 · Run the simulation</h3>
+<ol style="font-size:24px;line-height:1.32;color:#1B1B1F">
+<li>Settings: Multithreading uses every CPU core, GPU acceleration (CUDA) uses the NVIDIA GPU, FDM anisotropy keeps separate in-layer and between-layer strengths.</li>
+<li>Run Stress + deformation first, Estimate breaking load for a safe load, or Explore fracture at these loads to see where it breaks.</li>
+<li>While it runs, the progress panel shows stage, device and threads. Pause saves a checkpoint; Hard Stop ends the run at once.</li>
+</ol>
+</div>
+<div style="position:absolute;left:992px;top:552px;width:864px;height:480px;background:#F3F6F9;border:2px dashed #AEB8C4;border-radius:12px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px">
+<p style="font-size:28px;font-weight:600;color:#4A4F57">GIF placeholder</p>
+<p style="font-size:24px;color:#8A8F98">Choose a run → progress panel → result</p>
+</div>
+<aside>Steps 3 and 4 of the user manual, reworded. Without supports the part would fly away, so PolyFEA will not run until the supports hold it still. The fracture run is an experiment: its result depends on mesh size.</aside>
+</section>

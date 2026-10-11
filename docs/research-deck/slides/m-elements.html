@@ -1,0 +1,68 @@
+<section id="m-elements" data-transition="fade" style="background:#FFFFFF;color:#1B1B1F;font-family:'Inter', Arial, sans-serif;padding:200px 64px 40px 64px;display:flex;flex-direction:column;gap:24px">
+<div style="position:absolute;left:40px;top:14px;width:1840px;height:40px;display:flex;flex-direction:row;justify-content:center;align-items:center;gap:22px">
+<p style="font-size:24px;font-weight:700;color:#0078D4;white-space:nowrap">2 · Modules &amp; methods</p>
+<p style="font-size:24px;color:#C8CDD3">|</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Overview</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Input</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Toolpaths</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Meshing</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Data model</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Picking</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Load transfer</p>
+<p style="font-size:24px;font-weight:700;color:#E3008C;border-bottom:3px solid #E3008C;white-space:nowrap">Solver</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Parallel</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Results</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Timeline</p>
+</div>
+<img src="/_blob/61feb4ed29835b5d5f563f3adcc6ff22" alt="" data-build-in="left" style="position:absolute;left:0px;top:62px;width:1920px;height:104px">
+<h2 style="position:absolute;left:0px;top:62px;width:1920px;height:104px;font-size:54px;line-height:104px;font-weight:600;color:#FFFFFF;text-align:center;text-shadow:0px 2px 6px rgba(0,30,60,0.45)">Two elements: Tet4 and Tet10</h2>
+<div style="position:absolute;left:959px;top:212px;width:2px;height:820px;background:#D5DAE0"></div>
+<h3 style="position:absolute;left:64px;top:198px;width:868px;font-size:32px;font-weight:700;color:#0078D4">Tet4 · linear tetrahedron</h3>
+<img src="/_blob/01bccf7933aaf11c068c1d533ca30a76" alt="Tetrahedron with four blue corner nodes; the back corner is joined by dashed hidden edges; one flat blue face colour means constant strain" style="position:absolute;left:64px;top:260px;width:500px;height:389px">
+<p style="position:absolute;left:72px;top:600px;width:40px;font-size:26px;font-weight:700;color:#0078D4">1</p>
+<p style="position:absolute;left:494px;top:604px;width:40px;font-size:26px;font-weight:700;color:#0078D4">2</p>
+<p style="position:absolute;left:344px;top:503px;width:40px;font-size:26px;font-weight:700;color:#0078D4">3</p>
+<p style="position:absolute;left:296px;top:270px;width:40px;font-size:26px;font-weight:700;color:#0078D4">4</p>
+<div style="position:absolute;left:592px;top:282px;width:340px;display:flex;flex-direction:column;gap:10px">
+<p style="font-size:24px;line-height:1.3"><b>4</b> corner nodes, <b>12</b> unknowns</p>
+<p style="font-size:24px;line-height:1.3">linear shape functions → <b>constant strain</b> in each element</p>
+<p style="font-size:24px;line-height:1.3">fast, but too stiff in bending</p>
+</div>
+<div style="position:absolute;left:64px;top:668px;width:868px;display:flex;flex-direction:column;gap:6px">
+<img src="/_blob/66de827a679fb7c4abfa7127d24e7f5e" alt="P is the 4 by 4 matrix of ones and the corner coordinates; C is its inverse" style="width:403px;height:127px;object-fit:contain">
+<img src="/_blob/add1750b86162080e073c661aa114121" alt="N_i equals L_i; beta, gamma, delta are the shape-function slopes read from C" style="width:737px;height:70px;object-fit:contain">
+<img src="/_blob/976ca0548a34ee990ae06e64d12ad083" alt="V_e equals absolute determinant of P over 6; strain equals B u_e with B 6 by 12; K_e equals V_e B transpose D B" style="width:779px;height:66px;object-fit:contain">
+<p style="font-size:24px;line-height:1.3;color:#4A4F57"><i>L</i>ᵢ barycentric coordinates · <i>V</i>e volume · <i>B</i> strain–displacement · <i>D</i> material matrix <span style="color:#0078D4">[16]</span></p>
+</div>
+<h3 style="position:absolute;left:992px;top:198px;width:864px;font-size:32px;font-weight:700;color:#E3008C">Tet10 · quadratic tetrahedron</h3>
+<img src="/_blob/89825a1d67ffb4d4f7f1a2fea1223be1" alt="Same tetrahedron with six magenta mid-edge nodes, four orange crosses for the integration points, and a blue-to-pink face gradient for linearly varying strain" style="position:absolute;left:992px;top:260px;width:500px;height:389px">
+<p style="position:absolute;left:1000px;top:600px;width:40px;font-size:26px;font-weight:700;color:#0078D4">1</p>
+<p style="position:absolute;left:1422px;top:604px;width:40px;font-size:26px;font-weight:700;color:#0078D4">2</p>
+<p style="position:absolute;left:1272px;top:503px;width:40px;font-size:26px;font-weight:700;color:#0078D4">3</p>
+<p style="position:absolute;left:1224px;top:270px;width:40px;font-size:26px;font-weight:700;color:#0078D4">4</p>
+<p style="position:absolute;left:1212px;top:612px;width:40px;font-size:24px;font-weight:700;color:#E3008C">5</p>
+<p style="position:absolute;left:1366px;top:520px;width:40px;font-size:24px;font-weight:700;color:#E3008C">6</p>
+<p style="position:absolute;left:1156px;top:552px;width:40px;font-size:24px;font-weight:700;color:#E3008C">7</p>
+<p style="position:absolute;left:1092px;top:426px;width:40px;font-size:24px;font-weight:700;color:#E3008C">8</p>
+<p style="position:absolute;left:1322px;top:430px;width:40px;font-size:24px;font-weight:700;color:#E3008C">9</p>
+<p style="position:absolute;left:1258px;top:366px;width:46px;font-size:24px;font-weight:700;color:#E3008C">10</p>
+<div style="position:absolute;left:1520px;top:282px;width:336px;display:flex;flex-direction:column;gap:10px">
+<p style="font-size:24px;line-height:1.3"><b>4</b> corner + <b>6</b> mid-edge nodes, <b>30</b> unknowns</p>
+<p style="font-size:24px;line-height:1.3">quadratic shape functions → <b>linearly varying strain</b></p>
+<p style="font-size:24px;line-height:1.3">accurate in bending; <span style="color:#C25E00"><b>×</b></span> = the 4 integration points</p>
+</div>
+<div style="position:absolute;left:992px;top:668px;width:864px;display:flex;flex-direction:column;gap:6px">
+<div style="display:flex;flex-direction:row;gap:36px;align-items:center">
+<img src="/_blob/419e6dd6251286d89ac5357e5f9aea43" alt="corner shape function L_i times 2 L_i minus 1; mid-edge shape function 4 L_i L_j" style="width:490px;height:32px;object-fit:contain">
+<img src="/_blob/f1e7b9dee0fdbabb5b499688b493044e" alt="mid-edge node at the average of the two corners" style="width:221px;height:37px;object-fit:contain">
+</div>
+<img src="/_blob/c3df9a6331b124181b018435a2620f51" alt="Hammer rule: a equals 5 plus 3 root 5 over 20, b equals 5 minus root 5 over 20, weights one twenty-fourth" style="width:492px;height:67px;object-fit:contain">
+<img src="/_blob/843971cb24dd0a91560035337fd6337a" alt="K_e equals the sum over four points of w_g det J_g B_g transpose D B_g, with B_g 6 by 30" style="width:568px;height:98px;object-fit:contain">
+<p style="font-size:24px;line-height:1.3;color:#4A4F57">exact for degree-2 integrands, which is what Tet10 needs <span style="color:#0078D4">[17, 23]</span>; <i>J</i>g Jacobian at point <i>g</i></p>
+<div style="display:flex;flex-direction:row;gap:16px;align-items:center;border-top:1px solid #D5DAE0;padding:6px 0px 0px 0px">
+<p style="font-size:24px;line-height:1.3"><b>Auto-switch</b>  a surface vertex is curved past 15°:</p>
+<img src="/_blob/9f80938f1cc5526871a1b1fc9f1d83a9" alt="curved fraction over 0.25 gives Tet10" style="width:339px;height:51px;object-fit:contain">
+</div>
+</div>
+<aside>Tet4 (TetrahedralElement) puts the four node positions into P; C = P inverse gives the constant shape-function slopes. Tet10 (Tet10Element) uses barycentric shape functions and the 4-point Hammer rule with points built from a and b. solveAdaptive switches the whole mesh to Tet10 when more than 25 % of surface vertices are curved (curvatureAngleThreshold = 15°, highCurvatureFracLimit = 0.25). Illustrations are schematics drawn for this deck.</aside>
+</section>

@@ -1,0 +1,87 @@
+<section id="m-solver" data-transition="fade" style="background:#FFFFFF;color:#1B1B1F;font-family:'Inter', Arial, sans-serif;padding:200px 64px 40px 64px;display:flex;flex-direction:column;gap:24px">
+<div style="position:absolute;left:40px;top:14px;width:1840px;height:40px;display:flex;flex-direction:row;justify-content:center;align-items:center;gap:22px">
+<p style="font-size:24px;font-weight:700;color:#0078D4;white-space:nowrap">2 · Modules &amp; methods</p>
+<p style="font-size:24px;color:#C8CDD3">|</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Overview</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Input</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Toolpaths</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Meshing</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Data model</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Picking</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Load transfer</p>
+<p style="font-size:24px;font-weight:700;color:#E3008C;border-bottom:3px solid #E3008C;white-space:nowrap">Solver</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Parallel</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Results</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Timeline</p>
+</div>
+<img src="/_blob/61feb4ed29835b5d5f563f3adcc6ff22" alt="" data-build-in="left" style="position:absolute;left:0px;top:62px;width:1920px;height:104px">
+<h2 style="position:absolute;left:0px;top:62px;width:1920px;height:104px;font-size:54px;line-height:104px;font-weight:600;color:#FFFFFF;text-align:center;text-shadow:0px 2px 6px rgba(0,30,60,0.45)">From the sliced mesh to the FEA solver</h2>
+<div style="position:absolute;left:959px;top:212px;width:2px;height:820px;background:#D5DAE0"></div>
+<div style="position:absolute;left:64px;top:198px;width:868px;display:flex;flex-direction:column;gap:8px">
+<h3 style="font-size:30px;font-weight:700;color:#1B1B1F">How the printed mesh becomes <i>Ku</i> = <i>F</i></h3>
+<p style="font-size:24px;line-height:1.3"><b>1 · Real size</b>  geometry scaled to metres; the solve runs in SI units on the true part size</p>
+<p style="font-size:24px;line-height:1.3"><b>2 · Elements</b>  every slab tetrahedron becomes a Tet4 block (Tet10 after mid-edge nodes), each element remembers its slab; the weak material axis is the build axis <i>z</i></p>
+<p style="font-size:24px;line-height:1.3"><b>3 · Assembly</b>  <i>A</i>e maps element unknowns to global ones (node × 3 + direction); each element writes its own block of triplets, then shared nodes are summed <span style="color:#0078D4">[16]</span></p>
+<img src="/_blob/126fcc30302f08a0c84976eff8019142" alt="K equals the sum over elements of A_e transpose K_e A_e" style="width:236px;height:68px;object-fit:contain">
+<p style="font-size:24px;line-height:1.3"><b>4 · Layers and supports</b>  weld ties add their springs between slabs; supports add the penalty α to the diagonal</p>
+<p style="font-size:24px;line-height:1.3"><b>5 · Recover</b>  element stress, then a printed-part failure ratio with three checks <span style="color:#0078D4">[31, 32]</span></p>
+<div style="display:flex;flex-direction:row;gap:30px;align-items:center">
+<img src="/_blob/cd7aa00207e3f2c1dc70fa1f336752a1" alt="sigma equals D B u_e" style="width:151px;height:30px;object-fit:contain">
+<img src="/_blob/e0c4e711838af4316a088d86151587a0" alt="in-plane stress from sigma_xx, sigma_yy and tau_xy" style="width:482px;height:58px;object-fit:contain">
+</div>
+<img src="/_blob/0b53f2840a3b6d128f800dc336ece5fc" alt="failure ratio r is the largest of interlayer tension over 22.8 MPa, interlayer shear over 18 MPa, in-plane stress over 50 MPa" style="width:607px;height:123px;object-fit:contain">
+<p style="font-size:24px;line-height:1.3;color:#4A4F57">PLA limits: layers pulled apart 22.8 MPa · layers sliding 18 MPa · inside a layer 50 MPa <span style="color:#0078D4">[33]</span>. <i>r</i> &gt; 1 fails the element; the largest term names the mode. No compression or buckling check</p>
+</div>
+<div style="position:absolute;left:992px;top:198px;width:864px;display:flex;flex-direction:column;gap:8px">
+<h3 style="font-size:30px;font-weight:700;color:#1B1B1F">Five analyses</h3>
+<div style="display:grid;grid-template-columns:380px 1fr;gap:6px 18px;align-items:start">
+<p style="font-size:24px;font-weight:600;color:#0078D4;font-family:'JetBrains Mono', 'Courier New', monospace">solveOneLinear()</p>
+<p style="font-size:24px;line-height:1.3">one linear solve <i>Ku</i> = <i>F</i></p>
+<p style="font-size:24px;font-weight:600;color:#0078D4;font-family:'JetBrains Mono', 'Courier New', monospace">solveLargeDeformation()</p>
+<p style="font-size:24px;line-height:1.3">load steps + Newton–Raphson</p>
+<p style="font-size:24px;font-weight:600;color:#0078D4;font-family:'JetBrains Mono', 'Courier New', monospace">solveWithAutoElement()</p>
+<p style="font-size:24px;line-height:1.3">Tet4 or Tet10 from surface curvature, then solve</p>
+<p style="font-size:24px;font-weight:600;color:#0078D4;font-family:'JetBrains Mono', 'Courier New', monospace">runDeletionFracture()</p>
+<p style="font-size:24px;line-height:1.3">repeated solves, deleting overloaded elements <span style="color:#0078D4">[34]</span></p>
+<p style="font-size:24px;font-weight:600;color:#0078D4;font-family:'JetBrains Mono', 'Courier New', monospace">estimateFirstDamage()</p>
+<p style="font-size:24px;line-height:1.3">linear, so doubling the load doubles every stress</p>
+</div>
+<img src="/_blob/e05a26e6b85f6f0e85759954f98ee549" alt="multiplier equals one over the largest element ratio" style="width:258px;height:63px;object-fit:contain">
+<h3 style="font-size:28px;font-weight:700;color:#E3008C;padding:6px 0px 0px 0px">Fracture loop</h3>
+</div>
+<div style="position:absolute;left:992px;top:660px;width:190px;height:84px;background:#F3F8FD;border:2px solid #0078D4;border-radius:12px;display:flex;flex-direction:column;justify-content:center;padding:6px">
+<p style="font-size:24px;line-height:1.15;text-align:center">Assemble <i>K</i>, alive only</p>
+</div>
+<div style="position:absolute;left:1214px;top:660px;width:190px;height:84px;background:#F3F8FD;border:2px solid #0078D4;border-radius:12px;display:flex;flex-direction:column;justify-content:center;padding:6px">
+<p style="font-size:24px;line-height:1.15;text-align:center">Solve, warm start</p>
+</div>
+<div style="position:absolute;left:1436px;top:660px;width:190px;height:84px;background:#F3F8FD;border:2px solid #0078D4;border-radius:12px;display:flex;flex-direction:column;justify-content:center;padding:6px">
+<p style="font-size:24px;line-height:1.15;text-align:center">Stress and ratio <i>r</i></p>
+</div>
+<div style="position:absolute;left:1658px;top:660px;width:198px;height:84px;background:#FCE6F3;border:2px solid #E3008C;border-radius:12px;display:flex;flex-direction:column;justify-content:center;padding:6px">
+<p style="font-size:24px;line-height:1.15;text-align:center">Any <i>r</i> &gt; 1?</p>
+</div>
+<div style="position:absolute;left:1658px;top:820px;width:198px;height:84px;background:#F3F8FD;border:2px solid #0078D4;border-radius:12px;display:flex;flex-direction:column;justify-content:center;padding:6px">
+<p style="font-size:24px;line-height:1.15;text-align:center">Delete, record step + mode</p>
+</div>
+<div style="position:absolute;left:1380px;top:820px;width:220px;height:84px;background:#FCE6F3;border:2px solid #E3008C;border-radius:12px;display:flex;flex-direction:column;justify-content:center;padding:6px">
+<p style="font-size:24px;line-height:1.15;text-align:center">Part broken apart?</p>
+</div>
+<div style="position:absolute;left:992px;top:820px;width:250px;height:84px;background:#FFFFFF;border:2px solid #1B1B1F;border-radius:12px;display:flex;flex-direction:column;justify-content:center;padding:6px">
+<p style="font-size:24px;line-height:1.15;text-align:center">Stop, report why</p>
+</div>
+<x-connector x1="1182" y1="702" x2="1214" y2="702" style="color:#4A4F57;border-width:3px"></x-connector>
+<x-connector x1="1404" y1="702" x2="1436" y2="702" style="color:#4A4F57;border-width:3px"></x-connector>
+<x-connector x1="1626" y1="702" x2="1658" y2="702" style="color:#4A4F57;border-width:3px"></x-connector>
+<x-connector x1="1757" y1="744" x2="1757" y2="820" style="color:#4A4F57;border-width:3px"></x-connector>
+<x-connector x1="1658" y1="862" x2="1600" y2="862" style="color:#4A4F57;border-width:3px"></x-connector>
+<x-connector x1="1380" y1="862" x2="1242" y2="862" style="color:#4A4F57;border-width:3px"></x-connector>
+<x-connector x1="1490" y1="820" x2="1490" y2="782" head="none" style="color:#4A4F57;border-width:3px"></x-connector>
+<x-connector x1="1490" y1="782" x2="1087" y2="782" head="none" style="color:#4A4F57;border-width:3px"></x-connector>
+<x-connector x1="1087" y1="782" x2="1087" y2="744" style="color:#4A4F57;border-width:3px"></x-connector>
+<p style="position:absolute;left:1768px;top:762px;width:60px;font-size:24px;color:#E3008C;font-weight:600">yes</p>
+<p style="position:absolute;left:1500px;top:748px;width:60px;font-size:24px;color:#E3008C;font-weight:600">no</p>
+<p style="position:absolute;left:1268px;top:866px;width:60px;font-size:24px;color:#E3008C;font-weight:600">yes</p>
+<p style="position:absolute;left:992px;top:922px;width:864px;font-size:24px;line-height:1.3;color:#4A4F57">No new failures also stops the loop. Broken apart = load or support gone, or a loose piece carrying over 10 % of a load; smaller loose pieces are removed as debris.</p>
+<aside>Real names: FEASolver::solveLinearStatic, solveNonlinearStatic, solveAdaptive, solveBrittleFracture, estimateBreakingLoad. The breaking estimate is the load at which the first element reaches its strength, not the load at which the part falls apart. The fracture run is an experiment: element deletion depends on mesh size. Material cards are in the appendix.</aside>
+</section>

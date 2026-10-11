@@ -1,0 +1,52 @@
+<section id="m-transfer" data-transition="fade" style="background:#FFFFFF;color:#1B1B1F;font-family:'Inter', Arial, sans-serif;padding:200px 64px 40px 64px;display:flex;flex-direction:column;gap:24px">
+<div style="position:absolute;left:40px;top:14px;width:1840px;height:40px;display:flex;flex-direction:row;justify-content:center;align-items:center;gap:22px">
+<p style="font-size:24px;font-weight:700;color:#0078D4;white-space:nowrap">2 · Modules &amp; methods</p>
+<p style="font-size:24px;color:#C8CDD3">|</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Overview</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Input</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Toolpaths</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Meshing</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Data model</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Picking</p>
+<p style="font-size:24px;font-weight:700;color:#E3008C;border-bottom:3px solid #E3008C;white-space:nowrap">Load transfer</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Solver</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Parallel</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Results</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Timeline</p>
+</div>
+<img src="/_blob/61feb4ed29835b5d5f563f3adcc6ff22" alt="" data-build-in="left" style="position:absolute;left:0px;top:62px;width:1920px;height:104px">
+<h2 style="position:absolute;left:0px;top:62px;width:1920px;height:104px;font-size:54px;line-height:104px;font-weight:600;color:#FFFFFF;text-align:center;text-shadow:0px 2px 6px rgba(0,30,60,0.45)">Turning picks into solver input</h2>
+<div style="position:absolute;left:943px;top:212px;width:2px;height:820px;background:#D5DAE0"></div>
+<div style="position:absolute;left:64px;top:198px;width:852px;display:flex;flex-direction:column;gap:7px">
+<p style="font-size:26px;font-weight:600;color:#0078D4;font-family:'JetBrains Mono', 'Courier New', monospace">findOutsideSurface(slab)</p>
+<p style="font-size:24px;line-height:1.3"><b>Job</b>  find the surface triangles that touch outside air, so a load never lands inside an infill gap</p>
+<p style="font-size:24px;line-height:1.3"><b>How</b>  part's XY box + 1 mm, minus the slab's shape → empty regions <span style="color:#0078D4">[21]</span>; a region is outside air if it reaches the surroundings, or the air below or above the stack through truly empty layers; sealed infill gaps never count</p>
+<p style="font-size:26px;font-weight:600;color:#0078D4;font-family:'JetBrains Mono', 'Courier New', monospace;padding:6px 0px 0px 0px">transferPicksToMesh(selection)</p>
+<p style="font-size:24px;line-height:1.3"><b>Owner</b>  each outside triangle belongs to the nearest plain face facing within 90°; ties go to the lower face number</p>
+<img src="/_blob/0544ba6392cd4e90d0bb4af23e5c6868" alt="owner of tau is the face f, with normal within 90 degrees, at the smallest distance" style="width:454px;height:51px;object-fit:contain">
+<p style="font-size:24px;line-height:1.3"><span style="color:#E3008C"><b>Face load</b></span>  every outside triangle owned by the face</p>
+<p style="font-size:24px;line-height:1.3"><span style="color:#E3008C"><b>Line load</b></span>  the plane cuts the owned triangles; force is spread by segment length</p>
+<img src="/_blob/b1ccfd48ceaee94e89245195cc4df98b" alt="segment force equals F times its length over the total length; nodal forces sum to F exactly" style="width:463px;height:73px;object-fit:contain">
+<p style="font-size:24px;line-height:1.3"><span style="color:#E3008C"><b>Touch line</b></span>  step every half line width, take the nearest node, share by length</p>
+<p style="font-size:24px;line-height:1.3"><span style="color:#E3008C"><b>Point</b></span>  nearest point on the owned triangles <span style="color:#0078D4">[12]</span></p>
+<p style="font-size:24px;line-height:1.3"><span style="color:#E3008C"><b>Nothing to load</b></span>  a plain message: “This face is thinner than one printed line”</p>
+</div>
+<div style="position:absolute;left:976px;top:198px;width:880px;display:flex;flex-direction:column;gap:7px">
+<p style="font-size:26px;font-weight:600;color:#0078D4;font-family:'JetBrains Mono', 'Courier New', monospace">compileLoadCase(conditions, mesh)</p>
+<p style="font-size:24px;line-height:1.3"><b>In → Out</b>  load case + mesh → force vector, moment, fixed DOFs, warnings, error</p>
+<p style="font-size:24px;line-height:1.3"><span style="color:#E3008C"><b>Support</b></span>  fixes X, Y, Z on its nodes. <b>Support check</b>: per connected piece, the 6 rigid motions are tested against the fixed directions; one left free blocks the run</p>
+<img src="/_blob/f5cc0b0c2cf8b302ffd677f38870b2d6" alt="rigid motion r of x equals a plus theta cross x; blocked if a non-zero motion leaves every fixed direction untouched" style="width:661px;height:70px;object-fit:contain">
+<p style="font-size:24px;line-height:1.3"><b>After the solve</b>  the receipt adds reactions and the equilibrium residual</p>
+<p style="font-size:26px;font-weight:600;color:#0078D4;font-family:'JetBrains Mono', 'Courier New', monospace;padding:6px 0px 0px 0px">assessCapability(feature)</p>
+<p style="font-size:24px;line-height:1.3">one registry answers Exact, Approximate or Unsupported for every feature; the UI and the tests ask the same registry; unsupported features stay visible but cannot run</p>
+<div style="display:flex;flex-direction:column;gap:6px;background:#F3F8FD;border-radius:12px;padding:12px 16px">
+<p style="font-size:24px;line-height:1.3"><b>The physics problem</b>  balance at every point, then the weak form <span style="color:#0078D4">[16]</span></p>
+<img src="/_blob/0807d2ff4df6e3ab81367276e3cbc4af" alt="divergence of sigma plus b equals zero in the part, u equals u-bar on supports, sigma n equals t-bar on loaded faces" style="width:638px;height:32px;object-fit:contain">
+<img src="/_blob/a3170fb24207aea3283e2db6540535d4" alt="weak form: integral of epsilon of v : C : epsilon of u equals integral of v dot b plus boundary integral of v dot t-bar, giving K u equals F" style="width:671px;height:64px;object-fit:contain">
+<p style="font-size:24px;line-height:1.3"><b>Supports by penalty</b>  a very stiff spring; <i>K</i> stays symmetric positive-definite for CG <span style="color:#0078D4">[22]</span></p>
+<img src="/_blob/2cbbe3d712676fbc913df92a80006ca9" alt="K_ii gets alpha added, alpha equals 1e7 times the largest diagonal entry, reaction R_i equals alpha u_i" style="width:648px;height:33px;object-fit:contain">
+<p style="font-size:24px;line-height:1.3;color:#4A4F57"><i>σ</i> stress · <i>b</i> body force · <i>u</i>, <i>v</i> real and virtual displacement · <i>C</i> material tensor · <i>t̄</i> applied traction</p>
+</div>
+</div>
+<aside>Real names: OutsideSurface; LoadTransfer with owners(), planePieces(), transfer(); LoadSetup (load_setup::compile) returning Compiled {forceN, momentNm, fixedDofs, warnings, error}; LoadPhysics with assess() and assessPreset(). Feature kinds in the registry: PointForce, PatchResultant, Pressure, BearingLoad, RemoteResultant, BodyAcceleration, FixedConstraint, PrescribedDisplacement, Contact. The physics problem and the penalty supports are the maths behind these modules.</aside>
+</section>

@@ -1,0 +1,60 @@
+<section id="m-toolpaths" data-transition="fade" style="background:#FFFFFF;color:#1B1B1F;font-family:'Inter', Arial, sans-serif;padding:200px 64px 40px 64px;display:flex;flex-direction:column;gap:24px">
+<div style="position:absolute;left:40px;top:14px;width:1840px;height:40px;display:flex;flex-direction:row;justify-content:center;align-items:center;gap:22px">
+<p style="font-size:24px;font-weight:700;color:#0078D4;white-space:nowrap">2 · Modules &amp; methods</p>
+<p style="font-size:24px;color:#C8CDD3">|</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Overview</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Input</p>
+<p style="font-size:24px;font-weight:700;color:#E3008C;border-bottom:3px solid #E3008C;white-space:nowrap">Toolpaths</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Meshing</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Data model</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Picking</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Load transfer</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Solver</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Parallel</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Results</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Timeline</p>
+</div>
+<img src="/_blob/61feb4ed29835b5d5f563f3adcc6ff22" alt="" data-build-in="left" style="position:absolute;left:0px;top:62px;width:1920px;height:104px">
+<h2 style="position:absolute;left:0px;top:62px;width:1920px;height:104px;font-size:54px;line-height:104px;font-weight:600;color:#FFFFFF;text-align:center;text-shadow:0px 2px 6px rgba(0,30,60,0.45)">Toolpaths and slicing</h2>
+<div style="position:absolute;left:959px;top:212px;width:2px;height:820px;background:#D5DAE0"></div>
+<div style="position:absolute;left:64px;top:200px;width:868px;display:flex;flex-direction:column;gap:16px">
+<h3 style="font-size:32px;font-weight:700;color:#1B1B1F">From G-code to printed beads</h3>
+<div style="display:flex;flex-direction:column;gap:2px">
+<p style="font-size:26px;font-weight:600;color:#0078D4;font-family:'JetBrains Mono', 'Courier New', monospace">parseGcodeToBeads(gcode)</p>
+<p style="font-size:24px;line-height:1.3"><b>Job</b>  turn G-code into a list of printed bead segments</p>
+<p style="font-size:24px;line-height:1.3"><b>In → Out</b>  plate_1.gcode → segments with start, end, width, height, feature type, layer</p>
+<p style="font-size:24px;line-height:1.3"><b>How</b></p>
+<ul style="font-size:24px;line-height:1.3">
+<li>read G0 / G1 moves and G2 / G3 arcs; arcs are cut into short straight pieces <span style="color:#0078D4">[6]</span></li>
+<li>track absolute (M82) or relative (M83) extrusion: a move that adds plastic is a bead, anything else is travel</li>
+<li>comment tags set the context: ; CHANGE_LAYER, ; Z_HEIGHT, ; LAYER_HEIGHT, ; FEATURE (outer wall, inner wall, sparse infill, support…), ; LINE_WIDTH</li>
+</ul>
+<p style="font-size:24px;line-height:1.3"><b>Rule</b>  toolpaths are data, not a surface mesh; they become layer outlines first</p>
+</div>
+<div style="display:flex;flex-direction:column;gap:2px">
+<p style="font-size:26px;font-weight:600;color:#0078D4;font-family:'JetBrains Mono', 'Courier New', monospace">slicePlanarSections(surface)</p>
+<p style="font-size:24px;line-height:1.3"><b>Job</b>  the older path: cut a CAD triangle mesh or STEP B-rep with flat planes</p>
+<p style="font-size:24px;line-height:1.3"><b>In → Out</b>  surface mesh → closed 2D cross-sections, grouped into slabs</p>
+<p style="font-size:24px;line-height:1.3"><b>Use now</b>  headless regression scenarios and the legacy preset path</p>
+</div>
+</div>
+<div style="position:absolute;left:988px;top:200px;width:868px;display:flex;flex-direction:column;gap:16px">
+<h3 style="font-size:32px;font-weight:700;color:#1B1B1F">From beads to one layer shape</h3>
+<div style="display:flex;flex-direction:column;gap:2px">
+<p style="font-size:26px;font-weight:600;color:#0078D4;font-family:'JetBrains Mono', 'Courier New', monospace">buildLayerShape(segments)</p>
+<p style="font-size:24px;line-height:1.3"><b>Job</b>  turn the beads of each layer into one clean 2D shape, the “cookie”</p>
+<p style="font-size:24px;line-height:1.3"><b>In → Out</b>  segments → one polygon set per printed layer; outer loops counter-clockwise, holes clockwise</p>
+</div>
+<div style="display:flex;flex-direction:column;gap:6px">
+<p style="font-size:24px;line-height:1.3"><b>1 · Bead → rectangle</b>  one line width wide, ends extended by half a width</p>
+<img src="/_blob/a3f2f4abf3c3021b1f50bff3a1e99180" alt="R_b equals the rectangle from p0 minus w over 2 times t-hat to p1 plus w over 2 times t-hat, width w" style="width:413px;height:43px;object-fit:contain">
+<p style="font-size:24px;line-height:1.3"><b>2 · Merge</b>  union of all rectangles of the layer with Clipper2, NonZero fill rule <span style="color:#0078D4">[7, 8]</span></p>
+<img src="/_blob/252be7d0e4381e5830435002de2824ee" alt="S_l equals the union over beads b in layer l of R_b, NonZero fill" style="width:349px;height:67px;object-fit:contain">
+<p style="font-size:24px;line-height:1.3"><b>3 · Close gaps</b>  grow by <i>g</i>, then shrink by <i>g</i>, with <i>g</i> half the median line width: seals tiny gaps between touching beads <span style="color:#0078D4">[9]</span></p>
+<img src="/_blob/4197d119613177763ce4c117e89a8182" alt="S prime equals S dilated by g then eroded by g, g equals half the median line width" style="width:392px;height:39px;object-fit:contain">
+<p style="font-size:24px;line-height:1.3"><b>4 · Clean</b>  tiny “dust” loops are removed; the infill pattern stays as real holes in the shape</p>
+</div>
+<p style="font-size:24px;line-height:1.35;color:#4A4F57"><i>p</i>₀, <i>p</i>₁ bead ends · <i>t̂</i> unit direction · <i>w</i> line width · <i>w̃</i> median line width · grow / shrink = polygon offset outward / inward</p>
+</div>
+<aside>Real modules: GcodeToolpathLoader + ToolpathModel (parser), ToolpathSections (layer shapes), LayerSlicer + StepSlicer (older CAD-plane path). The cookie of each layer is the input to the slab mesher on the next slide.</aside>
+</section>

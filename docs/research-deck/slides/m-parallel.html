@@ -1,0 +1,47 @@
+<section id="m-parallel" data-transition="fade" style="background:#FFFFFF;color:#1B1B1F;font-family:'Inter', Arial, sans-serif;padding:200px 64px 40px 64px;display:flex;flex-direction:column;gap:24px">
+<div style="position:absolute;left:40px;top:14px;width:1840px;height:40px;display:flex;flex-direction:row;justify-content:center;align-items:center;gap:22px">
+<p style="font-size:24px;font-weight:700;color:#0078D4;white-space:nowrap">2 · Modules &amp; methods</p>
+<p style="font-size:24px;color:#C8CDD3">|</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Overview</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Input</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Toolpaths</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Meshing</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Data model</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Picking</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Load transfer</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Solver</p>
+<p style="font-size:24px;font-weight:700;color:#E3008C;border-bottom:3px solid #E3008C;white-space:nowrap">Parallel</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Results</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Timeline</p>
+</div>
+<img src="/_blob/61feb4ed29835b5d5f563f3adcc6ff22" alt="" data-build-in="left" style="position:absolute;left:0px;top:62px;width:1920px;height:104px">
+<h2 style="position:absolute;left:0px;top:62px;width:1920px;height:104px;font-size:54px;line-height:104px;font-weight:600;color:#FFFFFF;text-align:center;text-shadow:0px 2px 6px rgba(0,30,60,0.45)">CPU multithreading and CUDA acceleration</h2>
+<div style="position:absolute;left:959px;top:212px;width:2px;height:820px;background:#D5DAE0"></div>
+<div style="position:absolute;left:64px;top:198px;width:868px;display:flex;flex-direction:column;gap:9px">
+<h3 style="font-size:32px;font-weight:700;color:#0078D4">CPU · OpenMP and worker threads <span style="color:#0078D4">[36]</span></h3>
+<p style="font-size:26px;line-height:1.3;font-weight:600;color:#0078D4;background:#EAF3FC;border-radius:10px;padding:8px 14px">Assembly uses every core with no locks, and the window never freezes.</p>
+<p style="font-size:24px;line-height:1.3"><b>Lock-free assembly</b>  parallel loop over elements; the triplet list is sized up front and element <i>e</i> writes only its own block, with private <i>K</i>e buffers per thread; shared nodes are summed once at the end, so the answer equals the serial path</p>
+<img src="/_blob/79c31bea0274768ec880f0b84c6e5708" alt="element e writes from offset e times the square of its unknown count" style="width:255px;height:40px;object-fit:contain">
+<p style="font-size:24px;line-height:1.3"><b>Cancel inside a parallel loop</b>  a parallel loop cannot break, so a shared atomic flag is checked every 1,024 elements</p>
+<p style="font-size:24px;line-height:1.3"><b>Parallel per-element work</b>  element setup, stress recovery and, in fracture runs, the per-element <i>DB</i> matrix computed once and reused every iteration</p>
+<p style="font-size:24px;line-height:1.3"><b>Multithreaded CG</b>  Eigen's CG on the full symmetric matrix, which lets the sparse product <i>Kp</i> run on all threads <span style="color:#0078D4">[35]</span></p>
+<div style="display:flex;flex-direction:row;gap:18px;align-items:center">
+<p style="flex:1;font-size:24px;line-height:1.3"><b>Thread budget</b>  two hardware threads stay free for the renderer; the worker runs below normal priority</p>
+<img src="/_blob/8b6f07eefe04733155d3c87b2b7c3495" alt="threads equals hardware threads minus 2" style="width:237px;height:30px;object-fit:contain">
+</div>
+<p style="font-size:24px;line-height:1.3"><b>Front end vs heavy work</b>  slicing and meshing run on a worker thread that never calls OpenGL (uploads wait for the render thread); solves run in a separate worker process, so Hard Stop can end them safely</p>
+</div>
+<div style="position:absolute;left:992px;top:198px;width:864px;display:flex;flex-direction:column;gap:9px">
+<h3 style="font-size:32px;font-weight:700;color:#E3008C">GPU · CUDA PCG <span style="color:#0078D4">[37, 38]</span></h3>
+<p style="font-size:26px;line-height:1.3;font-weight:600;color:#B0006C;background:#FCE6F3;border-radius:10px;padding:8px 14px">Large meshes solve without leaving GPU memory: 2.9× faster at 367,000 elements.</p>
+<p style="font-size:24px;line-height:1.3"><b>Upload once</b>  <i>K</i> as row-major CSR (32-bit indices, doubles) and <i>F</i>; the matrix never comes back</p>
+<p style="font-size:24px;line-height:1.3"><b>Block preconditioner</b>  each node's own 3 × 3 block of <i>K</i> is inverted; weak blocks fall back to the diagonal; the same rule as CPU CG <span style="color:#0078D4">[27]</span></p>
+<img src="/_blob/dfe22b6a6bb82d5e1ee9c776bc4e09ab" alt="M is block-diagonal with each node's 3 by 3 block; z equals M inverse r" style="width:672px;height:32px;object-fit:contain">
+<p style="font-size:24px;line-height:1.3"><b>One iteration on the device</b>  one cuSPARSE CSR product <i>Kp</i> plus small vector kernels; cuBLAS dot products stay in device memory, so α and β are formed on the GPU with no host sync <span style="color:#0078D4">[39]</span></p>
+<img src="/_blob/26f49158cb4afc9a91bcdeff3d2ef743" alt="row i of K p is the sum over that row's stored entries of value times p at its column" style="width:328px;height:88px;object-fit:contain">
+<p style="font-size:24px;line-height:1.3"><b>Every 50 iterations</b>  the true residual <i>F</i> − <i>Ku</i> is recomputed and the cancel flag is checked</p>
+<p style="font-size:24px;line-height:1.3"><b>Fallback</b>  no device, not enough memory or no convergence → <i>u</i> is not trusted and the CPU solver takes over</p>
+<p style="font-size:24px;line-height:1.3;color:#4A4F57"><b>Why PCG</b>  a direct GPU factorisation needs 5–20× the matrix's memory; CG needs only the matrix</p>
+</div>
+<aside>Sources: the system manual (worker thread with deferGLUpload, SimulationProcess worker process, OpenMP triplet assembly, CudaSolver::solveOnGpu, the shared pcg namespace with BlockJacobiPreconditioner and kWarmStartResidual) and the source code (src/FEASolver.cpp: #pragma omp parallel for schedule(dynamic) element assembly into a pre-sized triplet list, atomic abort checked every 1,024 elements, Eigen::setNbThreads(omp_get_max_threads()), ConjugateGradient with Lower|Upper; src/main.cpp: omp_set_num_threads(hardware_concurrency - 2), worker THREAD_PRIORITY_BELOW_NORMAL; src/CudaSolver.cu: cusparseSpMV on a CSR descriptor, cublasDdot / cublasDnrm2 in CUBLAS_POINTER_MODE_DEVICE, device kernels for alpha, beta and the vector updates, residual replacement and cancel polling every 50 iterations). The GitHub copy of the code is the 6 September build; where it differs from the October manual (for example the preconditioner), the slide follows the manual. GPU numbers come from the October GPU study: the GPU wins above about 200,000 elements; printed parts need 64,000 to 70,000 iterations because thin slabs and ties make the matrix ill-conditioned.</aside>
+</section>

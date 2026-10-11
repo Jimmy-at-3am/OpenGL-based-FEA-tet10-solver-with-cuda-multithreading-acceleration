@@ -1,0 +1,70 @@
+<section id="m-results" data-transition="fade" style="background:#FFFFFF;color:#1B1B1F;font-family:'Inter', Arial, sans-serif;padding:200px 64px 40px 64px;display:flex;flex-direction:column;gap:24px">
+<div style="position:absolute;left:40px;top:14px;width:1840px;height:40px;display:flex;flex-direction:row;justify-content:center;align-items:center;gap:22px">
+<p style="font-size:24px;font-weight:700;color:#0078D4;white-space:nowrap">2 · Modules &amp; methods</p>
+<p style="font-size:24px;color:#C8CDD3">|</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Overview</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Input</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Toolpaths</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Meshing</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Data model</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Picking</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Load transfer</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Solver</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Parallel</p>
+<p style="font-size:24px;font-weight:700;color:#E3008C;border-bottom:3px solid #E3008C;white-space:nowrap">Results</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Timeline</p>
+</div>
+<img src="/_blob/61feb4ed29835b5d5f563f3adcc6ff22" alt="" data-build-in="left" style="position:absolute;left:0px;top:62px;width:1920px;height:104px">
+<h2 style="position:absolute;left:0px;top:62px;width:1920px;height:104px;font-size:54px;line-height:104px;font-weight:600;color:#FFFFFF;text-align:center;text-shadow:0px 2px 6px rgba(0,30,60,0.45)">Results, colour coding and the run lifecycle</h2>
+<div style="position:absolute;left:1023px;top:212px;width:2px;height:820px;background:#D5DAE0"></div>
+<div style="position:absolute;left:64px;top:198px;width:930px;display:flex;flex-direction:column;gap:7px">
+<h3 style="font-size:30px;font-weight:700;color:#0078D4">Colour coding, step by step</h3>
+<p style="font-size:24px;line-height:1.3"><b>1 · One value per element</b>  stress <i>σ</i> = <i>DBu</i>e, reduced to von Mises; flat inside each element, no nodal averaging <span style="color:#0078D4">[25]</span></p>
+<img src="/_blob/e9a1a8ac3fb9dc33f6d4449d77f299b3" alt="von Mises stress" style="width:827px;height:54px;object-fit:contain">
+<p style="font-size:24px;line-height:1.3"><b>2 · Surface</b>  every exterior triangle <i>f</i> takes its element's value <i>s</i>f</p>
+<p style="font-size:24px;line-height:1.3"><b>3 · Top of the scale</b>  nearest-rank 99th percentile of the exterior values <span style="color:#0078D4">[20]</span></p>
+<img src="/_blob/5ac8f118fa42afee9f93b784bf2a8d95" alt="sorted values; top is the value at rank ceiling of 0.99 n when n is over 100, else the maximum" style="width:609px;height:73px;object-fit:contain">
+<p style="font-size:24px;line-height:1.3"><b>4 · Clamp, normalise, look up</b>  hotter elements clamp to the top colour; the legend prints the true peak</p>
+<div style="display:flex;flex-direction:row;gap:26px;align-items:center">
+<img src="/_blob/a4ba368ad8f1c765aa5ad2ad0a42029b" alt="t_f equals the clamped value over the top, limited to 0 to 1" style="width:264px;height:68px;object-fit:contain">
+<div style="display:flex;flex-direction:column;gap:4px">
+<div style="width:380px;height:26px;border-radius:6px;background:linear-gradient(90deg, #1E2BB8 0%, #00A9E0 25%, #22B14C 50%, #F2E205 75%, #E01B1B 100%)"></div>
+<div style="width:380px;display:flex;flex-direction:row;justify-content:space-between">
+<p style="font-size:24px;color:#4A4F57"><i>t</i> = 0</p>
+<p style="font-size:24px;color:#4A4F57">0.5</p>
+<p style="font-size:24px;color:#4A4F57">1, then “+”</p>
+</div>
+</div>
+</div>
+<img src="/_blob/4dba173600a424d41546d503bd2b6495" alt="clamped value, PEAK equals the maximum, plus sign when the maximum exceeds the top" style="width:756px;height:35px;object-fit:contain">
+<div style="display:flex;flex-direction:row;gap:28px;align-items:center">
+<img src="/_blob/9e87e86edea22cea30aabd05c0e897fd" alt="the shader's scalar mode picks the value: 1 displacement, 2 applied force, 3 failure mode, 4 failure step, 5 stress at break, 8 von Mises" style="width:409px;height:185px;object-fit:contain">
+<div style="flex:1;display:flex;flex-direction:column;gap:6px">
+<p style="font-size:24px;line-height:1.3"><b>5 · One shader, many views</b>  the scalar mode chooses what is coloured</p>
+<img src="/_blob/5dab052cbc349a813f2557957342fa9b" alt="displacement magnitude per vertex" style="width:244px;height:51px;object-fit:contain">
+<p style="font-size:24px;line-height:1.3;color:#4A4F57">deformation is per vertex, in metres; broken elements are magenta</p>
+</div>
+</div>
+</div>
+<div style="position:absolute;left:1056px;top:198px;width:800px;display:flex;flex-direction:column;gap:8px">
+<h3 style="font-size:30px;font-weight:700;color:#0078D4">Results modules</h3>
+<p style="font-size:24px;line-height:1.3"><span style="color:#0078D4;font-family:'JetBrains Mono', 'Courier New', monospace">recoverElementStress()</span>  stress, von Mises and failure ratio per element</p>
+<p style="font-size:24px;line-height:1.3"><span style="color:#0078D4;font-family:'JetBrains Mono', 'Courier New', monospace">paintStressSurface()</span>  exterior triangles take their element's stress; the top is set at the 99th percentile</p>
+<p style="font-size:24px;line-height:1.3"><span style="color:#0078D4;font-family:'JetBrains Mono', 'Courier New', monospace">buildResultBanner()</span>  “Showing: …” plus a fracture line</p>
+<h3 style="font-size:30px;font-weight:700;color:#E3008C;padding:8px 0px 0px 0px">Run lifecycle</h3>
+<div style="display:flex;flex-direction:row;gap:0px;align-items:center">
+<p style="width:200px;font-size:24px;font-weight:700;text-align:center;background:#F3F8FD;border:2px solid #0078D4;border-radius:12px;padding:16px 8px">App window</p>
+<div style="flex:1;display:flex;flex-direction:column;gap:2px">
+<p style="font-size:24px;text-align:center;color:#4A4F57">job →</p>
+<div style="height:3px;background:#8A8F98"></div>
+<p style="font-size:24px;text-align:center;color:#4A4F57">← live status, shared memory</p>
+</div>
+<p style="width:220px;font-size:24px;font-weight:700;text-align:center;background:#FCE6F3;border:2px solid #E3008C;border-radius:12px;padding:16px 8px">Worker process</p>
+</div>
+<p style="font-size:24px;line-height:1.3"><span style="color:#0078D4;font-family:'JetBrains Mono', 'Courier New', monospace">launchSolveProcess()</span>  the app starts a second copy of itself and sends it the job; status returns phase, progress, device and threads</p>
+<p style="font-size:24px;line-height:1.3"><b>Hard Stop</b> ends the process in 111–232 ms · <b>Pause</b> stops at a safe point and saves a checkpoint</p>
+<p style="font-size:24px;line-height:1.3"><span style="color:#0078D4;font-family:'JetBrains Mono', 'Courier New', monospace">saveRunRecord()</span>  .pfea = model + copy of the sliced package; versioned, size-checked (≤ 8 GiB), written, verified, then published atomically; no pointers or GPU handles</p>
+<p style="font-size:24px;line-height:1.3"><span style="color:#0078D4;font-family:'JetBrains Mono', 'Courier New', monospace">trackSolverStages()</span>  QUEUED → ACTIVE → DONE, with device and time</p>
+</div>
+<aside>Real names: StressResults::recover, StressVisualization with colourTopPa(), UIDesign::makeResultBanner(); SimulationProcess (CreateProcessW, TerminateProcess), SimulationRecord (captureModel, restoreModel, captureSource), SolverStatus. The shader carries texCoords.x (displacement), texCoords.y (applied force) and one elementScalar per element; scalarMode selects 1 displacement, 2 force, 3 failure mode, 4 failure step, 5 stress at break, 8 current von Mises. The colour bar drawn here follows the app's legend (blue low, red high); the clamp-and-normalise step is what the 99th-percentile top implies.</aside>
+</section>

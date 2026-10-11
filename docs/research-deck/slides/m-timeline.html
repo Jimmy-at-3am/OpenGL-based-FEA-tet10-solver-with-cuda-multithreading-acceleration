@@ -1,0 +1,88 @@
+<section id="m-timeline" data-transition="fade" style="background:#FFFFFF;color:#1B1B1F;font-family:'Inter', Arial, sans-serif;padding:200px 64px 40px 64px;display:flex;flex-direction:column;gap:24px">
+<div style="position:absolute;left:40px;top:14px;width:1840px;height:40px;display:flex;flex-direction:row;justify-content:center;align-items:center;gap:22px">
+<p style="font-size:24px;font-weight:700;color:#0078D4;white-space:nowrap">2 · Modules &amp; methods</p>
+<p style="font-size:24px;color:#C8CDD3">|</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Overview</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Input</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Toolpaths</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Meshing</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Data model</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Picking</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Load transfer</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Solver</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Parallel</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Results</p>
+<p style="font-size:24px;font-weight:700;color:#E3008C;border-bottom:3px solid #E3008C;white-space:nowrap">Timeline</p>
+</div>
+<img src="/_blob/61feb4ed29835b5d5f563f3adcc6ff22" alt="" data-build-in="left" style="position:absolute;left:0px;top:62px;width:1920px;height:104px">
+<h2 style="position:absolute;left:0px;top:62px;width:1920px;height:104px;font-size:54px;line-height:104px;font-weight:600;color:#FFFFFF;text-align:center;text-shadow:0px 2px 6px rgba(0,30,60,0.45)">Iteration timeline at a glance</h2>
+<div style="position:absolute;left:64px;top:292px;width:1792px;height:14px;border-radius:7px;background:linear-gradient(90deg, #005A9E 0%, #0078D4 55%, #E3008C 100%)"></div>
+<div style="position:absolute;left:64px;top:206px;width:1792px;display:grid;grid-template-columns:repeat(8, 1fr);gap:16px">
+<p style="font-size:24px;font-weight:700;color:#0078D4;text-align:center">Before May</p>
+<p style="font-size:24px;font-weight:700;color:#0078D4;text-align:center">May</p>
+<p style="font-size:24px;font-weight:700;color:#0078D4;text-align:center">June</p>
+<p style="font-size:24px;font-weight:700;color:#0078D4;text-align:center">July</p>
+<p style="font-size:24px;font-weight:700;color:#0078D4;text-align:center">August</p>
+<p style="font-size:24px;font-weight:700;color:#0078D4;text-align:center">Early Sept</p>
+<p style="font-size:24px;font-weight:700;color:#B0006C;text-align:center">Late Sept</p>
+<p style="font-size:24px;font-weight:700;color:#B0006C;text-align:center">October</p>
+</div>
+<div style="position:absolute;left:64px;top:280px;width:1792px;display:grid;grid-template-columns:repeat(8, 1fr);gap:16px;justify-items:center">
+<x-shape kind="ellipse" style="width:38px;height:38px;background:#FFFFFF;border:5px solid #005A9E"></x-shape>
+<x-shape kind="ellipse" style="width:38px;height:38px;background:#FFFFFF;border:5px solid #0063B1"></x-shape>
+<x-shape kind="ellipse" style="width:38px;height:38px;background:#FFFFFF;border:5px solid #006CC1"></x-shape>
+<x-shape kind="ellipse" style="width:38px;height:38px;background:#FFFFFF;border:5px solid #0078D4"></x-shape>
+<x-shape kind="ellipse" style="width:38px;height:38px;background:#FFFFFF;border:5px solid #3A6DC4"></x-shape>
+<x-shape kind="ellipse" style="width:38px;height:38px;background:#FFFFFF;border:5px solid #7A4FB0"></x-shape>
+<x-shape kind="ellipse" style="width:38px;height:38px;background:#FFFFFF;border:5px solid #B0279E"></x-shape>
+<x-shape kind="ellipse" style="width:38px;height:38px;background:#FFFFFF;border:5px solid #E3008C"></x-shape>
+</div>
+<div style="position:absolute;left:64px;top:344px;width:1792px;display:grid;grid-template-columns:repeat(8, 1fr);gap:16px;align-items:stretch">
+<div style="display:flex;flex-direction:column;gap:10px;border-top:4px solid #005A9E;padding:12px 0px 0px 0px">
+<p style="font-size:24px;font-weight:700;line-height:1.2">Solver core</p>
+<p style="font-size:24px;line-height:1.3;color:#4A4F57">STL import, Newton–Raphson, OpenMP assembly, CUDA PCG, Tet10 auto-switch</p>
+<p style="font-size:24px;line-height:1.3;color:#B0006C;font-weight:600">cantilever 0.246% from beam theory</p>
+</div>
+<div style="display:flex;flex-direction:column;gap:10px;border-top:4px solid #0063B1;padding:12px 0px 0px 0px">
+<p style="font-size:24px;font-weight:700;line-height:1.2">File formats, mesh quality</p>
+<p style="font-size:24px;line-height:1.3;color:#4A4F57">3MF, STEP with the exact surface, quality metrics</p>
+<p style="font-size:24px;line-height:1.3;color:#B0006C;font-weight:600">sphere error 5×10⁻⁴ → 8×10⁻⁷</p>
+</div>
+<div style="display:flex;flex-direction:column;gap:10px;border-top:4px solid #006CC1;padding:12px 0px 0px 0px">
+<p style="font-size:24px;font-weight:700;line-height:1.2">Test harness, layers, real units</p>
+<p style="font-size:24px;line-height:1.3;color:#4A4F57">self-checking ladder, headless runner, layer slicing, SI on real size</p>
+<p style="font-size:24px;line-height:1.3;color:#B0006C;font-weight:600">200 mm bar within 5.85%</p>
+</div>
+<div style="display:flex;flex-direction:column;gap:10px;border-top:4px solid #0078D4;padding:12px 0px 0px 0px">
+<p style="font-size:24px;font-weight:700;line-height:1.2">G-code lane, fracture, async jobs</p>
+<p style="font-size:24px;line-height:1.3;color:#4A4F57">printed layers become the mesh; anisotropic fracture test; DOF study</p>
+<p style="font-size:24px;line-height:1.3;color:#B0006C;font-weight:600">transposed Tet4 matrix found</p>
+</div>
+<div style="display:flex;flex-direction:column;gap:10px;border-top:4px solid #3A6DC4;padding:12px 0px 0px 0px">
+<p style="font-size:24px;font-weight:700;line-height:1.2">Load input, physics-safe setup</p>
+<p style="font-size:24px;line-height:1.3;color:#4A4F57">one capability registry, physics receipt</p>
+<p style="font-size:24px;line-height:1.3;color:#B0006C;font-weight:600">mislabelled presets blocked</p>
+</div>
+<div style="display:flex;flex-direction:column;gap:10px;border-top:4px solid #7A4FB0;padding:12px 0px 0px 0px">
+<p style="font-size:24px;font-weight:700;line-height:1.2">New UI, Pause and Hard Stop</p>
+<p style="font-size:24px;line-height:1.3;color:#4A4F57">one inspector, Model / Mesh / Solve; solve in a worker process</p>
+<p style="font-size:24px;line-height:1.3;color:#B0006C;font-weight:600">Hard Stop 111–232 ms</p>
+</div>
+<div style="display:flex;flex-direction:column;gap:10px;border-top:4px solid #B0279E;padding:12px 0px 0px 0px">
+<p style="font-size:24px;font-weight:700;line-height:1.2">Bambu slicing, click-to-load</p>
+<p style="font-size:24px;line-height:1.3;color:#4A4F57">slice with Bambu Studio, pick on the design, solve the print</p>
+<p style="font-size:24px;line-height:1.3;color:#B0006C;font-weight:600">200 N load → 199.99999916 N reaction</p>
+</div>
+<div style="display:flex;flex-direction:column;gap:10px;border-top:4px solid #E3008C;padding:12px 0px 0px 0px">
+<p style="font-size:24px;font-weight:700;line-height:1.2">Result views, release build, GPU study</p>
+<p style="font-size:24px;line-height:1.3;color:#4A4F57">99th-percentile colour scale; 30 of 30 scenarios pass</p>
+<p style="font-size:24px;line-height:1.3;color:#B0006C;font-weight:600">GPU 2.9× faster at 367,000 elements</p>
+</div>
+</div>
+<div style="position:absolute;left:64px;top:846px;width:1792px;display:flex;flex-direction:column;gap:8px;border-top:2px solid #D5DAE0;padding:16px 0px 0px 0px">
+<p style="font-size:26px;font-weight:700;color:#1B1B1F">Patterns that repeat</p>
+<p style="font-size:24px;line-height:1.35;color:#1B1B1F">Measure before fixing · known-answer tests find silent bugs · prefer reliable outside tools to rewriting them · simplify the words, never the physics · remove features that confuse</p>
+<p style="font-size:24px;line-height:1.35;color:#4A4F57">Open now: material data from this printer, mesh-dependent fracture, GPU on layered meshes, fracture memory, more load types, physical proof</p>
+</div>
+<aside>From the iteration history: the first commit (7 May 2026) already held a working solver. Stages 1–17 run from 14 May to 6 October. Each card gives the phase, what was built, and one measured result. The 4 October regression: 30 of 30 scenarios pass.</aside>
+</section>

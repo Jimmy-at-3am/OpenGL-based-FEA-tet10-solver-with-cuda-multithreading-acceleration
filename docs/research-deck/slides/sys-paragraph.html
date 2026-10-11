@@ -1,0 +1,21 @@
+<section id="sys-paragraph" data-transition="fade" style="background:#FFFFFF;color:#1B1B1F;font-family:'Inter', Arial, sans-serif;padding:200px 160px 64px 160px;display:flex;flex-direction:column;justify-content:center;gap:24px">
+<div style="position:absolute;left:40px;top:14px;width:1840px;height:40px;display:flex;flex-direction:row;justify-content:center;align-items:center;gap:22px">
+<p style="font-size:24px;font-weight:700;color:#0078D4;white-space:nowrap">2 · Modules &amp; methods</p>
+<p style="font-size:24px;color:#C8CDD3">|</p>
+<p style="font-size:24px;font-weight:700;color:#E3008C;border-bottom:3px solid #E3008C;white-space:nowrap">Overview</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Input</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Toolpaths</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Meshing</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Data model</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Picking</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Load transfer</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Solver</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Parallel</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Results</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">Timeline</p>
+</div>
+<img src="/_blob/61feb4ed29835b5d5f563f3adcc6ff22" alt="" data-build-in="left" style="position:absolute;left:0px;top:62px;width:1920px;height:104px">
+<h2 style="position:absolute;left:0px;top:62px;width:1920px;height:104px;font-size:54px;line-height:104px;font-weight:600;color:#FFFFFF;text-align:center;text-shadow:0px 2px 6px rgba(0,30,60,0.45)">The system in one paragraph</h2>
+<p style="font-size:40px;line-height:1.5;font-weight:400;color:#1B1B1F">PolyFEA is one C++17 desktop program, about 46,000 lines. It opens a part, asks the installed Bambu Studio to slice it, rebuilds each printed layer as a 2D shape, stacks those shapes into a 3D mesh of tetrahedra, and ties neighbouring layers with weaker springs. The user picks loads on the clean CAD model, and PolyFEA moves them onto the printed mesh. The solver builds one equation, <i>Ku</i> = <i>F</i>, solves it on the GPU or CPU, computes stress, and can delete overloaded elements to simulate cracking. OpenGL draws everything, and a headless runner drives the same functions from JSON files for testing.</p>
+<aside>From the system manual's one-paragraph summary. The headless runner is ScenarioRunner; the executable is FEAPreProcessor.exe.</aside>
+</section>

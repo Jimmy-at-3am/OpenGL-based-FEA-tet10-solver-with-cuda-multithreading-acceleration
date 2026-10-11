@@ -1,0 +1,26 @@
+{
+  "v": 4,
+  "createdOnFiles": {"v": 1, "at": "2026-10-11T03:40:00Z"},
+  "lists": "css",
+  "title": "PolyFEA Research Deck",
+  "cover": "cover",
+  "order": [
+    "cover", "why", "overview", "screen", "video", "steps12", "steps34", "steps56", "workflow",
+    "sys-paragraph", "sys-map", "m-input", "m-toolpaths", "m-meshing", "m-mesh-math", "m-model",
+    "m-picking", "m-transfer", "m-elements", "m-formulas", "m-solver", "m-flow", "m-parallel",
+    "m-results", "m-timeline",
+    "t-validation", "t-physical", "end",
+    "a-material", "a-threading", "a-hardstop", "a-efficiency", "refs-1", "refs-2", "refs-3"
+  ],
+  "sections": {
+    "ch1": {"description": "User walkthrough: what PolyFEA does and how a person runs one simulation.", "start": "cover"},
+    "ch2": {"description": "Modules, methods and algorithms behind each stage of the pipeline.", "start": "sys-paragraph"},
+    "ch3": {"description": "Testing and validation: benchmarks run so far and the planned physical tests.", "start": "t-validation"},
+    "app": {"description": "Appendices and citations.", "start": "a-material"}
+  },
+  "faces": {
+    "inter": {"family": "Inter", "href": "https://fonts.googleapis.com/css2?family=Inter:wght@300..800&display=swap"},
+    "jetbrains-mono": {"family": "JetBrains Mono", "href": "https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&display=swap"}
+  },
+  "designSystems": []
+}

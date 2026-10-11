@@ -1,0 +1,33 @@
+<section id="a-efficiency" data-transition="fade" style="background:#FFFFFF;color:#1B1B1F;font-family:'Inter', Arial, sans-serif;padding:200px 64px 40px 64px;display:flex;flex-direction:column;gap:24px">
+<div style="position:absolute;left:64px;top:14px;width:1792px;height:40px;display:flex;flex-direction:row;justify-content:center;align-items:center;gap:48px">
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">1 · User walkthrough</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">2 · Modules, methods &amp; algorithms</p>
+<p style="font-size:24px;font-weight:500;color:#8A8F98;white-space:nowrap">3 · Testing &amp; validation</p>
+<p style="font-size:24px;font-weight:700;color:#0078D4;border-bottom:3px solid #0078D4;white-space:nowrap">Appendix &amp; citations</p>
+</div>
+<img src="/_blob/61feb4ed29835b5d5f563f3adcc6ff22" alt="" data-build-in="left" style="position:absolute;left:0px;top:62px;width:1920px;height:104px">
+<h2 style="position:absolute;left:0px;top:62px;width:1920px;height:104px;font-size:54px;line-height:104px;font-weight:600;color:#FFFFFF;text-align:center;text-shadow:0px 2px 6px rgba(0,30,60,0.45)">Appendix 4 · Compute efficiency</h2>
+<div style="position:absolute;left:64px;top:198px;width:1792px;display:grid;grid-template-columns:150px 1fr 1fr 1fr;gap:10px 22px;align-items:start">
+<p style="font-size:24px"></p>
+<p style="font-size:26px;font-weight:700;color:#0078D4;border-bottom:3px solid #0078D4;padding:0px 0px 6px 0px">GPU path · before May</p>
+<p style="font-size:26px;font-weight:700;color:#E3008C;border-bottom:3px solid #E3008C;padding:0px 0px 6px 0px">Why solves were slow · 29 Jul</p>
+<p style="font-size:26px;font-weight:700;color:#0078D4;border-bottom:3px solid #0078D4;padding:0px 0px 6px 0px">GPU study · 4–6 Oct</p>
+<p style="font-size:24px;font-weight:700;color:#4A4F57">Problem</p>
+<p style="font-size:24px;line-height:1.3">CPU solves too slow on big meshes</p>
+<p style="font-size:24px;line-height:1.3">a 50-layer box used all the memory and the GPU solver did not converge</p>
+<p style="font-size:24px;line-height:1.3">does it all hold in an optimised build, and what does the GPU really gain?</p>
+<p style="font-size:24px;font-weight:700;color:#4A4F57">Thinking</p>
+<p style="font-size:24px;line-height:1.3">a direct GPU factorisation needs 5–20× the matrix's memory and would not fit in 4 GB; CG needs only the matrix</p>
+<p style="font-size:24px;line-height:1.3">measure where the unknowns go first: 147,084 unknowns, 49.6 % duplicated nodes; 27 % of entries were ties; ties 235× stiffer than nearby elements, so the diagonal spread about 10¹⁰; Jacobi PCG ran 33,400 iterations without converging</p>
+<p style="font-size:24px;line-height:1.3">solve the same printed part at five mesh sizes, GPU on and off</p>
+<p style="font-size:24px;font-weight:700;color:#4A4F57">Solution</p>
+<p style="font-size:24px;line-height:1.3">CUDA PCG that stays in GPU memory</p>
+<p style="font-size:24px;line-height:1.3">3 × 3 block Jacobi shared by CPU and GPU; warm starts for fracture steps; a cost model that factorises directly when cheap. Grouping more layers per slab was rejected: it “damages this project's core physics”</p>
+<p style="font-size:24px;line-height:1.3">release build checked against the full regression</p>
+<p style="font-size:24px;font-weight:700;color:#4A4F57">Result</p>
+<p style="font-size:24px;line-height:1.3;color:#0078D4;font-weight:600">a GPU path from the first commit</p>
+<p style="font-size:24px;line-height:1.3;color:#B0006C;font-weight:600">printed parts still need many iterations; a layer-aware preconditioner stays open</p>
+<p style="font-size:24px;line-height:1.3;color:#0078D4;font-weight:600">30 / 30 pass; GPU wins above ~200,000 elements, 2.9× at 367,000; below 60,000 the cost model goes direct</p>
+</div>
+<aside>Stages 0 (step 8), 10 and 17 of the iteration history. Ranked remedies in the stage-10 study: share nodes between slabs (−49 % unknowns), conditioning fixes, Tet10 on a coarser mesh, blending the infill into a material. A solid box converges in about 1,350 iterations, a printed part in 64,000–70,000, because thin slabs and ties make the matrix ill-conditioned; the showcase parts (8,000–170,000 elements) therefore ran on the CPU.</aside>
+</section>
